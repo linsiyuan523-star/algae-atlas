@@ -144,9 +144,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       description,
       url,
       locale: locale === "zh" ? "zh_CN" : "en_US",
-      images: [{ url: "/images/diatoms.jpg", alt: locale === "zh" ? "显微镜下的硅藻" : "Diatoms under a microscope" }],
+      images: [{ url: "/images/zhutu.png", alt: locale === "zh" ? "多种藻类显微形态主题图" : "A microscopy-themed image of diverse algal forms" }],
     },
-    twitter: { card: "summary_large_image", title, description, images: ["/images/diatoms.jpg"] },
+    twitter: { card: "summary_large_image", title, description, images: ["/images/zhutu.png"] },
   };
 }
 

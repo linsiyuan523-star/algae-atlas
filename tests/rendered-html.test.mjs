@@ -39,6 +39,7 @@ test("renders localized home pages with exact team positioning and SEO", async (
   assert.match(zh, /href="\/zh\/team"/);
   assert.match(zh, /href="\/zh\/research"/);
   assert.match(zh, /href="\/zh\/tutorials"/);
+  assert.match(zh, /\/images\/zhutu\.png/);
   assert.match(zh, /叶绿素荧光仪/);
   assert.match(zh, /离心机/);
   assert.match(zh, /pH 与盐度测量仪/);
@@ -78,9 +79,11 @@ test("renders the team, research, outputs, tutorial, news, about, and contact ro
   assert.match(team, /科研训练理念/);
   assert.match(research, /微藻研究/);
   assert.match(research, /大型海藻研究/);
+  assert.match(research, /\/images\/guandaofanyinqi\.jpg/);
   assert.match(micro, /异养、混养与高密度培养/);
   assert.match(micro, /href="\/en\/research\/microalgae"/);
   assert.match(macro, /Macroalgal germplasm resources/);
+  assert.match(macro, /\/images\/tidai\.jpg/);
   assert.match(outputs, /相关成果正在整理与核实，正式信息将在确认后更新。/);
   assert.match(tutorials, /第一次进入藻类实验室，从这里开始/);
   assert.match(tutorial, /详细流程等待实验室审核后发布。/);
@@ -88,10 +91,10 @@ test("renders the team, research, outputs, tutorial, news, about, and contact ro
   assert.doesNotMatch(tutorial, /rpm|转\/分|nm|µL|mL\/min|具体型号/i);
   assert.match(news, /团队动态正在整理中。/);
   assert.match(about, /Algae Atlas/);
-  assert.match(about, /NOAA Corps Collection/);
-  assert.match(about, /U\.S\. Department of Energy/);
+  assert.match(about, /用户提供/);
+  assert.match(about, /使用范围待确认/);
   assert.match(about, /CSIRO/);
-  assert.match(about, /NASA GSFC/);
+  assert.doesNotMatch(about, /NOAA Corps Collection|U\.S\. Department of Energy|NASA GSFC/);
   assert.match(contact, /<dt>所属单位<\/dt><dd>广东海洋大学<\/dd>/);
   assert.match(contact, /团队公共邮箱/);
   assert.match(contact, /待补充/);
@@ -142,5 +145,8 @@ test("contains no starter content, preview-stage copy, or prohibited claims", as
   assert.match(teamData, /export const teamMembers: TeamMember\[\] = \[\];/);
   assert.match(teamData, /export const outputs: OutputItem\[\] = \[\];/);
   assert.match(teamData, /export const news: NewsEntry\[\] = \[\];/);
+  await access(new URL("../public/images/tidai.jpg", import.meta.url));
+  await access(new URL("../public/images/zhutu.png", import.meta.url));
+  await access(new URL("../public/images/guandaofanyinqi.jpg", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });

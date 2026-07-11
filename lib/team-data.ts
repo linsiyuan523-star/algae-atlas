@@ -102,8 +102,8 @@ export const researchAreas: ResearchArea[] = [
       { zh: "食品、饲料与生物材料应用", en: "Food, feed, and biomaterial applications" },
       { zh: "生态修复与近岸生态", en: "Ecological restoration and coastal ecology" },
     ],
-    image: "/images/bloom.jpg",
-    imageStatus: { zh: "临时公有领域科学影像", en: "Temporary public-domain science image" },
+    image: "/images/tidai.jpg",
+    imageStatus: { zh: "用户提供影像，使用范围待确认", en: "User-provided image; usage scope pending confirmation" },
   },
 ];
 

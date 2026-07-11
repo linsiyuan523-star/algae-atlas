@@ -75,7 +75,7 @@ function PageHero({
         <figure>
           <img src={image} alt="" />
           <figcaption>
-            {locale === "zh" ? "临时公共科学影像，署名见图片来源" : "Temporary public science image; see image credits"}
+            {locale === "zh" ? "页面影像，来源与使用说明见图片署名" : "Page imagery; see credits for source and use information"}
           </figcaption>
         </figure>
       ) : null}
@@ -196,7 +196,7 @@ export function HomePage({ locale }: { locale: Locale }) {
             </div>
           </div>
           <figure className="hero-visual">
-            <img src="/images/diatoms.jpg" alt={locale === "zh" ? "显微镜下形态多样的硅藻" : "Diverse diatoms under a microscope"} />
+            <img src="/images/zhutu.png" alt={locale === "zh" ? "黑色背景上的多种藻类显微形态主题图" : "A microscopy-themed image of diverse algal forms on a dark background"} />
             <figcaption>
               <span>MICRO / ALGAE</span>
               <span>{text(site.institution, locale)}</span>
@@ -394,7 +394,7 @@ export function TeamPage({ locale }: { locale: Locale }) {
 export function ResearchPage({ locale }: { locale: Locale }) {
   return (
     <>
-      <PageHero locale={locale} eyebrow={locale === "zh" ? "研究方向" : "RESEARCH"} title={locale === "zh" ? "从培养调控到资源与生态应用" : "From cultivation control to resource and ecological applications"} intro={locale === "zh" ? "围绕微藻与大型海藻建立可扩展的研究框架，页面描述研究关注范围，不宣称未经核实的成果。" : "An extensible framework spanning microalgae and macroalgae. These pages describe research interests without claiming unverified outcomes."} image="/images/photobioreactor.jpg" />
+      <PageHero locale={locale} eyebrow={locale === "zh" ? "研究方向" : "RESEARCH"} title={locale === "zh" ? "从培养调控到资源与生态应用" : "From cultivation control to resource and ecological applications"} intro={locale === "zh" ? "围绕微藻与大型海藻建立可扩展的研究框架，页面描述研究关注范围，不宣称未经核实的成果。" : "An extensible framework spanning microalgae and macroalgae. These pages describe research interests without claiming unverified outcomes."} image="/images/guandaofanyinqi.jpg" />
       <section className="section-shell content-section">
         <div className="research-area-grid">
           {researchAreas.map((area) => <ResearchAreaCard key={area.id} area={area} locale={locale} />)}
@@ -533,7 +533,7 @@ export function AlgaeLibrary({ locale, typeFilter }: { locale: Locale; typeFilte
   const entries = activeFilter === "all" ? algae : algae.filter((entry) => entry.category === activeFilter);
   return (
     <>
-      <PageHero locale={locale} eyebrow="ALGAE ATLAS" title={locale === "zh" ? "藻类图鉴：认识我们的研究对象" : "Algae Atlas: Meet Our Research Organisms"} intro={locale === "zh" ? "从淡水到海洋，从微观细胞到大型海藻，以公开基础资料建立可持续维护的双语图鉴。" : "A maintainable bilingual atlas spanning freshwater and marine environments, microscopic cells, and macroalgae."} image="/images/diatoms.jpg" />
+      <PageHero locale={locale} eyebrow="ALGAE ATLAS" title={locale === "zh" ? "藻类图鉴：认识我们的研究对象" : "Algae Atlas: Meet Our Research Organisms"} intro={locale === "zh" ? "从淡水到海洋，从微观细胞到大型海藻，以公开基础资料建立可持续维护的双语图鉴。" : "A maintainable bilingual atlas spanning freshwater and marine environments, microscopic cells, and macroalgae."} image="/images/zhutu.png" />
       <section className="section-shell content-section library-section">
         <nav className="filter-row" aria-label={locale === "zh" ? "按环境筛选" : "Filter by habitat"}>
           {filters.map((filter) => <Link key={filter.value} className={activeFilter === filter.value ? "is-active" : undefined} href={filter.value === "all" ? localPath(locale, "algae") : `${localPath(locale, "algae")}?type=${filter.value}`} scroll={false}>{text(filter.label, locale)}</Link>)}
@@ -580,8 +580,13 @@ export function AboutPage({ locale }: { locale: Locale }) {
         <div className="prose"><p className="lead">{locale === "zh" ? "网站把团队信息、研究方向、实验学习资源和藻类科普放在同一套双语结构中。" : "The website brings team information, research areas, laboratory learning resources, and public algal science into one bilingual structure."}</p><h2>{locale === "zh" ? "更新原则" : "Update principles"}</h2><p>{locale === "zh" ? "成员、成果、项目、联系方式和实验流程只在完成内部确认后发布。缺失信息明确标记为待补充或整理中，不使用推测内容填充。" : "Members, outputs, projects, contact details, and laboratory procedures are published only after internal confirmation. Missing information is marked as pending rather than filled with assumptions."}</p><h2>{locale === "zh" ? "教程说明" : "Tutorial note"}</h2><p>{locale === "zh" ? "仪器教程是面向本科生的辅助学习材料，不替代现场培训或厂家说明书。安全要求、具体参数和操作步骤必须经实验室审核。" : "Instrument tutorials are supporting materials for undergraduates. They do not replace on-site training or manufacturer manuals. Safety requirements, parameters, and procedures require laboratory review."}</p><h2>{locale === "zh" ? "藻类图鉴" : "Algae Atlas"}</h2><p>{locale === "zh" ? "藻境 · Algae Atlas 保留为团队网站中的公众科学栏目，用于介绍代表性藻类、观察方式与内容边界。" : "Algae Atlas remains a public science feature within the team website, introducing representative algae, observation approaches, and the limits of public information."}</p></div>
       </section>
       <section className="section-shell content-section" id="image-credits">
-        <SectionHeading eyebrow="IMAGE CREDITS" title={locale === "zh" ? "临时图片来源与许可" : "Temporary image sources and licenses"} intro={locale === "zh" ? "团队自有影像补充前，网站继续使用下列公开科学影像。" : "These public science images remain in use until team-owned imagery is available."} />
-        <div className="credits-list">{imageCredits.map((credit) => <a key={credit.href} href={credit.href} target="_blank" rel="noreferrer"><strong>{credit.file}</strong><span>{credit.credit}</span><em>{credit.license}</em></a>)}</div>
+        <SectionHeading eyebrow="IMAGE CREDITS" title={locale === "zh" ? "图片来源与使用说明" : "Image sources and usage notes"} intro={locale === "zh" ? "网站当前同时使用用户提供素材与开放许可科学影像；待确认项目会明确标注。" : "The site currently uses both user-provided material and openly licensed science imagery; pending permissions are clearly marked."} />
+        <div className="credits-list">
+          {imageCredits.map((credit) => {
+            const content = <><strong>{credit.file}</strong><span>{credit.credit}</span><em>{credit.license}</em></>;
+            return credit.href ? <a key={credit.file} href={credit.href} target="_blank" rel="noreferrer">{content}</a> : <div className="credit-row" key={credit.file}>{content}</div>;
+          })}
+        </div>
       </section>
     </>
   );
@@ -612,7 +617,7 @@ export function LegacyIndex({ locale, section }: { locale: Locale; section: Lega
   const isInsights = section === "insights";
   return (
     <>
-      <PageHero locale={locale} eyebrow={isInsights ? "PUBLIC INSIGHTS" : "ARCHIVED PUBLIC CONTENT"} title={locale === "zh" ? (isInsights ? "科普与观察" : "公众背景资料") : isInsights ? "Public insights and observations" : "Public background material"} intro={locale === "zh" ? "这些内容是科普文章或示例观察框架，不代表团队动态、科研项目或成果。" : "These are public articles or sample observation frameworks, not team news, research projects, or outputs."} image="/images/bloom.jpg" />
+      <PageHero locale={locale} eyebrow={isInsights ? "PUBLIC INSIGHTS" : "ARCHIVED PUBLIC CONTENT"} title={locale === "zh" ? (isInsights ? "科普与观察" : "公众背景资料") : isInsights ? "Public insights and observations" : "Public background material"} intro={locale === "zh" ? "这些内容是科普文章或示例观察框架，不代表团队动态、科研项目或成果。" : "These are public articles or sample observation frameworks, not team news, research projects, or outputs."} image="/images/tidai.jpg" />
       <section className="section-shell content-section article-list">
         {entries.map((entry, index) => { const routeSection = isInsights ? "insights" : section; return <article key={`${section}-${entry.id}`}><Link className="article-image" href={localPath(locale, `${routeSection}/${entry.id}`)}><img src={entry.image} alt="" loading="lazy" /><span>{String(index + 1).padStart(2, "0")}</span></Link><div><p className="eyebrow">{text(entry.note, locale)}</p><h2><Link href={localPath(locale, `${routeSection}/${entry.id}`)}>{text(entry.title, locale)}</Link></h2><p>{text(entry.summary, locale)}</p><Link className="text-link" href={localPath(locale, `${routeSection}/${entry.id}`)}>{locale === "zh" ? "继续阅读" : "Continue reading"} <Arrow /></Link></div></article>; })}
       </section>

@@ -59,9 +59,9 @@
 
 ## 图片与版权
 
-图片位于 `public/images`。当前临时使用来自 Wikimedia Commons 的 NOAA、美国能源部、CSIRO 与 NASA 科学影像，详细署名、许可和来源链接展示在网站 About 页。
+图片位于 `public/images`。当前网站使用用户提供的 `zhutu.png`、`guandaofanyinqi.jpg`、`tidai.jpg`，以及来自 Wikimedia Commons 的 CSIRO 微藻培养科学影像。详细来源、许可和待确认状态展示在网站 About 页。
 
-新增或替换图片前应核对授权，并同步维护 `lib/site-data.ts` 中的 `imageCredits`。团队自有图片需确认可公开范围；人物图片还需取得相应授权。
+新增或替换图片前应核对授权，并同步维护 `lib/site-data.ts` 中的 `imageCredits`。用户提供素材在公开许可范围确认前应保留“使用范围待确认”标记；团队自有图片需确认可公开范围，人物图片还需取得相应授权。
 
 ## 本地运行与检查
 
