@@ -1,24 +1,26 @@
 import type { MetadataRoute } from "next";
-import { algae, applications, articles, projects } from "@/lib/site-data";
+import { algae, articles, projects } from "@/lib/site-data";
+import { researchAreas, tutorials } from "@/lib/team-data";
 
 const baseUrl = "https://sycszy.icu";
 const locales = ["zh", "en"] as const;
-const sections = ["algae", "applications", "projects", "insights", "about", "contact", "privacy"];
+const sections = ["team", "research", "outputs", "tutorials", "algae", "news", "about", "contact", "privacy", "insights"];
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const paths = [
     "",
     ...sections,
+    ...researchAreas.map((item) => `research/${item.id}`),
+    ...tutorials.map((item) => `tutorials/${item.id}`),
     ...algae.map((item) => `algae/${item.id}`),
-    ...applications.map((item) => `applications/${item.id}`),
-    ...projects.map((item) => `projects/${item.id}`),
     ...articles.map((item) => `insights/${item.id}`),
+    ...projects.map((item) => `insights/${item.id}`),
   ];
 
   return locales.flatMap((locale) =>
     paths.map((path) => ({
       url: `${baseUrl}/${locale}${path ? `/${path}` : ""}`,
-      lastModified: new Date("2026-07-10"),
+      lastModified: new Date("2026-07-11"),
       changeFrequency: path === "" ? "weekly" : "monthly",
       priority: path === "" ? 1 : path.includes("/") ? 0.65 : 0.8,
       alternates: {

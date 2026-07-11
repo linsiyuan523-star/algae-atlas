@@ -31,21 +31,24 @@ export type ArticleEntry = FeatureEntry & {
 };
 
 export const site = {
-  name: { zh: "藻境", en: "ALGAE ATLAS" },
-  kicker: { zh: "探索微小生命，理解蓝色星球", en: "SMALL LIFE · PLANETARY IMPACT" },
+  name: { zh: "广东海洋大学藻类团队", en: "Algae Research Team" },
+  institution: { zh: "广东海洋大学", en: "Guangdong Ocean University" },
+  featureName: { zh: "藻境 · Algae Atlas", en: "Algae Atlas" },
+  kicker: { zh: "立足南海 · 探索藻类科学", en: "ALGAE SCIENCE · SOUTH CHINA SEA" },
   description: {
-    zh: "一个面向公众的中英双语藻类科技展示与知识平台。",
-    en: "A bilingual public platform for algae, cultivation technologies, and ecological knowledge.",
+    zh: "聚焦微藻与大型海藻研究、学生科研训练及藻类科学传播。",
+    en: "Research on microalgae, macroalgae, student training, and public communication of algal science.",
   },
 };
 
 export const navigation = [
-  { href: "algae", label: { zh: "藻类图鉴", en: "Algae Library" } },
-  { href: "applications", label: { zh: "技术与应用", en: "Applications" } },
-  { href: "projects", label: { zh: "项目与观察", en: "Field Notes" } },
-  { href: "insights", label: { zh: "知识中心", en: "Insights" } },
-  { href: "about", label: { zh: "关于", en: "About" } },
-  { href: "contact", label: { zh: "联系", en: "Contact" } },
+  { href: "", label: { zh: "首页", en: "Home" } },
+  { href: "team", label: { zh: "团队概况", en: "Team" } },
+  { href: "research", label: { zh: "研究方向", en: "Research" } },
+  { href: "outputs", label: { zh: "科研成果", en: "Outputs" } },
+  { href: "tutorials", label: { zh: "仪器教程", en: "Tutorials" } },
+  { href: "algae", label: { zh: "藻类图鉴", en: "Algae Atlas" } },
+  { href: "news", label: { zh: "动态与联系", en: "News & Contact" } },
 ] as const;
 
 export const algae: AlgaeEntry[] = [
