@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SiteShell } from "@/components/SiteShell";
+import { LiveFeedDetail, LiveFeedsPage } from "@/components/LiveFeedsPages";
 import {
   AboutPage,
   AlgaeDetail,
@@ -19,6 +20,7 @@ import {
   TutorialsPage,
 } from "@/components/SitePages";
 import { algae, applications, articles, projects, text, type Locale, type LocalizedText } from "@/lib/site-data";
+import { liveFeedEntries } from "@/lib/live-feeds-data";
 import { researchAreas, tutorials } from "@/lib/team-data";
 
 type PageProps = {
@@ -47,6 +49,13 @@ const routeMeta: Record<string, RouteMeta> = {
   research: {
     title: { zh: "研究方向｜微藻与大型海藻", en: "Research | Microalgae and Macroalgae" },
     description: { zh: "了解微藻培养调控、大型海藻资源、活性物质与水产养殖应用等研究方向。", en: "Explore research interests in microalgae, macroalgae, bioactive compounds, and aquaculture applications." },
+  },
+  "live-feeds": {
+    title: { zh: "生物饵料与浮游动物｜广东海洋大学藻类团队", en: "Live Feeds & Zooplankton | Algae Research Team" },
+    description: {
+      zh: "介绍团队在轮虫、桡足类、枝角类、微藻饵料、浮游动物培养及水产苗种应用方面的研究与实验教学。",
+      en: "Research and laboratory training on rotifers, copepods, cladocerans, microalgal diets, zooplankton culture, and aquaculture live-feed applications.",
+    },
   },
   outputs: {
     title: { zh: "科研成果｜广东海洋大学藻类团队", en: "Outputs | Algae Research Team" },
@@ -112,6 +121,18 @@ function detailMeta(section: string | undefined, id: string | undefined, locale:
     const entry = tutorials.find((item) => item.id === id);
     return entry ? { title: text(entry.name, locale), description: text(entry.purpose, locale) } : null;
   }
+  if (section === "live-feeds") {
+    const entry = liveFeedEntries.find((item) => item.id === id);
+    return entry
+      ? {
+          title: {
+            zh: `${entry.name.zh}｜生物饵料与浮游动物`,
+            en: `${entry.name.en} | Live Feeds & Zooplankton`,
+          },
+          description: entry.overview,
+        }
+      : null;
+  }
   const entry =
     articles.find((item) => item.id === id) ??
     projects.find((item) => item.id === id) ??
@@ -129,6 +150,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const description = localized(meta.description, locale);
   const suffix = slug.length ? `/${slug.join("/")}` : "";
   const url = `/${locale}${suffix}`;
+  const useAlgaeSocialImage = section !== "live-feeds";
 
   return {
     title: { absolute: title },
@@ -144,16 +166,21 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       description,
       url,
       locale: locale === "zh" ? "zh_CN" : "en_US",
-      images: [{ url: "/images/zhutu.png", alt: locale === "zh" ? "多种藻类显微形态主题图" : "A microscopy-themed image of diverse algal forms" }],
+      ...(useAlgaeSocialImage
+        ? { images: [{ url: "/images/zhutu.png", alt: locale === "zh" ? "多种藻类显微形态主题图" : "A microscopy-themed image of diverse algal forms" }] }
+        : {}),
     },
-    twitter: { card: "summary_large_image", title, description, images: ["/images/zhutu.png"] },
+    twitter: useAlgaeSocialImage
+      ? { card: "summary_large_image", title, description, images: ["/images/zhutu.png"] }
+      : { card: "summary", title, description },
   };
 }
 
 export function generateStaticParams() {
-  const base = ["team", "research", "outputs", "tutorials", "algae", "news", "contact", "about", "privacy", "insights", "applications", "projects"];
+  const base = ["team", "research", "live-feeds", "outputs", "tutorials", "algae", "news", "contact", "about", "privacy", "insights", "applications", "projects"];
   const details = [
     ...researchAreas.map((entry) => ["research", entry.id]),
+    ...liveFeedEntries.map((entry) => ["live-feeds", entry.id]),
     ...tutorials.map((entry) => ["tutorials", entry.id]),
     ...algae.map((entry) => ["algae", entry.id]),
     ...articles.map((entry) => ["insights", entry.id]),
@@ -183,6 +210,11 @@ export default async function LocalizedPage({ params, searchParams }: PageProps)
     const area = researchAreas.find((item) => item.id === id);
     if (!area) notFound();
     page = <ResearchDetail locale={locale} area={area} />;
+  } else if (section === "live-feeds" && !id) page = <LiveFeedsPage locale={locale} />;
+  else if (section === "live-feeds" && id) {
+    const entry = liveFeedEntries.find((item) => item.id === id);
+    if (!entry) notFound();
+    page = <LiveFeedDetail locale={locale} entry={entry} />;
   } else if (section === "outputs" && !id) {
     page = <OutputsPage locale={locale} category={typeof query.category === "string" ? query.category : undefined} />;
   } else if (section === "tutorials" && !id) page = <TutorialsPage locale={locale} />;

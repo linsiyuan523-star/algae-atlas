@@ -31,6 +31,7 @@ export type ArticleEntry = FeatureEntry & {
 };
 
 export type ImageCredit = {
+  id: string;
   file: string;
   credit: string;
   license: string;
@@ -52,6 +53,7 @@ export const navigation = [
   { href: "", label: { zh: "首页", en: "Home" } },
   { href: "team", label: { zh: "团队概况", en: "Team" } },
   { href: "research", label: { zh: "研究方向", en: "Research" } },
+  { href: "live-feeds", label: { zh: "生物饵料", en: "Live Feeds" } },
   { href: "outputs", label: { zh: "科研成果", en: "Outputs" } },
   { href: "tutorials", label: { zh: "仪器教程", en: "Tutorials" } },
   { href: "algae", label: { zh: "藻类图鉴", en: "Algae Atlas" } },
@@ -262,22 +264,26 @@ export const articles: ArticleEntry[] = [
 
 export const imageCredits: ImageCredit[] = [
   {
+    id: "zhutu",
     file: "藻类显微主题主图 / Algae microscopy feature image",
     credit: "用户提供 / Provided by the site owner",
     license: "使用范围待确认 / Usage scope pending confirmation",
   },
   {
+    id: "guandaofanyinqi",
     file: "管道式反应器 / Tubular photobioreactor",
     credit: "用户提供 / Provided by the site owner",
     license: "使用范围待确认 / Usage scope pending confirmation",
   },
   {
+    id: "cultures",
     file: "Microalgal cultures",
     credit: "Tony Rees / CSIRO",
     license: "CC BY 3.0 · cropped for presentation",
     href: "https://commons.wikimedia.org/wiki/File:CSIRO_ScienceImage_7234_microalgal_cultures.jpg",
   },
   {
+    id: "tidai",
     file: "校园猫替代图片 / Campus cat replacement image",
     credit: "用户提供 / Provided by the site owner",
     license: "使用范围待确认 / Usage scope pending confirmation",

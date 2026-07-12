@@ -93,6 +93,7 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
             <p className="footer-label">{locale === "zh" ? "访问" : "Explore"}</p>
             <Link href={`/${locale}/team`}>{locale === "zh" ? "团队概况" : "Team"}</Link>
             <Link href={`/${locale}/research`}>{locale === "zh" ? "研究方向" : "Research"}</Link>
+            <Link href={`/${locale}/live-feeds`}>{locale === "zh" ? "生物饵料" : "Live Feeds"}</Link>
             <Link href={`/${locale}/tutorials`}>{locale === "zh" ? "仪器教程" : "Tutorials"}</Link>
             <Link href={`/${locale}/algae`}>{locale === "zh" ? "藻类图鉴" : "Algae Atlas"}</Link>
           </div>

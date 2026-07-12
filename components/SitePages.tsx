@@ -1,6 +1,7 @@
 /* eslint-disable @next/next/no-img-element -- The same local, credited images must render in vinext and Next.js. */
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Arrow, EmptyState, localPath, PageHero, SectionHeading } from "@/components/PagePrimitives";
+import { liveFeedEntries } from "@/lib/live-feeds-data";
 import {
   algae,
   applications,
@@ -27,73 +28,6 @@ import {
   type ResearchArea,
   type TutorialEntry,
 } from "@/lib/team-data";
-
-function localPath(locale: Locale, path = "") {
-  return `/${locale}${path ? `/${path}` : ""}`;
-}
-
-function Arrow() {
-  return <span aria-hidden="true">↗</span>;
-}
-
-function SectionHeading({ eyebrow, title, intro }: { eyebrow: string; title: string; intro?: string }) {
-  return (
-    <div className="section-heading">
-      <p className="eyebrow">{eyebrow}</p>
-      <div>
-        <h2>{title}</h2>
-        {intro ? <p>{intro}</p> : null}
-      </div>
-    </div>
-  );
-}
-
-function PageHero({
-  locale,
-  eyebrow,
-  title,
-  intro,
-  image,
-  children,
-}: {
-  locale: Locale;
-  eyebrow: string;
-  title: string;
-  intro: string;
-  image?: string;
-  children?: ReactNode;
-}) {
-  return (
-    <section className={`page-hero${image ? " has-image" : ""}`}>
-      <div className="page-hero-inner">
-        <p className="eyebrow light">{eyebrow}</p>
-        <h1>{title}</h1>
-        <p>{intro}</p>
-        {children}
-      </div>
-      {image ? (
-        <figure>
-          <img src={image} alt="" />
-          <figcaption>
-            {locale === "zh" ? "页面影像，来源与使用说明见图片署名" : "Page imagery; see credits for source and use information"}
-          </figcaption>
-        </figure>
-      ) : null}
-    </section>
-  );
-}
-
-function EmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="empty-state" role="status">
-      <span aria-hidden="true">○</span>
-      <div>
-        <h3>{title}</h3>
-        <p>{body}</p>
-      </div>
-    </div>
-  );
-}
 
 function AlgaeCard({ entry, locale }: { entry: AlgaeEntry; locale: Locale }) {
   return (
@@ -255,9 +189,45 @@ export function HomePage({ locale }: { locale: Locale }) {
         </div>
       </section>
 
+      <section className="live-feeds-home-section">
+        <div className="section-shell content-section">
+          <SectionHeading
+            eyebrow={`04 / ${locale === "zh" ? "跨方向特色" : "CROSS-DIRECTION FEATURE"}`}
+            title={locale === "zh" ? "连接微藻培养与水产苗种的生物饵料研究" : "Live Feed Research Connecting Microalgae and Aquaculture"}
+            intro={locale === "zh" ? "作为连接微藻研究、水产养殖应用与浮游动物培养的特色板块，本栏目不改变团队现有的两大研究方向结构。" : "This feature connects microalgae research, aquaculture applications, and zooplankton culture without redefining the team’s two main research areas."}
+          />
+          <div className="live-feed-home-layout">
+            <div className="live-feed-preview-grid">
+              {liveFeedEntries.map((entry, index) => (
+                <Link className="live-feed-preview-card" href={localPath(locale, `live-feeds/${entry.id}`)} key={entry.id}>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <p className="taxonomic-group">{entry.scientificGroup}</p>
+                  <h3>{text(entry.name, locale)}</h3>
+                  <p>{text(entry.overview, locale)}</p>
+                  <strong>{locale === "zh" ? "查看类群介绍" : "View group profile"} <Arrow /></strong>
+                </Link>
+              ))}
+            </div>
+            <figure className="live-feed-relationship-preview">
+              <p className="eyebrow">MICROALGAE → ZOOPLANKTON → APPLICATION</p>
+              <ol>
+                <li>{locale === "zh" ? "微藻培养" : "Microalgae"}</li>
+                <li>{locale === "zh" ? "轮虫 / 桡足类 / 枝角类培养" : "Rotifers / Copepods / Cladocerans"}</li>
+                <li>{locale === "zh" ? "水产苗种或实验研究应用" : "Aquaculture Larvae and Research Applications"}</li>
+              </ol>
+              <figcaption>{locale === "zh" ? "典型研究与培养关系示意；具体组合因物种、发育阶段及培养条件而异。" : "A typical research and culture relationship; combinations vary by species, life stage, and culture context."}</figcaption>
+            </figure>
+          </div>
+          <div className="button-row live-feed-home-actions">
+            <Link className="button dark" href={localPath(locale, "live-feeds")}>{locale === "zh" ? "探索生物饵料" : "Explore Live Feeds"} <Arrow /></Link>
+            <Link className="button dark" href={`${localPath(locale, "live-feeds")}#guides`}>{locale === "zh" ? "查看培养教程" : "View Culture Guides"}</Link>
+          </div>
+        </div>
+      </section>
+
       <section className="section-shell content-section">
         <SectionHeading
-          eyebrow={`04 / ${locale === "zh" ? "实验教学" : "LABORATORY TRAINING"}`}
+          eyebrow={`05 / ${locale === "zh" ? "实验教学" : "LABORATORY TRAINING"}`}
           title={locale === "zh" ? "从仪器理解到规范操作" : "From instrument literacy to responsible practice"}
           intro={locale === "zh" ? "面向本科生的辅助学习入口；具体流程须经实验室审核。" : "A supporting learning entry point for undergraduates; procedures require laboratory review."}
         />
@@ -272,7 +242,7 @@ export function HomePage({ locale }: { locale: Locale }) {
       <section className="beginner-section">
         <div className="section-shell content-section">
           <SectionHeading
-            eyebrow={`04B / ${locale === "zh" ? "新生入门" : "BEGINNER PATH"}`}
+            eyebrow={`05B / ${locale === "zh" ? "新生入门" : "BEGINNER PATH"}`}
             title={locale === "zh" ? "第一次进入藻类实验室，从这里开始" : "New to an algae laboratory? Start here."}
             intro={locale === "zh" ? "安全、培养基础与记录规范分别维护；当前主题结构正在整理中。" : "Safety, cultivation basics, and record standards are maintained separately; the learning content is in preparation."}
           />
@@ -285,7 +255,7 @@ export function HomePage({ locale }: { locale: Locale }) {
       <section className="atlas-highlight">
         <div className="section-shell content-section">
           <SectionHeading
-            eyebrow="05 / ALGAE ATLAS"
+            eyebrow="06 / ALGAE ATLAS"
             title={locale === "zh" ? "藻类图鉴：认识我们的研究对象" : "Algae Atlas: Meet Our Research Organisms"}
             intro={locale === "zh" ? "保留并持续扩展藻境公众图鉴，连接形态、环境与研究问题。" : "The public Algae Atlas remains an evolving bridge between form, habitat, and research questions."}
           />
@@ -300,7 +270,7 @@ export function HomePage({ locale }: { locale: Locale }) {
 
       <section className="section-shell content-section compact-section">
         <SectionHeading
-          eyebrow={`06 / ${locale === "zh" ? "科研成果" : "RESEARCH OUTPUTS"}`}
+          eyebrow={`07 / ${locale === "zh" ? "科研成果" : "RESEARCH OUTPUTS"}`}
           title={locale === "zh" ? "经核实后再公开" : "Published after verification"}
           intro={locale === "zh" ? "成果条目当前仅建立分类结构，不展示未经确认的信息。" : "The category structure is ready; unverified records are not displayed."}
         />
@@ -316,7 +286,7 @@ export function HomePage({ locale }: { locale: Locale }) {
 
       <section className="cta-panel section-shell">
         <div>
-          <p className="eyebrow">07 / TRAINING & COLLABORATION</p>
+          <p className="eyebrow">08 / TRAINING & COLLABORATION</p>
           <h2>{locale === "zh" ? "加入科研训练，或与我们建立合作" : "Begin research training or connect for collaboration"}</h2>
         </div>
         <p>
@@ -350,6 +320,7 @@ export function TeamPage({ locale }: { locale: Locale }) {
         </div>
         <div className="prose">
           <p className="lead">{locale === "zh" ? "从微藻细胞到大型海藻资源，团队以可验证的问题、规范记录和跨尺度理解组织研究与训练。" : "From microalgal cells to macroalgal resources, the team organizes research and training around verifiable questions, responsible records, and cross-scale understanding."}</p>
+          <p>{locale === "zh" ? "除微藻与大型海藻研究外，团队还开展轮虫、桡足类和枝角类等浮游动物的培养与应用研究，关注微藻饵料、营养调控及水产苗种生物饵料供应。" : "In addition to microalgae and macroalgae, the team studies the culture and application of rotifers, copepods, cladocerans, and other zooplankton used as live feeds in aquaculture."}</p>
           <p>{locale === "zh" ? "网站当前只公开已确认的团队定位与内容结构。人员、平台和具体成果将在完成内部核实后更新。" : "This website currently publishes only confirmed positioning and content structure. People, facilities, and specific outputs will be added after internal verification."}</p>
         </div>
       </section>
@@ -399,6 +370,14 @@ export function ResearchPage({ locale }: { locale: Locale }) {
         <div className="research-area-grid">
           {researchAreas.map((area) => <ResearchAreaCard key={area.id} area={area} locale={locale} />)}
         </div>
+        <aside className="live-feeds-crosslink">
+          <div>
+            <p className="eyebrow">CROSS-DIRECTION FEATURE</p>
+            <h2>{locale === "zh" ? "生物饵料与浮游动物研究" : "Live Feeds & Zooplankton Research"}</h2>
+          </div>
+          <p>{locale === "zh" ? "除微藻与大型海藻研究外，团队还开展轮虫、桡足类和枝角类等浮游动物的培养与应用研究，关注微藻饵料、营养调控及水产苗种生物饵料供应。" : "In addition to microalgae and macroalgae, the team studies the culture and application of rotifers, copepods, cladocerans, and other zooplankton used as live feeds in aquaculture."}</p>
+          <Link className="text-link" href={localPath(locale, "live-feeds")}>{locale === "zh" ? "进入生物饵料栏目" : "Explore Live Feeds"} <Arrow /></Link>
+        </aside>
       </section>
       <section className="dark-section">
         <div className="section-shell content-section">
