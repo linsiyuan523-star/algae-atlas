@@ -56,14 +56,12 @@ function InformationBlock({ title, items, locale }: { title: string; items: Loca
 
 function CollaborationAreaCard({ area, locale, index }: { area: CollaborationArea; locale: Locale; index: number }) {
   return (
-    <details className="collaboration-area-card" id={area.id} open={index === 0}>
+    <details className="collaboration-area-card" id={area.id}>
       <summary className="collaboration-card-summary">
         <span className="collaboration-card-index">{String(index + 1).padStart(2, "0")}</span>
-        <span className="collaboration-card-copy">
-          <span className="collaboration-status" data-status={area.status}>{statusLabel(area.status, locale)}</span>
-          <span className="collaboration-card-title" role="heading" aria-level={3}>{text(area.title, locale)}</span>
-          <span className="collaboration-card-description">{text(area.summary, locale)}</span>
-        </span>
+        <span className="collaboration-status" data-status={area.status}>{statusLabel(area.status, locale)}</span>
+        <span className="collaboration-card-title" role="heading" aria-level={3}>{text(area.title, locale)}</span>
+        <span className="collaboration-card-description">{text(area.summary, locale)}</span>
         <span className="collaboration-card-toggle" aria-hidden="true">＋</span>
       </summary>
 

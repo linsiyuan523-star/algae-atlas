@@ -167,6 +167,15 @@ test("renders the bilingual Collaboration page with six complete areas, preparat
     assert.match(en, new RegExp(escapeRegExp(enTitle)));
   });
 
+  for (const [locale, page] of [["zh", zh], ["en", en]]) {
+    const cards = page.match(/<details class="collaboration-area-card"[^>]*>/g) ?? [];
+    assert.equal(cards.length, 6, `${locale} should render six collaboration details cards`);
+    assert.ok(cards.every((card) => !/\sopen(?:=|(?=\s|>))/i.test(card)), `${locale} collaboration cards should all start collapsed`);
+    assert.equal((page.match(/<summary class="collaboration-card-summary">/g) ?? []).length, 6);
+    assert.equal((page.match(/class="collaboration-card-title"/g) ?? []).length, 6);
+    assert.match(page, /class="collaboration-area-grid"/);
+  }
+
   for (const label of ["适合的合作对象", "可讨论的问题", "合作方需要准备的信息", "团队可能参与的工作", "相关研究与学习页面"]) {
     const occurrences = zh.match(new RegExp(escapeRegExp(label), "g")) ?? [];
     assert.ok(occurrences.length >= 6, `every collaboration card should include ${label}`);
@@ -282,6 +291,9 @@ test("uses seven desktop navigation items while retaining every operational entr
 
 test("compresses the home page to three tutorials, three beginner topics, compact outputs, and one collaboration entry", async () => {
   const [zh, en] = await Promise.all([html("/zh"), html("/en")]);
+  const sitePagesSource = await readFile(new URL("../components/SitePages.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(sitePagesSource, /<br\s*\/?>/i, "home and section headings should wrap through CSS rather than hard-coded breaks");
 
   assert.match(zh, /近岸藻华与赤潮/);
   assert.match(zh, /href="\/zh\/research\/algal-blooms"/);

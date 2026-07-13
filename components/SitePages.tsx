@@ -124,9 +124,9 @@ export function HomePage({ locale }: { locale: Locale }) {
             <p className="eyebrow light">{text(site.kicker, locale)}</p>
             <h1>
               {locale === "zh" ? (
-                <>立足南海，<br />探索<span>藻类科学与资源价值</span></>
+                <>立足南海，探索<span>藻类科学与资源价值</span></>
               ) : (
-                <>Exploring Algal Science<br />from the <span>South China Sea</span></>
+                <>Exploring Algal Science from the <span>South China Sea</span></>
               )}
             </h1>
             <p className="hero-intro">
@@ -165,7 +165,7 @@ export function HomePage({ locale }: { locale: Locale }) {
       <section className="statement section-shell">
         <p className="statement-index">01 / {locale === "zh" ? "团队简介" : "ABOUT THE TEAM"}</p>
         <div className="statement-copy">
-          <h2>{locale === "zh" ? "从微观细胞到" : "From microscopic cells"}<br /><em>{locale === "zh" ? "大型海藻" : "to macroalgae"}</em></h2>
+          <h2>{locale === "zh" ? <>从微观细胞到<em>大型海藻</em></> : <>From microscopic cells <em>to macroalgae</em></>}</h2>
           <p>
             {locale === "zh"
               ? "广东海洋大学藻类团队围绕海洋藻类资源开发与利用开展研究，涵盖微藻培养与调控、藻类营养代谢、功能活性物质开发、大型海藻资源利用及水产养殖应用。团队注重基础研究、技术应用与学生科研训练相结合。"
