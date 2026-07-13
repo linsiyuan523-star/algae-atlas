@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { navigation, otherLocale, site, text, type Locale } from "@/lib/site-data";
+import { navigation, otherLocale, secondaryNavigation, site, text, type Locale } from "@/lib/site-data";
 
 type SiteShellProps = {
   locale: Locale;
@@ -28,10 +28,20 @@ function Logo({ locale }: { locale: Locale }) {
   );
 }
 
-function NavLinks({ locale, active }: { locale: Locale; active: string }) {
+type NavigationItem = (typeof navigation)[number] | (typeof secondaryNavigation)[number];
+
+function NavLinks({
+  locale,
+  active,
+  items = navigation,
+}: {
+  locale: Locale;
+  active: string;
+  items?: readonly NavigationItem[];
+}) {
   return (
     <>
-      {navigation.map((item) => (
+      {items.map((item) => (
         <Link
           key={item.href || "home"}
           href={pathFor(locale, item.href)}
@@ -72,6 +82,8 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
               </summary>
               <nav aria-label={locale === "zh" ? "手机导航" : "Mobile navigation"}>
                 <NavLinks locale={locale} active={active} />
+                <span className="mobile-nav-divider" aria-hidden="true" />
+                <NavLinks locale={locale} active={active} items={secondaryNavigation} />
                 <Link href={`/${targetLocale}${suffix}`} lang={targetLocale}>
                   {targetLocale === "zh" ? "切换至中文" : "Switch to English"}
                 </Link>
@@ -94,6 +106,7 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
             <Link href={`/${locale}/team`}>{locale === "zh" ? "团队概况" : "Team"}</Link>
             <Link href={`/${locale}/research`}>{locale === "zh" ? "研究方向" : "Research"}</Link>
             <Link href={`/${locale}/live-feeds`}>{locale === "zh" ? "生物饵料" : "Live Feeds"}</Link>
+            <Link href={`/${locale}/collaboration`}>{locale === "zh" ? "合作与交流" : "Collaboration"}</Link>
             <Link href={`/${locale}/tutorials`}>{locale === "zh" ? "仪器教程" : "Tutorials"}</Link>
             <Link href={`/${locale}/algae`}>{locale === "zh" ? "藻类图鉴" : "Algae Atlas"}</Link>
           </div>
@@ -105,6 +118,8 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
                 : "Team profiles, research outputs, and laboratory tutorials are being prepared and internally verified."}
             </p>
             <div className="footer-inline-links">
+              <Link href={`/${locale}/outputs`}>{locale === "zh" ? "科研成果" : "Outputs"}</Link>
+              <Link href={`/${locale}/news`}>{locale === "zh" ? "团队动态" : "News"}</Link>
               <Link href={`/${locale}/about#image-credits`}>{locale === "zh" ? "图片来源" : "Credits"}</Link>
               <Link href={`/${locale}/contact`}>{locale === "zh" ? "联系" : "Contact"}</Link>
               <Link href={`/${locale}/privacy`}>{locale === "zh" ? "隐私" : "Privacy"}</Link>

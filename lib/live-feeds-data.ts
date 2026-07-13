@@ -1,8 +1,8 @@
 import type { LocalizedText } from "@/lib/site-data";
+import { createContentReview, type ContentReview } from "@/lib/content-review";
 
 export type LiveFeedCategory = "rotifer" | "copepod" | "cladoceran" | "other";
 export type WaterEnvironment = "marine" | "freshwater" | "brackish";
-export type ContentStatus = "draft" | "reviewed";
 
 export type LiveFeedEntry = {
   id: string;
@@ -25,8 +25,7 @@ export type LiveFeedEntry = {
   image: string;
   imageAlt: LocalizedText;
   imageCreditId?: string;
-  contentStatus: ContentStatus;
-  lastReviewed?: string;
+  review: ContentReview;
 };
 
 export type LiveFeedResearchTopic = {
@@ -34,7 +33,7 @@ export type LiveFeedResearchTopic = {
   categories: LiveFeedCategory[];
   environmentKinds: WaterEnvironment[];
   contentType: "topic";
-  contentStatus: ContentStatus;
+  review: ContentReview;
   title: LocalizedText;
   summary: LocalizedText;
 };
@@ -53,8 +52,7 @@ export type LiveFeedGuide = {
   dataRecords: LocalizedText[];
   commonAnomalies: LocalizedText[];
   safetyAndBiosecurity: LocalizedText[];
-  contentStatus: ContentStatus;
-  lastReviewed?: string;
+  review: ContentReview;
 };
 
 export const liveFeedReviewWarning: LocalizedText = {
@@ -117,7 +115,7 @@ export const liveFeedEntries: LiveFeedEntry[] = [
     relatedGuideIds: ["rotifer-culture-basics", "zooplankton-counting", "culture-density-records"],
     image: "",
     imageAlt: { zh: "轮虫类群图像待团队提供", en: "Team-provided rotifer group image pending" },
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "copepods",
@@ -173,7 +171,7 @@ export const liveFeedEntries: LiveFeedEntry[] = [
     relatedGuideIds: ["copepod-culture-basics", "zooplankton-counting", "water-quality-observation"],
     image: "",
     imageAlt: { zh: "桡足类类群图像待团队提供", en: "Team-provided copepod group image pending" },
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "cladocerans",
@@ -229,7 +227,7 @@ export const liveFeedEntries: LiveFeedEntry[] = [
     relatedGuideIds: ["cladoceran-culture-basics", "zooplankton-counting", "sampling-preservation"],
     image: "",
     imageAlt: { zh: "枝角类类群图像待团队提供", en: "Team-provided cladoceran group image pending" },
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
   },
 ];
 
@@ -239,7 +237,7 @@ export const liveFeedResearchTopics: LiveFeedResearchTopic[] = [
     categories: ["rotifer", "copepod", "cladoceran"],
     environmentKinds: [],
     contentType: "topic",
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
     title: { zh: "浮游动物高密度培养", en: "High-Density Zooplankton Culture" },
     summary: { zh: "关注种群状态、培养稳定性与供应连续性的评价框架，不预设已达到的培养规模。", en: "Examines frameworks for population condition, culture stability, and continuity of supply without implying an achieved production scale." },
   },
@@ -248,7 +246,7 @@ export const liveFeedResearchTopics: LiveFeedResearchTopic[] = [
     categories: ["rotifer", "copepod", "cladoceran"],
     environmentKinds: [],
     contentType: "topic",
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
     title: { zh: "微藻饵料与饵料组合", en: "Microalgal Diets and Feed Combinations" },
     summary: { zh: "比较不同培养对象与阶段对微藻饵料和组合策略的响应。", en: "Compares how defined culture organisms and life stages respond to microalgal diets and diet combinations." },
   },
@@ -257,7 +255,7 @@ export const liveFeedResearchTopics: LiveFeedResearchTopic[] = [
     categories: ["rotifer", "copepod", "cladoceran"],
     environmentKinds: [],
     contentType: "topic",
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
     title: { zh: "营养强化与营养品质", en: "Nutritional Enrichment and Feed Quality" },
     summary: { zh: "研究饵料来源、强化过程和记录方式与营养品质之间的关系。", en: "Studies relationships among diet source, enrichment processes, record keeping, and nutritional quality." },
   },
@@ -266,7 +264,7 @@ export const liveFeedResearchTopics: LiveFeedResearchTopic[] = [
     categories: ["rotifer", "copepod", "cladoceran"],
     environmentKinds: [],
     contentType: "topic",
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
     title: { zh: "繁殖、生长与种群动态", en: "Reproduction, Growth and Population Dynamics" },
     summary: { zh: "关注不同类群和发育阶段的繁殖、生长及种群变化。", en: "Focuses on reproduction, growth, and population change across groups and developmental stages." },
   },
@@ -275,7 +273,7 @@ export const liveFeedResearchTopics: LiveFeedResearchTopic[] = [
     categories: ["rotifer", "copepod", "cladoceran"],
     environmentKinds: [],
     contentType: "topic",
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
     title: { zh: "水质、环境与微生物管理", en: "Water Quality, Environment and Microbial Management" },
     summary: { zh: "建立水质、培养环境、微生物状态与异常迹象的观察和记录框架。", en: "Develops observation and record frameworks for water quality, culture conditions, microbial state, and signs of abnormality." },
   },
@@ -284,7 +282,7 @@ export const liveFeedResearchTopics: LiveFeedResearchTopic[] = [
     categories: ["rotifer", "copepod", "cladoceran"],
     environmentKinds: [],
     contentType: "topic",
-    contentStatus: "draft",
+    review: createContentReview("draft", "2026-07-12"),
     title: { zh: "水产苗种投喂与应用评价", en: "Larval Feeding and Application Evaluation" },
     summary: { zh: "针对明确苗种对象和发育阶段评价摄食适配性与应用边界。", en: "Evaluates feeding compatibility and application boundaries for defined larvae and developmental stages." },
   },
@@ -299,7 +297,7 @@ const pendingGuideFields = {
   safetyAndBiosecurity: [] as LocalizedText[],
   environmentKinds: [] as WaterEnvironment[],
   contentType: "guide" as const,
-  contentStatus: "draft" as const,
+  review: createContentReview("draft", "2026-07-12"),
 };
 
 export const liveFeedGuides: LiveFeedGuide[] = [

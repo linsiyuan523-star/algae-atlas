@@ -1,7 +1,9 @@
 /* eslint-disable @next/next/no-img-element -- Future credited team images must render in vinext and Next.js. */
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { ContentReviewPanel } from "@/components/ContentReviewPanel";
 import { Arrow, EmptyState, localPath, PageHero, SectionHeading } from "@/components/PagePrimitives";
+import { ResearchCapabilityPanel } from "@/components/ResearchCapabilityPages";
 import {
   liveFeedEntries,
   liveFeedGuides,
@@ -10,6 +12,7 @@ import {
   type LiveFeedEntry,
   type LiveFeedGuide,
 } from "@/lib/live-feeds-data";
+import { getResearchCapability } from "@/lib/research-capabilities-data";
 import { imageCredits, text, type Locale, type LocalizedText } from "@/lib/site-data";
 
 function FeedGroupCard({ entry, locale, index }: { entry: LiveFeedEntry; locale: Locale; index: number }) {
@@ -24,6 +27,7 @@ function FeedGroupCard({ entry, locale, index }: { entry: LiveFeedEntry; locale:
         <p className="taxonomic-group">{entry.scientificGroup}</p>
         <h2><Link href={localPath(locale, `live-feeds/${entry.id}`)}>{text(entry.name, locale)}</Link></h2>
         <p>{text(entry.overview, locale)}</p>
+        <ContentReviewPanel review={entry.review} locale={locale} compact />
         <Link className="text-link" href={localPath(locale, `live-feeds/${entry.id}`)}>
           {locale === "zh" ? "查看类群介绍" : "View group profile"} <Arrow />
         </Link>
@@ -64,7 +68,7 @@ function RelationshipChain({ locale, compact = false }: { locale: Locale; compac
 }
 
 function GuideCard({ guide, locale }: { guide: LiveFeedGuide; locale: Locale }) {
-  const reviewed = guide.contentStatus === "reviewed";
+  const reviewed = guide.review.status === "reviewed";
   const reviewLabel = reviewed
     ? (locale === "zh" ? "已审核" : "REVIEWED")
     : (locale === "zh" ? "整理中 / 待审核" : "DRAFT / REVIEW PENDING");
@@ -78,11 +82,10 @@ function GuideCard({ guide, locale }: { guide: LiveFeedGuide; locale: Locale }) 
       </div>
       <p className="status-line">
         {reviewed
-          ? (guide.lastReviewed
-              ? (locale === "zh" ? `最后审核：${guide.lastReviewed}` : `Last reviewed: ${guide.lastReviewed}`)
-              : (locale === "zh" ? "已完成审核，审核日期待补充。" : "Reviewed; review date pending."))
+          ? (locale === "zh" ? "公开结构已完成实验室审核。" : "The public structure has completed laboratory review.")
           : text(liveFeedReviewWarning, locale)}
       </p>
+      <ContentReviewPanel review={guide.review} locale={locale} compact />
     </article>
   );
 }
@@ -105,6 +108,8 @@ function DetailSection({ title, children }: { title: string; children: ReactNode
 }
 
 export function LiveFeedsPage({ locale }: { locale: Locale }) {
+  const capability = getResearchCapability("live-feeds");
+
   return (
     <>
       <PageHero
@@ -151,11 +156,18 @@ export function LiveFeedsPage({ locale }: { locale: Locale }) {
                 <span>{String(index + 1).padStart(2, "0")}</span>
                 <h3>{text(topic.title, locale)}</h3>
                 <p>{text(topic.summary, locale)}</p>
+                <ContentReviewPanel review={topic.review} locale={locale} compact />
               </article>
             ))}
           </div>
         </div>
       </section>
+
+      {capability ? (
+        <section className="section-shell content-section live-feed-capability-section">
+          <ResearchCapabilityPanel locale={locale} capability={capability} />
+        </section>
+      ) : null}
 
       <section className="section-shell content-section live-feed-guides-section" id="guides">
         <SectionHeading
@@ -179,9 +191,6 @@ export function LiveFeedDetail({ locale, entry }: { locale: Locale; entry: LiveF
   const relatedGuides = liveFeedGuides.filter((guide) => entry.relatedGuideIds.includes(guide.id));
   const imageCredit = entry.imageCreditId ? imageCredits.find((credit) => credit.id === entry.imageCreditId) : undefined;
   const canPublishImage = Boolean(entry.image && imageCredit);
-  const statusLabel = entry.contentStatus === "reviewed"
-    ? (locale === "zh" ? "已审核" : "Reviewed")
-    : (locale === "zh" ? "整理中，待实验室审核" : "Draft, laboratory review pending");
 
   return (
     <article className="detail-page live-feed-detail-page">
@@ -217,8 +226,8 @@ export function LiveFeedDetail({ locale, entry }: { locale: Locale; entry: LiveF
         <aside>
           <div><span>{locale === "zh" ? "较高分类单元" : "Higher taxon"}</span><strong className="taxonomic-group">{entry.scientificGroup}</strong></div>
           <div><span>{locale === "zh" ? "栖息环境" : "Environment"}</span><strong>{text(entry.environment, locale)}</strong></div>
-          <div><span>{locale === "zh" ? "内容状态" : "Content status"}</span><strong>{statusLabel}</strong></div>
           <div><span>{locale === "zh" ? "图片状态" : "Image status"}</span><strong>{text(entry.imageAlt, locale)}</strong></div>
+          <ContentReviewPanel review={entry.review} locale={locale} compact />
         </aside>
 
         <div className="prose live-feed-detail-prose">
@@ -249,7 +258,7 @@ export function LiveFeedDetail({ locale, entry }: { locale: Locale; entry: LiveF
             <LocalizedList items={entry.limitations} locale={locale} />
           </DetailSection>
 
-          {entry.contentStatus === "draft" ? (
+          {entry.review.status !== "reviewed" ? (
             <div className="notice-box" role="note">
               <strong>{locale === "zh" ? "内容审核状态" : "Review status"}</strong>
               <p>{text(liveFeedReviewWarning, locale)}</p>

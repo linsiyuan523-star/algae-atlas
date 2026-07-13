@@ -1,3 +1,5 @@
+import { createContentReview, type ContentReview } from "@/lib/content-review";
+
 export type Locale = "zh" | "en";
 
 export type LocalizedText = {
@@ -15,6 +17,7 @@ export type AlgaeEntry = {
   habitat: LocalizedText;
   focus: LocalizedText;
   image: string;
+  review: ContentReview;
 };
 
 export type FeatureEntry = {
@@ -54,10 +57,15 @@ export const navigation = [
   { href: "team", label: { zh: "团队概况", en: "Team" } },
   { href: "research", label: { zh: "研究方向", en: "Research" } },
   { href: "live-feeds", label: { zh: "生物饵料", en: "Live Feeds" } },
-  { href: "outputs", label: { zh: "科研成果", en: "Outputs" } },
+  { href: "collaboration", label: { zh: "合作与联系", en: "Collaboration & Contact" } },
   { href: "tutorials", label: { zh: "仪器教程", en: "Tutorials" } },
   { href: "algae", label: { zh: "藻类图鉴", en: "Algae Atlas" } },
-  { href: "news", label: { zh: "动态与联系", en: "News & Contact" } },
+] as const;
+
+export const secondaryNavigation = [
+  { href: "outputs", label: { zh: "科研成果", en: "Outputs" } },
+  { href: "news", label: { zh: "团队动态", en: "Team News" } },
+  { href: "contact", label: { zh: "联系团队", en: "Contact" } },
 ] as const;
 
 export const algae: AlgaeEntry[] = [
@@ -74,6 +82,7 @@ export const algae: AlgaeEntry[] = [
     habitat: { zh: "淡水及潮湿环境", en: "Freshwater and moist environments" },
     focus: { zh: "培养过程 · 光合作用", en: "Cultivation · Photosynthesis" },
     image: "/images/zhutu.png",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "spirulina",
@@ -88,6 +97,7 @@ export const algae: AlgaeEntry[] = [
     habitat: { zh: "偏碱性湖泊与培养系统", en: "Alkaline lakes and culture systems" },
     focus: { zh: "规模培养 · 光合生物质", en: "Scaled culture · Biomass" },
     image: "/images/cultures.jpg",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "haematococcus-pluvialis",
@@ -102,6 +112,7 @@ export const algae: AlgaeEntry[] = [
     habitat: { zh: "临时性淡水水体", en: "Temporary freshwater habitats" },
     focus: { zh: "色素积累 · 胁迫响应", en: "Pigments · Stress response" },
     image: "/images/cultures.jpg",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "nannochloropsis",
@@ -116,6 +127,7 @@ export const algae: AlgaeEntry[] = [
     habitat: { zh: "海水与半咸水", en: "Marine and brackish waters" },
     focus: { zh: "水产饵料 · 脂质代谢", en: "Aquaculture · Lipid metabolism" },
     image: "/images/zhutu.png",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "phaeodactylum-tricornutum",
@@ -130,6 +142,7 @@ export const algae: AlgaeEntry[] = [
     habitat: { zh: "近岸海域与培养系统", en: "Coastal waters and culture systems" },
     focus: { zh: "模式生物 · 细胞代谢", en: "Model organism · Metabolism" },
     image: "/images/zhutu.png",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "ulva-lactuca",
@@ -144,6 +157,7 @@ export const algae: AlgaeEntry[] = [
     habitat: { zh: "潮间带与沿海浅水", en: "Intertidal and shallow coastal waters" },
     focus: { zh: "海岸生态 · 大型藻类", en: "Coastal ecology · Macroalgae" },
     image: "/images/tidai.jpg",
+    review: createContentReview("draft", "2026-07-12"),
   },
 ];
 

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SiteShell } from "@/components/SiteShell";
+import { CollaborationPage } from "@/components/CollaborationPages";
 import { LiveFeedDetail, LiveFeedsPage } from "@/components/LiveFeedsPages";
+import { AlgalBloomsPage } from "@/components/ResearchCapabilityPages";
 import {
   AboutPage,
   AlgaeDetail,
@@ -57,6 +59,13 @@ const routeMeta: Record<string, RouteMeta> = {
       en: "Research and laboratory training on rotifers, copepods, cladocerans, microalgal diets, zooplankton culture, and aquaculture live-feed applications.",
     },
   },
+  collaboration: {
+    title: { zh: "合作与交流｜广东海洋大学藻类团队", en: "Collaboration | Algae Research Team" },
+    description: {
+      zh: "了解微藻、大型海藻、生物饵料、近岸藻华、水产养殖及自动化与培训等潜在合作方向与沟通准备要求。",
+      en: "Explore potential collaboration in microalgae, macroalgae, live feeds, coastal algal blooms, aquaculture, automation, and training, with enquiry preparation guidance.",
+    },
+  },
   outputs: {
     title: { zh: "科研成果｜广东海洋大学藻类团队", en: "Outputs | Algae Research Team" },
     description: { zh: "论文、专利、科研项目与学生科研信息将在团队核实后更新。", en: "Publications, patents, research projects, and student research will be added after team verification." },
@@ -70,7 +79,7 @@ const routeMeta: Record<string, RouteMeta> = {
     description: { zh: "认识代表性微藻、大型海藻及其环境、形态与研究关注。", en: "Meet representative microalgae and macroalgae through habitat, form, and research interest." },
   },
   news: {
-    title: { zh: "动态与联系｜广东海洋大学藻类团队", en: "News & Contact | Algae Research Team" },
+    title: { zh: "团队动态｜广东海洋大学藻类团队", en: "Team News | Algae Research Team" },
     description: { zh: "团队动态将在内部确认后更新，并提供公共联系信息入口。", en: "Team-confirmed news and access to public contact information." },
   },
   contact: {
@@ -114,6 +123,14 @@ function detailMeta(section: string | undefined, id: string | undefined, locale:
     return entry ? { title: text(entry.name, locale), description: text(entry.summary, locale) } : null;
   }
   if (section === "research") {
+    if (id === "algal-blooms") {
+      return {
+        title: locale === "zh" ? "近岸藻华与赤潮监测" : "Coastal Algal Blooms and Red-Tide Monitoring",
+        description: locale === "zh"
+          ? "了解近岸藻华与赤潮监测的研究问题、现场记录、样品分析、数据边界与潜在合作。"
+          : "Explore research questions, field records, sample analysis, data boundaries, and potential collaboration for coastal algal blooms and red-tide monitoring.",
+      };
+    }
     const entry = researchAreas.find((item) => item.id === id);
     return entry ? { title: text(entry.title, locale), description: text(entry.summary, locale) } : null;
   }
@@ -177,9 +194,10 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 }
 
 export function generateStaticParams() {
-  const base = ["team", "research", "live-feeds", "outputs", "tutorials", "algae", "news", "contact", "about", "privacy", "insights", "applications", "projects"];
+  const base = ["team", "research", "live-feeds", "collaboration", "outputs", "tutorials", "algae", "news", "contact", "about", "privacy", "insights", "applications", "projects"];
   const details = [
     ...researchAreas.map((entry) => ["research", entry.id]),
+    ["research", "algal-blooms"],
     ...liveFeedEntries.map((entry) => ["live-feeds", entry.id]),
     ...tutorials.map((entry) => ["tutorials", entry.id]),
     ...algae.map((entry) => ["algae", entry.id]),
@@ -205,7 +223,9 @@ export default async function LocalizedPage({ params, searchParams }: PageProps)
 
   if (!section) page = <HomePage locale={locale} />;
   else if (section === "team" && !id) page = <TeamPage locale={locale} />;
+  else if (section === "collaboration" && !id) page = <CollaborationPage locale={locale} />;
   else if (section === "research" && !id) page = <ResearchPage locale={locale} />;
+  else if (section === "research" && id === "algal-blooms") page = <AlgalBloomsPage locale={locale} />;
   else if (section === "research" && id) {
     const area = researchAreas.find((item) => item.id === id);
     if (!area) notFound();

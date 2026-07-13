@@ -5,13 +5,14 @@ import { researchAreas, tutorials } from "@/lib/team-data";
 
 const baseUrl = "https://sycszy.icu";
 const locales = ["zh", "en"] as const;
-const sections = ["team", "research", "live-feeds", "outputs", "tutorials", "algae", "news", "about", "contact", "privacy", "insights"];
+const sections = ["team", "research", "live-feeds", "collaboration", "outputs", "tutorials", "algae", "news", "about", "contact", "privacy", "insights"];
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const paths = [
     "",
     ...sections,
     ...researchAreas.map((item) => `research/${item.id}`),
+    "research/algal-blooms",
     ...liveFeedEntries.map((item) => `live-feeds/${item.id}`),
     ...tutorials.map((item) => `tutorials/${item.id}`),
     ...algae.map((item) => `algae/${item.id}`),

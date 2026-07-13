@@ -1,7 +1,11 @@
 /* eslint-disable @next/next/no-img-element -- The same local, credited images must render in vinext and Next.js. */
 import Link from "next/link";
+import { ContentReviewPanel } from "@/components/ContentReviewPanel";
 import { Arrow, EmptyState, localPath, PageHero, SectionHeading } from "@/components/PagePrimitives";
+import { ResearchCapabilityPanel } from "@/components/ResearchCapabilityPages";
+import { collaborationApprovalNotice, collaborationAreas, collaborationPreparationItems } from "@/lib/collaboration-data";
 import { liveFeedEntries } from "@/lib/live-feeds-data";
+import { getResearchCapability } from "@/lib/research-capabilities-data";
 import {
   algae,
   applications,
@@ -22,7 +26,6 @@ import {
   outputs,
   researchAreas,
   researchTopics,
-  teamMembers,
   trainingPrinciples,
   tutorials,
   type ResearchArea,
@@ -94,9 +97,23 @@ function TutorialCard({ entry, locale }: { entry: TutorialEntry; locale: Locale 
 }
 
 export function HomePage({ locale }: { locale: Locale }) {
-  const featuredAlgae = ["nannochloropsis", "phaeodactylum-tricornutum", "ulva-lactuca"]
-    .map((id) => algae.find((entry) => entry.id === id))
-    .filter((entry): entry is AlgaeEntry => Boolean(entry));
+  const collaborationTags: Record<string, string> = locale === "zh"
+    ? {
+        microalgae: "微藻培养",
+        "live-feeds": "生物饵料",
+        "algal-blooms": "赤潮与藻华",
+        macroalgae: "大型海藻",
+        aquaculture: "水产试验",
+        "automation-training": "自动化与教学",
+      }
+    : {
+        microalgae: "Microalgae",
+        "live-feeds": "Live Feeds",
+        "algal-blooms": "Red Tides & Blooms",
+        macroalgae: "Macroalgae",
+        aquaculture: "Aquaculture Studies",
+        "automation-training": "Automation & Training",
+      };
 
   return (
     <>
@@ -176,10 +193,11 @@ export function HomePage({ locale }: { locale: Locale }) {
           />
           <div className="topic-grid">
             {researchTopics.map((topic, index) => (
-              <article key={topic.id}>
+              <article className={topic.route ? "is-linked" : undefined} key={topic.id}>
                 <span>{String(index + 1).padStart(2, "0")}</span>
                 <h3>{text(topic.title, locale)}</h3>
                 <p>{text(topic.summary, locale)}</p>
+                {topic.route ? <Link className="text-link" href={localPath(locale, topic.route)}>{locale === "zh" ? "进入研究专题" : "Open research feature"} <Arrow /></Link> : null}
               </article>
             ))}
           </div>
@@ -225,68 +243,67 @@ export function HomePage({ locale }: { locale: Locale }) {
         </div>
       </section>
 
-      <section className="section-shell content-section">
-        <SectionHeading
-          eyebrow={`05 / ${locale === "zh" ? "实验教学" : "LABORATORY TRAINING"}`}
-          title={locale === "zh" ? "从仪器理解到规范操作" : "From instrument literacy to responsible practice"}
-          intro={locale === "zh" ? "面向本科生的辅助学习入口；具体流程须经实验室审核。" : "A supporting learning entry point for undergraduates; procedures require laboratory review."}
-        />
-        <div className="tutorial-grid tutorial-preview">
-          {tutorials.map((entry) => <TutorialCard key={entry.id} entry={entry} locale={locale} />)}
-        </div>
-        <Link className="section-link" href={localPath(locale, "tutorials")}>
-          {locale === "zh" ? "浏览仪器教程与入门主题" : "Browse tutorials and beginner topics"} <Arrow />
-        </Link>
-      </section>
-
-      <section className="beginner-section">
+      <section className="learning-resources-section">
         <div className="section-shell content-section">
           <SectionHeading
-            eyebrow={`05B / ${locale === "zh" ? "新生入门" : "BEGINNER PATH"}`}
-            title={locale === "zh" ? "第一次进入藻类实验室，从这里开始" : "New to an algae laboratory? Start here."}
-            intro={locale === "zh" ? "安全、培养基础与记录规范分别维护；当前主题结构正在整理中。" : "Safety, cultivation basics, and record standards are maintained separately; the learning content is in preparation."}
+            eyebrow={`05 / ${locale === "zh" ? "教学与开放资源" : "TEACHING & OPEN RESOURCES"}`}
+            title={locale === "zh" ? "实验教学与开放资源" : "Laboratory Teaching and Open Resources"}
+            intro={locale === "zh" ? "将仪器认知、新生入门与藻类图鉴集中为清晰入口；具体流程仍须经实验室审核。" : "A focused entry to instrument literacy, beginner themes, and the Algae Atlas; specific procedures still require laboratory review."}
           />
-          <div className="beginner-grid">
-            {beginnerGuides.map((guide, index) => <article key={`home-${guide.id}`}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{guide.category.toUpperCase()}</small><h3>{text(guide.title, locale)}</h3><p>{text(guide.status, locale)}</p></div></article>)}
+          <div className="resource-preview-block">
+            <div className="resource-preview-heading">
+              <h3>{locale === "zh" ? "仪器教程" : "Instrument Guides"}</h3>
+              <Link className="text-link" href={localPath(locale, "tutorials")}>{locale === "zh" ? "查看全部" : "View all"} <Arrow /></Link>
+            </div>
+            <div className="tutorial-grid tutorial-preview">
+              {tutorials.slice(0, 3).map((entry) => <TutorialCard key={entry.id} entry={entry} locale={locale} />)}
+            </div>
           </div>
-        </div>
-      </section>
-
-      <section className="atlas-highlight">
-        <div className="section-shell content-section">
-          <SectionHeading
-            eyebrow="06 / ALGAE ATLAS"
-            title={locale === "zh" ? "藻类图鉴：认识我们的研究对象" : "Algae Atlas: Meet Our Research Organisms"}
-            intro={locale === "zh" ? "保留并持续扩展藻境公众图鉴，连接形态、环境与研究问题。" : "The public Algae Atlas remains an evolving bridge between form, habitat, and research questions."}
-          />
-          <div className="algae-grid featured-grid">
-            {featuredAlgae.map((entry) => <AlgaeCard key={entry.id} entry={entry} locale={locale} />)}
+          <div className="resource-preview-block">
+            <div className="resource-preview-heading">
+              <h3>{locale === "zh" ? "新生入门" : "Beginner Path"}</h3>
+            </div>
+            <div className="beginner-grid beginner-preview">
+              {beginnerGuides.slice(0, 3).map((guide, index) => <article key={`home-${guide.id}`}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{guide.category.toUpperCase()}</small><h3>{text(guide.title, locale)}</h3><p>{text(guide.status, locale)}</p></div></article>)}
+            </div>
           </div>
-          <Link className="section-link" href={localPath(locale, "algae")}>
-            {locale === "zh" ? "进入完整藻类图鉴" : "Explore the full Algae Atlas"} <Arrow />
-          </Link>
+          <article className="resource-atlas-entry">
+            <div><p className="eyebrow">ALGAE ATLAS</p><h3>{locale === "zh" ? "从研究对象进入藻类图鉴" : "Explore the Algae Atlas by research organism"}</h3><p>{locale === "zh" ? "连接代表性藻类的形态、环境背景、研究关注与公开内容边界。" : "Connect representative algae with morphology, environmental context, research interests, and public-content boundaries."}</p></div>
+            <Link className="button dark" href={localPath(locale, "algae")}>{locale === "zh" ? "进入藻类图鉴" : "Open Algae Atlas"} <Arrow /></Link>
+          </article>
         </div>
       </section>
 
       <section className="section-shell content-section compact-section">
         <SectionHeading
-          eyebrow={`07 / ${locale === "zh" ? "科研成果" : "RESEARCH OUTPUTS"}`}
-          title={locale === "zh" ? "经核实后再公开" : "Published after verification"}
-          intro={locale === "zh" ? "成果条目当前仅建立分类结构，不展示未经确认的信息。" : "The category structure is ready; unverified records are not displayed."}
+          eyebrow={`06 / ${locale === "zh" ? "动态与成果" : "NEWS & OUTPUTS"}`}
+          title={locale === "zh" ? "公开信息以完成审核为前提" : "Public information follows content review"}
         />
-        <div className="output-category-grid">
-          {outputCategories.map((category) => (
-            <Link key={category.id} href={`${localPath(locale, "outputs")}?category=${category.id}`}>
-              <span>{text(category.label, locale)}</span><Arrow />
-              <small>{locale === "zh" ? "内容整理中，后续将由团队补充。" : "Content will be added after internal verification."}</small>
-            </Link>
-          ))}
+        <div className="compact-publication-status">
+          <Link href={localPath(locale, "outputs")}><strong>{locale === "zh" ? "科研成果" : "Research Outputs"}</strong><span>{locale === "zh" ? "经核实的论文、专利、项目和学生成果将在确认后更新。" : "Verified publications, patents, projects, and student outputs will be updated after confirmation."}</span><Arrow /></Link>
+          <Link href={localPath(locale, "news")}><strong>{locale === "zh" ? "团队动态" : "Team News"}</strong><span>{locale === "zh" ? "采样、实验、会议和学生科研动态将在完成内容审核后发布。" : "Sampling, experiments, meetings, and student-research updates will be published after content review."}</span><Arrow /></Link>
+        </div>
+      </section>
+
+      <section className="home-collaboration-section section-shell content-section">
+        <SectionHeading
+          eyebrow={`07 / ${locale === "zh" ? "合作方向" : "COLLABORATION"}`}
+          title={locale === "zh" ? "从明确的问题开始合作" : "Collaboration Starts with a Clearly Defined Question"}
+          intro={locale === "zh" ? "无论是微藻培养、生物饵料、近岸藻华调查、大型海藻研究，还是水产养殖试验和培养自动化，合作都应从明确研究对象、现有条件和预期问题开始。" : "Whether the topic is microalgal cultivation, live feeds, coastal bloom surveys, macroalgae, aquaculture studies, or culture automation, collaboration should begin with defined research objects, current conditions, and the questions to be assessed."}
+        />
+        <div className="collaboration-topic-tags" aria-label={locale === "zh" ? "六类合作方向" : "Six collaboration areas"}>
+          {collaborationAreas.map((area) => <Link href={`${localPath(locale, "collaboration")}#${area.id}`} key={area.id}>{collaborationTags[area.id] ?? text(area.title, locale)}</Link>)}
+        </div>
+        <div className="button-row">
+          <Link className="button dark" href={`${localPath(locale, "collaboration")}#areas`}>{locale === "zh" ? "查看合作方向" : "Explore Areas"} <Arrow /></Link>
+          <Link className="button dark" href={`${localPath(locale, "collaboration")}#prepare`}>{locale === "zh" ? "准备合作信息" : "Prepare Enquiry"}</Link>
+          <Link className="button dark" href={localPath(locale, "contact")}>{locale === "zh" ? "联系团队" : "Contact"}</Link>
         </div>
       </section>
 
       <section className="cta-panel section-shell">
         <div>
-          <p className="eyebrow">08 / TRAINING & COLLABORATION</p>
+          <p className="eyebrow">08 / TRAINING & CONTACT</p>
           <h2>{locale === "zh" ? "加入科研训练，或与我们建立合作" : "Begin research training or connect for collaboration"}</h2>
         </div>
         <p>
@@ -296,7 +313,7 @@ export function HomePage({ locale }: { locale: Locale }) {
         </p>
         <div className="cta-actions">
           <Link className="button dark" href={localPath(locale, "team")}>{locale === "zh" ? "团队概况" : "Meet the Team"}</Link>
-          <Link className="button dark" href={localPath(locale, "contact")}>{locale === "zh" ? "联系信息" : "Contact"} <Arrow /></Link>
+          <Link className="button dark" href={localPath(locale, "collaboration")}>{locale === "zh" ? "合作与联系" : "Collaboration & Contact"} <Arrow /></Link>
         </div>
       </section>
     </>
@@ -341,16 +358,11 @@ export function TeamPage({ locale }: { locale: Locale }) {
           </ul>
         </div>
       </section>
-      <section className="section-shell content-section two-column-status">
-        <div>
-          <p className="eyebrow">MEMBERS</p>
-          <h2>{locale === "zh" ? "团队成员" : "Team members"}</h2>
-          {teamMembers.length === 0 ? <EmptyState title={locale === "zh" ? "成员信息待更新" : "Member profiles pending"} body={locale === "zh" ? "成员信息将在完成内部确认后更新。" : "Member information will be updated after internal confirmation."} /> : null}
-        </div>
-        <div>
-          <p className="eyebrow">LAB PLATFORM</p>
-          <h2>{locale === "zh" ? "实验平台" : "Laboratory platform"}</h2>
-          <EmptyState title={locale === "zh" ? "平台信息待补充" : "Platform details pending"} body={locale === "zh" ? "实验室平台、设备与使用范围将在内部核实后补充。" : "Laboratory platforms, equipment, and approved uses will be added after internal verification."} />
+      <section className="section-shell content-section team-public-status">
+        <SectionHeading eyebrow="PUBLIC INFORMATION" title={locale === "zh" ? "成员与实验平台" : "Members and Laboratory Platform"} intro={locale === "zh" ? "人员和平台信息只在确认公开范围后展示。" : "People and platform information is shown only after its public scope is confirmed."} />
+        <div className="compact-publication-status">
+          <article><strong>{locale === "zh" ? "团队成员" : "Team Members"}</strong><span>{locale === "zh" ? "成员资料正在完成公开范围确认。" : "Member profiles are undergoing confirmation of their public scope."}</span></article>
+          <article><strong>{locale === "zh" ? "实验平台" : "Laboratory Platform"}</strong><span>{locale === "zh" ? "实验室平台、设备和可公开使用范围仍待团队逐项确认。" : "Laboratory platforms, equipment, and publishable scopes remain subject to item-by-item team confirmation."}</span></article>
         </div>
       </section>
       <section className="cta-panel section-shell">
@@ -378,12 +390,20 @@ export function ResearchPage({ locale }: { locale: Locale }) {
           <p>{locale === "zh" ? "除微藻与大型海藻研究外，团队还开展轮虫、桡足类和枝角类等浮游动物的培养与应用研究，关注微藻饵料、营养调控及水产苗种生物饵料供应。" : "In addition to microalgae and macroalgae, the team studies the culture and application of rotifers, copepods, cladocerans, and other zooplankton used as live feeds in aquaculture."}</p>
           <Link className="text-link" href={localPath(locale, "live-feeds")}>{locale === "zh" ? "进入生物饵料栏目" : "Explore Live Feeds"} <Arrow /></Link>
         </aside>
+        <aside className="live-feeds-crosslink algal-blooms-crosslink">
+          <div>
+            <p className="eyebrow">CROSS-DIRECTION RESEARCH FEATURE</p>
+            <h2>{locale === "zh" ? "近岸藻华与赤潮监测" : "Coastal Algal Blooms and Red-Tide Monitoring"}</h2>
+          </div>
+          <p>{locale === "zh" ? "这是连接近岸观察、浮游植物记录与环境背景的研究专题，不构成第三个研究方向或独立部门。" : "This cross-direction feature connects coastal observation, phytoplankton records, and environmental context; it is not a third research area or a separate department."}</p>
+          <Link className="text-link" href={localPath(locale, "research/algal-blooms")}>{locale === "zh" ? "进入藻华研究专题" : "Open the algal-bloom feature"} <Arrow /></Link>
+        </aside>
       </section>
       <section className="dark-section">
         <div className="section-shell content-section">
-          <SectionHeading eyebrow={locale === "zh" ? "重点主题" : "FOCUS TOPICS"} title={locale === "zh" ? "四个可持续扩展的研究主题" : "Four research topics designed to grow"} />
+          <SectionHeading eyebrow={locale === "zh" ? "重点主题" : "FOCUS TOPICS"} title={locale === "zh" ? "可持续扩展的研究专题" : "Research topics designed to grow"} />
           <div className="topic-grid">
-            {researchTopics.map((topic, index) => <article key={topic.id}><span>{String(index + 1).padStart(2, "0")}</span><h3>{text(topic.title, locale)}</h3><p>{text(topic.summary, locale)}</p></article>)}
+            {researchTopics.map((topic, index) => <article className={topic.route ? "is-linked" : undefined} key={topic.id}><span>{String(index + 1).padStart(2, "0")}</span><h3>{text(topic.title, locale)}</h3><p>{text(topic.summary, locale)}</p>{topic.route ? <Link className="text-link" href={localPath(locale, topic.route)}>{locale === "zh" ? "进入研究专题" : "Open research feature"} <Arrow /></Link> : null}</article>)}
           </div>
         </div>
       </section>
@@ -392,6 +412,8 @@ export function ResearchPage({ locale }: { locale: Locale }) {
 }
 
 export function ResearchDetail({ locale, area }: { locale: Locale; area: ResearchArea }) {
+  const capability = getResearchCapability(area.id);
+
   return (
     <article className="detail-page">
       <div className="detail-hero section-shell">
@@ -413,6 +435,10 @@ export function ResearchDetail({ locale, area }: { locale: Locale; area: Researc
           <h2>{locale === "zh" ? "关注内容" : "Areas of interest"}</h2>
           <ul className="prose-list">{area.bullets.map((item) => <li key={item.en}>{text(item, locale)}</li>)}</ul>
           <div className="notice-box"><strong>{locale === "zh" ? "内容边界" : "Scope note"}</strong><p>{locale === "zh" ? "本页说明团队关注的研究范围，不包含尚未核实的项目、成果、数量或合作案例。" : "This page describes research interests and does not include unverified projects, outputs, quantities, or collaboration cases."}</p></div>
+          {capability ? <ResearchCapabilityPanel locale={locale} capability={capability} /> : null}
+          <div className="compact-publication-status research-output-status">
+            <article><strong>{locale === "zh" ? "代表项目与成果" : "Representative Projects and Outputs"}</strong><span>{locale === "zh" ? "经核实的论文、专利、项目和学生成果将在确认后更新。" : "Verified publications, patents, projects, and student outputs will be updated after confirmation."}</span></article>
+          </div>
         </div>
       </div>
     </article>
@@ -430,7 +456,7 @@ export function OutputsPage({ locale, category }: { locale: Locale; category?: s
           <Link className={activeCategory === "all" ? "is-active" : undefined} href={localPath(locale, "outputs")}>{locale === "zh" ? "全部" : "All"}</Link>
           {outputCategories.map((item) => <Link key={item.id} className={activeCategory === item.id ? "is-active" : undefined} href={`${localPath(locale, "outputs")}?category=${item.id}`}>{text(item.label, locale)}</Link>)}
         </nav>
-        {visibleOutputs.length === 0 ? <EmptyState title={locale === "zh" ? "成果信息待更新" : "Output records pending"} body={locale === "zh" ? "相关成果正在整理与核实，正式信息将在确认后更新。" : "Relevant outputs are being organized and verified. Confirmed information will be added later."} /> : null}
+        {visibleOutputs.length === 0 ? <EmptyState title={locale === "zh" ? "科研成果待确认" : "Research outputs pending confirmation"} body={locale === "zh" ? "经核实的论文、专利、项目和学生成果将在确认后更新。" : "Verified publications, patents, projects, and student outputs will be updated after confirmation."} /> : null}
       </section>
     </>
   );
@@ -488,6 +514,7 @@ export function TutorialDetail({ locale, entry }: { locale: Locale; entry: Tutor
         <aside>
           <div><span>{locale === "zh" ? "用途" : "Purpose"}</span><strong>{text(entry.purpose, locale)}</strong></div>
           <div><span>{locale === "zh" ? "更新状态" : "Updated"}</span><strong>{text(entry.updated, locale)}</strong></div>
+          <ContentReviewPanel locale={locale} review={entry.review} compact />
         </aside>
         <div className="tutorial-section-grid">
           {sections.map((section) => <section key={section.title.en}><h2>{text(section.title, locale)}</h2><PendingItems locale={locale} items={section.items} /></section>)}
@@ -531,7 +558,7 @@ export function AlgaeDetail({ locale, entry }: { locale: Locale; entry: AlgaeEnt
         <figure><img src={entry.image} alt="" /></figure>
       </div>
       <div className="detail-content section-shell">
-        <aside><div><span>{locale === "zh" ? "环境" : "Habitat"}</span><strong>{text(entry.habitat, locale)}</strong></div><div><span>{locale === "zh" ? "关注方向" : "Focus"}</span><strong>{text(entry.focus, locale)}</strong></div><div><span>{locale === "zh" ? "资料状态" : "Status"}</span><strong>{locale === "zh" ? "公众基础条目" : "Public foundation profile"}</strong></div></aside>
+        <aside><div><span>{locale === "zh" ? "环境" : "Habitat"}</span><strong>{text(entry.habitat, locale)}</strong></div><div><span>{locale === "zh" ? "关注方向" : "Focus"}</span><strong>{text(entry.focus, locale)}</strong></div><div><span>{locale === "zh" ? "资料状态" : "Status"}</span><strong>{locale === "zh" ? "公众基础条目" : "Public foundation profile"}</strong></div><ContentReviewPanel locale={locale} review={entry.review} compact /></aside>
         <div className="prose"><p className="lead">{text(entry.summary, locale)}</p><h2>{locale === "zh" ? "如何观察它" : "How to observe it"}</h2><p>{locale === "zh" ? "先记录采样或培养环境，再观察颜色、整体形态和时间变化。可靠的物种确认通常还需要显微特征、规范培养记录，必要时结合分子方法。" : "Begin with sampling or culture context, then record color, overall form, and change over time. Confident identification may also require microscopy, documented cultivation, or molecular methods."}</p><h2>{locale === "zh" ? "为什么值得关注" : "Why it matters"}</h2><p>{locale === "zh" ? `作为${text(entry.categoryLabel, locale)}，${text(entry.name, locale)}为理解${text(entry.focus, locale)}提供了一个具体入口。这里的内容用于科普，不替代实验设计、专业鉴定或产品评价。` : `As a ${text(entry.categoryLabel, locale).toLowerCase()}, ${text(entry.name, locale)} offers an entry point into ${text(entry.focus, locale).toLowerCase()}. This profile does not replace experimental design, expert identification, or product assessment.`}</p><div className="notice-box"><strong>{locale === "zh" ? "阅读提示" : "Reading note"}</strong><p>{locale === "zh" ? "藻类名称和分类会随研究进展而调整；正式研究请核对最新分类学资料。" : "Algal names and classifications evolve with research; formal work should check current taxonomic sources."}</p></div></div>
       </div>
     </article>
@@ -541,9 +568,9 @@ export function AlgaeDetail({ locale, entry }: { locale: Locale; entry: AlgaeEnt
 export function NewsPage({ locale }: { locale: Locale }) {
   return (
     <>
-      <PageHero locale={locale} eyebrow={locale === "zh" ? "动态与联系" : "NEWS & CONTACT"} title={locale === "zh" ? "记录经过确认的团队动态" : "Team news, published after confirmation"} intro={locale === "zh" ? "本页将用于发布经团队确认的研究、教学与交流动态。现有科普观察内容不会作为团队事件呈现。" : "This page will publish team-confirmed research, teaching, and exchange updates. Existing public observation content is not presented as team activity."} />
+      <PageHero locale={locale} eyebrow={locale === "zh" ? "团队动态" : "TEAM NEWS"} title={locale === "zh" ? "记录经过确认的团队动态" : "Team news, published after confirmation"} intro={locale === "zh" ? "本页将用于发布经团队确认的研究、教学与交流动态。现有科普观察内容不会作为团队事件呈现。" : "This page will publish team-confirmed research, teaching, and exchange updates. Existing public observation content is not presented as team activity."} />
       <section className="section-shell content-section">
-        {news.length === 0 ? <EmptyState title={locale === "zh" ? "团队动态正在整理中" : "Team news is being prepared"} body={locale === "zh" ? "团队动态正在整理中。正式内容将在内部确认后更新。" : "Team updates are being prepared and will be published after internal confirmation."} /> : null}
+        {news.length === 0 ? <EmptyState title={locale === "zh" ? "团队动态待审核" : "Team news pending review"} body={locale === "zh" ? "采样、实验、会议和学生科研动态将在完成内容审核后发布。" : "Sampling, experiments, meetings, and student-research updates will be published after content review."} /> : null}
       </section>
       <section className="cta-panel section-shell"><div><p className="eyebrow">CONTACT</p><h2>{locale === "zh" ? "了解联系与合作信息" : "Contact and collaboration information"}</h2></div><p>{locale === "zh" ? "公共邮箱、实验室地址和合作联系方式将在确认后公开。" : "The public email, laboratory address, and collaboration contact will be published after confirmation."}</p><Link className="button dark" href={localPath(locale, "contact")}>{locale === "zh" ? "联系页面" : "Contact page"} <Arrow /></Link></section>
     </>
@@ -574,7 +601,28 @@ export function AboutPage({ locale }: { locale: Locale }) {
 export function ContactPage({ locale }: { locale: Locale }) {
   const rows = locale === "zh" ? [["所属单位", "广东海洋大学"], ["团队公共邮箱", "待补充"], ["实验室地址", "待补充"], ["合作联系", "待补充"]] : [["Institution", "Guangdong Ocean University"], ["Public team email", "To be added"], ["Laboratory address", "To be added"], ["Collaboration contact", "To be added"]];
   return (
-    <section className="contact-page"><div className="section-shell contact-grid"><div><p className="eyebrow light">CONTACT</p><h1>{locale === "zh" ? "与团队建立联系" : "Connect with the team"}</h1><p>{locale === "zh" ? "公共联系信息将在团队确认后发布。当前页面不会展示个人邮箱、未经核实的地址或代替正式确认的联系渠道。" : "Public contact information will be published after team confirmation. This page does not display personal email addresses, unverified locations, or unofficial contact channels."}</p></div><div className="contact-card"><span>{locale === "zh" ? "公开联系信息" : "PUBLIC CONTACT DETAILS"}</span><h2>{locale === "zh" ? "信息状态" : "Information status"}</h2><dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><p>{locale === "zh" ? "以上未公开字段将在完成内部确认后补充。" : "Unpublished fields will be added after internal confirmation."}</p></div></div></section>
+    <>
+      <section className="contact-page">
+        <div className="section-shell contact-grid">
+          <div><p className="eyebrow light">CONTACT</p><h1>{locale === "zh" ? "与团队建立联系" : "Connect with the team"}</h1><p>{locale === "zh" ? "公共联系信息将在团队确认后发布。当前页面不会展示个人邮箱、未经核实的地址或代替正式确认的联系渠道。" : "Public contact information will be published after team confirmation. This page does not display personal email addresses, unverified locations, or unofficial contact channels."}</p><Link className="button ghost" href={localPath(locale, "collaboration")}>{locale === "zh" ? "查看合作方向" : "Explore Collaboration"} <Arrow /></Link></div>
+          <div className="contact-card"><span>{locale === "zh" ? "公开联系信息" : "PUBLIC CONTACT DETAILS"}</span><h2>{locale === "zh" ? "信息状态" : "Information status"}</h2><dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><p>{locale === "zh" ? "以上未公开字段将在完成内部确认后补充。" : "Unpublished fields will be added after internal confirmation."}</p></div>
+        </div>
+      </section>
+      <section className="section-shell content-section contact-preparation">
+        <SectionHeading eyebrow="ENQUIRY PREPARATION" title={locale === "zh" ? "合作咨询建议包含的信息" : "Information to Include in an Initial Enquiry"} intro={locale === "zh" ? "目前不设置在线表单，也不在网站收集或上传资料。请在公共联系渠道确认后，再根据需要准备以下非敏感信息。" : "There is currently no online form, file upload, or website data collection. Once a public contact channel is confirmed, prepare only the non-sensitive information that is relevant."} />
+        <div className="contact-preparation-grid">
+          <ul className="prose-list">
+            {collaborationPreparationItems.map((item) => <li key={item.en}>{text(item, locale)}</li>)}
+          </ul>
+          <aside className="contact-note">
+            <h3>{locale === "zh" ? "回复与审批说明" : "Response and Approval"}</h3>
+            <p>{locale === "zh" ? "团队可在公共渠道和可用时间确认后评估是否适合继续沟通。未收到即时回复不代表拒绝或批准；研究对象、资源、周期、合规与学校管理要求均可能影响后续安排。" : "The team may assess whether further discussion is appropriate after a public channel and availability are confirmed. The absence of an immediate response does not indicate rejection or approval; organisms, resources, schedules, compliance, and university requirements may all affect next steps."}</p>
+            <p>{text(collaborationApprovalNotice, locale)}</p>
+            <Link className="text-link" href={`${localPath(locale, "collaboration")}#prepare`}>{locale === "zh" ? "查看完整合作准备说明" : "View the full preparation guidance"} <Arrow /></Link>
+          </aside>
+        </div>
+      </section>
+    </>
   );
 }
 

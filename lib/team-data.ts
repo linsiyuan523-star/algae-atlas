@@ -1,4 +1,5 @@
 import type { LocalizedText } from "@/lib/site-data";
+import { createContentReview, type ContentReview } from "@/lib/content-review";
 
 export type ResearchArea = {
   id: "microalgae" | "macroalgae";
@@ -13,6 +14,7 @@ export type ResearchTopic = {
   id: string;
   title: LocalizedText;
   summary: LocalizedText;
+  route?: string;
 };
 
 export type TeamMember = {
@@ -46,6 +48,7 @@ export type TutorialEntry = {
   safety: LocalizedText[];
   administration: LocalizedText[];
   updated: LocalizedText;
+  review: ContentReview;
 };
 
 export type BeginnerGuide = {
@@ -140,6 +143,15 @@ export const researchTopics: ResearchTopic[] = [
       en: "Investigating macroalgal resources, potential uses, and relationships with coastal ecosystems.",
     },
   },
+  {
+    id: "coastal-algal-blooms",
+    title: { zh: "近岸藻华与赤潮监测", en: "Coastal Algal Blooms and Red-Tide Monitoring" },
+    summary: {
+      zh: "作为跨方向研究专题，关注近岸观察、样品记录、浮游植物类群与环境背景之间的联系。",
+      en: "A cross-direction research feature connecting coastal observation, sample records, phytoplankton groups, and environmental context.",
+    },
+    route: "research/algal-blooms",
+  },
 ];
 
 export const trainingPrinciples: LocalizedText[] = [
@@ -209,6 +221,7 @@ export const tutorials: TutorialEntry[] = [
   safety: [],
   administration: [],
   updated: pendingReview,
+  review: createContentReview("draft", "2026-07-12"),
 }));
 
 export const beginnerGuides: BeginnerGuide[] = [
