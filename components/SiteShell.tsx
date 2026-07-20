@@ -128,6 +128,14 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
         </div>
         <div className="footer-bottom">
           <span>© 2026 {locale === "zh" ? "广东海洋大学藻类团队" : "Algae Research Team, Guangdong Ocean University"}</span>
+          <a
+            className="icp-link"
+            href="https://beian.miit.gov.cn/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            粤ICP备2026098454号
+          </a>
           <span>{text(site.featureName, locale)}</span>
         </div>
       </footer>
