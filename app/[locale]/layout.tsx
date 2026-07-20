@@ -5,13 +5,13 @@ import { site, type Locale } from "@/lib/site-data";
 export const metadata: Metadata = {
   metadataBase: new URL("https://sycszy.icu"),
   title: {
-    default: "藻境 · Algae Atlas",
-    template: "%s · 藻境",
+    default: "广东海洋大学藻类团队｜微藻、大型海藻与实验教学",
+    template: "%s",
   },
   description: site.description.zh,
-  applicationName: "藻境 Algae Atlas",
-  authors: [{ name: "Algae Atlas" }],
-  creator: "Algae Atlas",
+  applicationName: "广东海洋大学藻类团队",
+  authors: [{ name: "Algae Research Team, Guangdong Ocean University" }],
+  creator: "Algae Research Team, Guangdong Ocean University",
   formatDetection: {
     email: false,
     address: false,
@@ -19,13 +19,13 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "藻境 Algae Atlas",
-    title: "藻境 · Algae Atlas",
+    siteName: "广东海洋大学藻类团队",
+    title: "广东海洋大学藻类团队",
     description: site.description.zh,
   },
   twitter: {
-    card: "summary",
-    title: "藻境 · Algae Atlas",
+    card: "summary_large_image",
+    title: "广东海洋大学藻类团队",
     description: site.description.zh,
   },
 };

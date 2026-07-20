@@ -1,18 +1,16 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import {
-  navigation,
-  otherLocale,
-  site,
-  text,
-  type Locale,
-} from "@/lib/site-data";
+import { navigation, otherLocale, secondaryNavigation, site, text, type Locale } from "@/lib/site-data";
 
 type SiteShellProps = {
   locale: Locale;
   pathParts?: string[];
   children: ReactNode;
 };
+
+function pathFor(locale: Locale, href: string) {
+  return href ? `/${locale}/${href}` : `/${locale}`;
+}
 
 function Logo({ locale }: { locale: Locale }) {
   return (
@@ -24,20 +22,31 @@ function Logo({ locale }: { locale: Locale }) {
       </span>
       <span className="brand-type">
         <strong>{text(site.name, locale)}</strong>
-        <small>ALGAE · ECOLOGY · CULTURE</small>
+        <small>{text(site.institution, locale)}</small>
       </span>
     </Link>
   );
 }
 
-function NavLinks({ locale, active }: { locale: Locale; active?: string }) {
+type NavigationItem = (typeof navigation)[number] | (typeof secondaryNavigation)[number];
+
+function NavLinks({
+  locale,
+  active,
+  items = navigation,
+}: {
+  locale: Locale;
+  active: string;
+  items?: readonly NavigationItem[];
+}) {
   return (
     <>
-      {navigation.map((item) => (
+      {items.map((item) => (
         <Link
-          key={item.href}
-          href={`/${locale}/${item.href}`}
+          key={item.href || "home"}
+          href={pathFor(locale, item.href)}
           className={active === item.href ? "is-active" : undefined}
+          aria-current={active === item.href ? "page" : undefined}
         >
           {text(item.label, locale)}
         </Link>
@@ -47,7 +56,7 @@ function NavLinks({ locale, active }: { locale: Locale; active?: string }) {
 }
 
 export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) {
-  const active = pathParts[0];
+  const active = pathParts[0] ?? "";
   const targetLocale = otherLocale(locale);
   const suffix = pathParts.length ? `/${pathParts.join("/")}` : "";
 
@@ -66,10 +75,6 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
             <Link className="language-switch" href={`/${targetLocale}${suffix}`} lang={targetLocale}>
               {targetLocale === "zh" ? "中文" : "EN"}
             </Link>
-            <Link className="header-cta" href={`/${locale}/contact`}>
-              {locale === "zh" ? "建立联系" : "Connect"}
-              <span aria-hidden="true">↗</span>
-            </Link>
             <details className="mobile-menu">
               <summary aria-label={locale === "zh" ? "打开菜单" : "Open menu"}>
                 <span />
@@ -77,6 +82,8 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
               </summary>
               <nav aria-label={locale === "zh" ? "手机导航" : "Mobile navigation"}>
                 <NavLinks locale={locale} active={active} />
+                <span className="mobile-nav-divider" aria-hidden="true" />
+                <NavLinks locale={locale} active={active} items={secondaryNavigation} />
                 <Link href={`/${targetLocale}${suffix}`} lang={targetLocale}>
                   {targetLocale === "zh" ? "切换至中文" : "Switch to English"}
                 </Link>
@@ -95,25 +102,33 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
             <p>{text(site.description, locale)}</p>
           </div>
           <div className="footer-links">
-            <p className="footer-label">{locale === "zh" ? "探索" : "Explore"}</p>
-            <NavLinks locale={locale} active={active} />
+            <p className="footer-label">{locale === "zh" ? "访问" : "Explore"}</p>
+            <Link href={`/${locale}/team`}>{locale === "zh" ? "团队概况" : "Team"}</Link>
+            <Link href={`/${locale}/research`}>{locale === "zh" ? "研究方向" : "Research"}</Link>
+            <Link href={`/${locale}/live-feeds`}>{locale === "zh" ? "生物饵料" : "Live Feeds"}</Link>
+            <Link href={`/${locale}/collaboration`}>{locale === "zh" ? "合作与交流" : "Collaboration"}</Link>
+            <Link href={`/${locale}/tutorials`}>{locale === "zh" ? "仪器教程" : "Tutorials"}</Link>
+            <Link href={`/${locale}/algae`}>{locale === "zh" ? "藻类图鉴" : "Algae Atlas"}</Link>
           </div>
           <div className="footer-contact">
-            <p className="footer-label">{locale === "zh" ? "预览说明" : "Preview note"}</p>
+            <p className="footer-label">{locale === "zh" ? "网站信息" : "Site information"}</p>
             <p>
               {locale === "zh"
-                ? "当前为内容与视觉预览版，正式联系方式将在发布前补充。"
-                : "This is a content and visual preview. Contact details will be added before launch."}
+                ? "团队资料、研究成果与实验教程正在持续整理和内部核实。"
+                : "Team profiles, research outputs, and laboratory tutorials are being prepared and internally verified."}
             </p>
-            <Link href={`/${locale}/about#image-credits`}>
-              {locale === "zh" ? "查看图片来源" : "Image credits"} →
-            </Link>
+            <div className="footer-inline-links">
+              <Link href={`/${locale}/outputs`}>{locale === "zh" ? "科研成果" : "Outputs"}</Link>
+              <Link href={`/${locale}/news`}>{locale === "zh" ? "团队动态" : "News"}</Link>
+              <Link href={`/${locale}/about#image-credits`}>{locale === "zh" ? "图片来源" : "Credits"}</Link>
+              <Link href={`/${locale}/contact`}>{locale === "zh" ? "联系" : "Contact"}</Link>
+              <Link href={`/${locale}/privacy`}>{locale === "zh" ? "隐私" : "Privacy"}</Link>
+            </div>
           </div>
         </div>
         <div className="footer-bottom">
-          <span>© 2026 {text(site.name, locale)}</span>
-          <Link href={`/${locale}/privacy`}>{locale === "zh" ? "隐私说明" : "Privacy"}</Link>
-          <span>{locale === "zh" ? "为公众理解藻类而设计" : "Designed for public understanding"}</span>
+          <span>© 2026 {locale === "zh" ? "广东海洋大学藻类团队" : "Algae Research Team, Guangdong Ocean University"}</span>
+          <span>{text(site.featureName, locale)}</span>
         </div>
       </footer>
     </>

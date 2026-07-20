@@ -1,3 +1,5 @@
+import { createContentReview, type ContentReview } from "@/lib/content-review";
+
 export type Locale = "zh" | "en";
 
 export type LocalizedText = {
@@ -15,6 +17,7 @@ export type AlgaeEntry = {
   habitat: LocalizedText;
   focus: LocalizedText;
   image: string;
+  review: ContentReview;
 };
 
 export type FeatureEntry = {
@@ -30,22 +33,39 @@ export type ArticleEntry = FeatureEntry & {
   readTime: LocalizedText;
 };
 
+export type ImageCredit = {
+  id: string;
+  file: string;
+  credit: string;
+  license: string;
+  href?: string;
+};
+
 export const site = {
-  name: { zh: "藻境", en: "ALGAE ATLAS" },
-  kicker: { zh: "探索微小生命，理解蓝色星球", en: "SMALL LIFE · PLANETARY IMPACT" },
+  name: { zh: "广东海洋大学藻类团队", en: "Algae Research Team" },
+  institution: { zh: "广东海洋大学", en: "Guangdong Ocean University" },
+  featureName: { zh: "藻境 · Algae Atlas", en: "Algae Atlas" },
+  kicker: { zh: "立足南海 · 探索藻类科学", en: "ALGAE SCIENCE · SOUTH CHINA SEA" },
   description: {
-    zh: "一个面向公众的中英双语藻类科技展示与知识平台。",
-    en: "A bilingual public platform for algae, cultivation technologies, and ecological knowledge.",
+    zh: "聚焦微藻与大型海藻研究、学生科研训练及藻类科学传播。",
+    en: "Research on microalgae, macroalgae, student training, and public communication of algal science.",
   },
 };
 
 export const navigation = [
-  { href: "algae", label: { zh: "藻类图鉴", en: "Algae Library" } },
-  { href: "applications", label: { zh: "技术与应用", en: "Applications" } },
-  { href: "projects", label: { zh: "项目与观察", en: "Field Notes" } },
-  { href: "insights", label: { zh: "知识中心", en: "Insights" } },
-  { href: "about", label: { zh: "关于", en: "About" } },
-  { href: "contact", label: { zh: "联系", en: "Contact" } },
+  { href: "", label: { zh: "首页", en: "Home" } },
+  { href: "team", label: { zh: "团队概况", en: "Team" } },
+  { href: "research", label: { zh: "研究方向", en: "Research" } },
+  { href: "live-feeds", label: { zh: "生物饵料", en: "Live Feeds" } },
+  { href: "collaboration", label: { zh: "合作与联系", en: "Collaboration & Contact" } },
+  { href: "tutorials", label: { zh: "仪器教程", en: "Tutorials" } },
+  { href: "algae", label: { zh: "藻类图鉴", en: "Algae Atlas" } },
+] as const;
+
+export const secondaryNavigation = [
+  { href: "outputs", label: { zh: "科研成果", en: "Outputs" } },
+  { href: "news", label: { zh: "团队动态", en: "Team News" } },
+  { href: "contact", label: { zh: "联系团队", en: "Contact" } },
 ] as const;
 
 export const algae: AlgaeEntry[] = [
@@ -61,7 +81,8 @@ export const algae: AlgaeEntry[] = [
     },
     habitat: { zh: "淡水及潮湿环境", en: "Freshwater and moist environments" },
     focus: { zh: "培养过程 · 光合作用", en: "Cultivation · Photosynthesis" },
-    image: "/images/diatoms.jpg",
+    image: "/images/zhutu.png",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "spirulina",
@@ -76,6 +97,7 @@ export const algae: AlgaeEntry[] = [
     habitat: { zh: "偏碱性湖泊与培养系统", en: "Alkaline lakes and culture systems" },
     focus: { zh: "规模培养 · 光合生物质", en: "Scaled culture · Biomass" },
     image: "/images/cultures.jpg",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "haematococcus-pluvialis",
@@ -90,6 +112,7 @@ export const algae: AlgaeEntry[] = [
     habitat: { zh: "临时性淡水水体", en: "Temporary freshwater habitats" },
     focus: { zh: "色素积累 · 胁迫响应", en: "Pigments · Stress response" },
     image: "/images/cultures.jpg",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "nannochloropsis",
@@ -103,7 +126,8 @@ export const algae: AlgaeEntry[] = [
     },
     habitat: { zh: "海水与半咸水", en: "Marine and brackish waters" },
     focus: { zh: "水产饵料 · 脂质代谢", en: "Aquaculture · Lipid metabolism" },
-    image: "/images/diatoms.jpg",
+    image: "/images/zhutu.png",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "phaeodactylum-tricornutum",
@@ -117,7 +141,8 @@ export const algae: AlgaeEntry[] = [
     },
     habitat: { zh: "近岸海域与培养系统", en: "Coastal waters and culture systems" },
     focus: { zh: "模式生物 · 细胞代谢", en: "Model organism · Metabolism" },
-    image: "/images/diatoms.jpg",
+    image: "/images/zhutu.png",
+    review: createContentReview("draft", "2026-07-12"),
   },
   {
     id: "ulva-lactuca",
@@ -131,7 +156,8 @@ export const algae: AlgaeEntry[] = [
     },
     habitat: { zh: "潮间带与沿海浅水", en: "Intertidal and shallow coastal waters" },
     focus: { zh: "海岸生态 · 大型藻类", en: "Coastal ecology · Macroalgae" },
-    image: "/images/bloom.jpg",
+    image: "/images/tidai.jpg",
+    review: createContentReview("draft", "2026-07-12"),
   },
 ];
 
@@ -144,7 +170,7 @@ export const applications: FeatureEntry[] = [
       en: "Light, temperature, nutrients, gas exchange, and mixing shape culture performance. System design balances control, scale, and maintenance.",
     },
     note: { zh: "从开放水池到封闭式光生物反应器", en: "From open ponds to closed photobioreactors" },
-    image: "/images/photobioreactor.jpg",
+    image: "/images/guandaofanyinqi.jpg",
   },
   {
     id: "water-observation",
@@ -154,7 +180,7 @@ export const applications: FeatureEntry[] = [
       en: "Algal communities respond to environmental change, but color or abundance alone cannot determine water quality without broader monitoring.",
     },
     note: { zh: "观察趋势，而非用单一现象下结论", en: "Read patterns, not single signals" },
-    image: "/images/bloom.jpg",
+    image: "/images/tidai.jpg",
   },
   {
     id: "aquaculture",
@@ -174,7 +200,7 @@ export const applications: FeatureEntry[] = [
       en: "Proteins, lipids, pigments, and polysaccharides open diverse research paths, while products require safety, process, and regulatory review.",
     },
     note: { zh: "从基础成分到负责任的应用评估", en: "From composition to responsible evaluation" },
-    image: "/images/diatoms.jpg",
+    image: "/images/zhutu.png",
   },
 ];
 
@@ -187,7 +213,7 @@ export const projects: FeatureEntry[] = [
       en: "Fixed-point photography and simple environmental notes reveal seasonal patterns in an urban pond over time.",
     },
     note: { zh: "示例观察案例 · 非商业项目", en: "Sample field note · Not a commercial project" },
-    image: "/images/bloom.jpg",
+    image: "/images/tidai.jpg",
   },
   {
     id: "light-and-color",
@@ -207,7 +233,7 @@ export const projects: FeatureEntry[] = [
       en: "Tides, substrate, seaweed form, and nearby organisms help reveal relationships within intertidal habitats.",
     },
     note: { zh: "现场识别只是物种确认的起点", en: "Field identification is a starting point" },
-    image: "/images/bloom.jpg",
+    image: "/images/tidai.jpg",
   },
 ];
 
@@ -220,7 +246,7 @@ export const articles: ArticleEntry[] = [
       en: "Algae are not a single biological lineage, but a broad term for many photosynthetic organisms living in water or moist environments.",
     },
     note: { zh: "基础概念", en: "Foundations" },
-    image: "/images/diatoms.jpg",
+    image: "/images/zhutu.png",
     date: "2026-07-10",
     readTime: { zh: "4 分钟阅读", en: "4 min read" },
   },
@@ -232,7 +258,7 @@ export const articles: ArticleEntry[] = [
       en: "Suspended algae can affect water color, but light, sediment, dissolved material, and viewing angle matter too.",
     },
     note: { zh: "水环境观察", en: "Water observation" },
-    image: "/images/bloom.jpg",
+    image: "/images/tidai.jpg",
     date: "2026-07-08",
     readTime: { zh: "5 分钟阅读", en: "5 min read" },
   },
@@ -244,36 +270,37 @@ export const articles: ArticleEntry[] = [
       en: "A transparent cultivation space brings light, gases, and culture medium together under controlled conditions, with practical tradeoffs.",
     },
     note: { zh: "培养系统", en: "Cultivation systems" },
-    image: "/images/photobioreactor.jpg",
+    image: "/images/guandaofanyinqi.jpg",
     date: "2026-07-03",
     readTime: { zh: "6 分钟阅读", en: "6 min read" },
   },
 ];
 
-export const imageCredits = [
+export const imageCredits: ImageCredit[] = [
   {
-    file: "Diatoms through the microscope",
-    credit: "Prof. Gordon T. Taylor / NOAA Corps Collection",
-    license: "Public Domain",
-    href: "https://commons.wikimedia.org/wiki/File:Diatoms_through_the_microscope.jpg",
+    id: "zhutu",
+    file: "藻类显微主题主图 / Algae microscopy feature image",
+    credit: "用户提供 / Provided by the site owner",
+    license: "使用范围待确认 / Usage scope pending confirmation",
   },
   {
-    file: "NREL algae photobioreactor",
-    credit: "U.S. Department of Energy",
-    license: "Public Domain",
-    href: "https://commons.wikimedia.org/wiki/File:U.S._Department_of_Energy_-_Science_-_298_042_003_%289525866984%29.jpg",
+    id: "guandaofanyinqi",
+    file: "管道式反应器 / Tubular photobioreactor",
+    credit: "用户提供 / Provided by the site owner",
+    license: "使用范围待确认 / Usage scope pending confirmation",
   },
   {
+    id: "cultures",
     file: "Microalgal cultures",
     credit: "Tony Rees / CSIRO",
     license: "CC BY 3.0 · cropped for presentation",
     href: "https://commons.wikimedia.org/wiki/File:CSIRO_ScienceImage_7234_microalgal_cultures.jpg",
   },
   {
-    file: "Bloom in the Norwegian Sea",
-    credit: "MODIS Rapid Response Team / NASA GSFC",
-    license: "Public Domain",
-    href: "https://commons.wikimedia.org/wiki/File:Bloom_in_the_Norwegian_Sea.jpg",
+    id: "tidai",
+    file: "校园猫替代图片 / Campus cat replacement image",
+    credit: "用户提供 / Provided by the site owner",
+    license: "使用范围待确认 / Usage scope pending confirmation",
   },
 ];
 

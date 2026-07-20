@@ -20,6 +20,7 @@
 
 # misc
 .DS_Store
+.Rhistory
 *.pem
 
 # debug
