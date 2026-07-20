@@ -29,6 +29,7 @@ pnpm-debug.log*
 *.backup
 *.old
 .codex-*.log
+.codex-*.pid
 
 # Local environment values; keep the documented template
 .env
