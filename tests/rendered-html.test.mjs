@@ -41,6 +41,10 @@ function footerMarkup(markup) {
   return match[1];
 }
 
+function visibleMarkup(markup) {
+  return markup.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+}
+
 function assertNavigationLink(markup, navigationLabel, href, linkText) {
   const navigation = navigationMarkup(markup, navigationLabel);
   assert.match(navigation, new RegExp(`href="${escapeRegExp(href)}"`, "i"));
@@ -122,9 +126,9 @@ test("shows the verified ICP filing once in the global bilingual footer", async 
   for (const [index, markup] of pages.entries()) {
     const footer = footerMarkup(markup);
     assert.equal(
-      (markup.match(new RegExp(filing, "g")) ?? []).length,
+      (visibleMarkup(markup).match(new RegExp(filing, "g")) ?? []).length,
       1,
-      `${paths[index]} should show exactly one ICP filing`,
+      `${paths[index]} should visibly show exactly one ICP filing`,
     );
     assert.match(
       footer,
