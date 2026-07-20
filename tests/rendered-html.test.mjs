@@ -35,6 +35,16 @@ function navigationMarkup(markup, navigationLabel) {
   return match[1];
 }
 
+function footerMarkup(markup) {
+  const match = markup.match(/<footer\b[^>]*class="site-footer"[^>]*>([\s\S]*?)<\/footer>/i);
+  assert.ok(match, "global site footer should be rendered");
+  return match[1];
+}
+
+function visibleMarkup(markup) {
+  return markup.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+}
+
 function assertNavigationLink(markup, navigationLabel, href, linkText) {
   const navigation = navigationMarkup(markup, navigationLabel);
   assert.match(navigation, new RegExp(`href="${escapeRegExp(href)}"`, "i"));
@@ -99,6 +109,44 @@ test("renders localized home pages with exact team positioning and SEO", async (
   assert.match(en, /<title>Algae Research Team \| Guangdong Ocean University<\/title>/);
   assert.match(en, /Research on microalgae, macroalgae, algal biotechnology, aquaculture applications, and undergraduate laboratory training at Guangdong Ocean University\./);
   assert.match(en, /href="\/zh"/);
+});
+
+test("shows the verified ICP filing once in the global bilingual footer", async () => {
+  const filing = "粤ICP备2026098454号";
+  const paths = [
+    "/zh",
+    "/en",
+    "/zh/research",
+    "/en/research",
+    "/zh/algae/chlorella-vulgaris",
+    "/en/algae/chlorella-vulgaris",
+  ];
+  const pages = await Promise.all(paths.map(html));
+
+  for (const [index, markup] of pages.entries()) {
+    const footer = footerMarkup(markup);
+    assert.equal(
+      (visibleMarkup(markup).match(new RegExp(filing, "g")) ?? []).length,
+      1,
+      `${paths[index]} should visibly show exactly one ICP filing`,
+    );
+    assert.match(
+      footer,
+      new RegExp(
+        `<a\\b(?=[^>]*\\bhref="https://beian\\.miit\\.gov\\.cn/")[^>]*>\\s*${escapeRegExp(filing)}\\s*<\\/a>`,
+        "i",
+      ),
+    );
+    assertHtmlTag(footer, "a", {
+      href: "https://beian.miit.gov.cn/",
+      target: "_blank",
+      rel: "noopener noreferrer",
+    });
+    assert.doesNotMatch(footer, /公网安备|公安备案/);
+  }
+
+  const shellSource = await readFile(new URL("../components/SiteShell.tsx", import.meta.url), "utf8");
+  assert.equal((shellSource.match(new RegExp(filing, "g")) ?? []).length, 1);
 });
 
 test("renders the team, research, outputs, tutorial, news, about, and contact routes", async () => {
