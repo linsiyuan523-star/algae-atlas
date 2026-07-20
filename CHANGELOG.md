@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-20
+
 ### Added
 
 - Added the verified ICP filing number to the global site footer.
@@ -35,5 +37,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - Added team, research, live-feeds, collaboration, coastal algal-bloom, tutorial, Algae Atlas and public information routes.
 - Added unified content-review metadata and rendered regression tests.
 
-[Unreleased]: https://github.com/linsiyuan523-star/algae-atlas/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/linsiyuan523-star/algae-atlas/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/linsiyuan523-star/algae-atlas/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/linsiyuan523-star/algae-atlas/releases/tag/v1.0.0
