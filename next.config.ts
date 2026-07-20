@@ -5,6 +5,14 @@ const nextConfig: NextConfig = {
     tsconfigPath: "./tsconfig.next.json",
   },
   poweredByHeader: false,
+  async rewrites() {
+    return [
+      {
+        source: "/:indexNowKey([A-Za-z0-9-]{8,128}).txt",
+        destination: "/indexnow-key/:indexNowKey",
+      },
+    ];
+  },
   async headers() {
     return [
       {

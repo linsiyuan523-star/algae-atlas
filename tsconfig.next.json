@@ -11,6 +11,7 @@
     "components/**/*.ts",
     "components/**/*.tsx",
     "lib/**/*.ts",
+    "scripts/**/*.ts",
     ".next/types/**/*.ts"
   ],
   "exclude": [
