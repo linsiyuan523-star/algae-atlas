@@ -2,6 +2,9 @@
   "name": "algae-atlas",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "engines": {
     "node": ">=22.13.0"
   },
@@ -12,7 +15,8 @@
     "dev:next": "next dev",
     "build:next": "next build",
     "indexnow": "tsx scripts/submit-indexnow.ts",
-    "check": "tsc --noEmit -p tsconfig.next.json && eslint app components lib scripts tests/indexnow.test.ts",
+    "check": "npm run check:schema && tsc --noEmit -p tsconfig.next.json && eslint app components lib packages scripts tests/indexnow.test.ts",
+    "check:schema": "tsc --noEmit -p packages/content-schema/tsconfig.json",
     "test": "npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/indexnow.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

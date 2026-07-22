@@ -1,0 +1,4 @@
+/packages/content-schema/** text eol=lf
+/scripts/validate-content.ts text eol=lf
+/package*.json text eol=lf
+/.gitattributes text eol=lf
