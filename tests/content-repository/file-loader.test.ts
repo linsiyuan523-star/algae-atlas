@@ -93,9 +93,22 @@ test("文件读取器构建共享快照并按类型、语言、日期和标签�
 
 test("正式 content 目录存在但不发布测试 fixture", async () => {
   const loaded = await loadContentRepository(repositoryRoot);
-  assert.equal(loaded.records.length, 0);
+  assert.equal(loaded.records.length, 3);
   assert.equal(loaded.authors.length, 0);
   assert.equal(loaded.media.length, 0);
+  assert.ok(
+    loaded.records.every(
+      (record) =>
+        record.locales.zh.state === "draft" &&
+        record.locales.en.state === "draft",
+    ),
+  );
+  const repository = createPublicContentRepository({
+    selection: createCollectionSourceSelection("records"),
+    recordSource: createRecordContentSource(loaded),
+  });
+  assert.equal(repository.list("science-article", "zh").length, 0);
+  assert.equal(repository.list("science-article", "en").length, 0);
 });
 
 test("英文 missing 时出现 en.md 会失败且不回退", async () => {

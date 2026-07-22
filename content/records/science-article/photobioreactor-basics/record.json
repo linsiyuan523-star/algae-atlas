@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "photobioreactor-basics",
+  "type": "science-article",
+  "createdAt": "2026-07-22T14:09:28.415Z",
+  "updatedAt": "2026-07-22T14:09:28.415Z",
+  "authors": [],
+  "tags": [],
+  "media": [],
+  "shared": {
+    "articleKind": "method-explainer",
+    "publicationDate": "2026-07-03",
+    "targetAudience": "general",
+    "readingTimeMinutes": 6,
+    "references": [],
+    "relatedContentIds": []
+  },
+  "locales": {
+    "zh": {
+      "state": "draft",
+      "title": "光生物反应器如何工作？",
+      "summary": "透明培养空间让光、气体与培养液以较可控的方式接触微藻，同时也带来光分布、温度与清洁等挑战。",
+      "bodyFile": "zh.md",
+      "fields": {
+        "topic": "培养系统",
+        "targetAudienceLabel": "公众读者",
+        "categoryLabel": "培养系统",
+        "takeaways": []
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "draft",
+        "updatedAt": "2026-07-22",
+        "version": "0.1",
+        "reviewerIds": [],
+        "references": []
+      }
+    },
+    "en": {
+      "state": "draft",
+      "title": "How Does a Photobioreactor Work?",
+      "summary": "A transparent cultivation space brings light, gases, and culture medium together under controlled conditions, with practical tradeoffs.",
+      "bodyFile": "en.md",
+      "fields": {
+        "topic": "Cultivation systems",
+        "targetAudienceLabel": "General readers",
+        "categoryLabel": "Cultivation systems",
+        "takeaways": []
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "draft",
+        "updatedAt": "2026-07-22",
+        "version": "0.1",
+        "reviewerIds": [],
+        "references": []
+      }
+    }
+  },
+  "legacy": {
+    "sourcePath": "lib/site-data.ts",
+    "exportName": "articles",
+    "sourceId": "photobioreactor-basics",
+    "migratedAt": "2026-07-22T14:09:28.415Z"
+  }
+}

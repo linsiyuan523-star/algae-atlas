@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "contentSchemaVersion": 1,
+  "repositoryApiVersion": 1,
+  "migrationLedgerVersion": 1,
+  "collections": {
+    "science-article": {
+      "source": "legacy",
+      "legacyFiles": [
+        "lib/site-data.ts"
+      ],
+      "legacyExports": [
+        "articles",
+        "projects"
+      ],
+      "sourceRecordCount": 6,
+      "candidateRecordCount": 3,
+      "candidateIds": [
+        "photobioreactor-basics",
+        "what-are-algae",
+        "why-water-turns-green"
+      ],
+      "parityStatus": "blocked-review",
+      "sourceSwitchAllowed": false,
+      "blockers": [
+        "AUTHOR_CONFIRMATION_REQUIRED",
+        "AUTHOR_MISSING",
+        "BODY_COMPLETENESS_REVIEW_REQUIRED",
+        "IMAGE_USAGE_SCOPE_PENDING",
+        "MANUAL_CLASSIFICATION_REQUIRED",
+        "PUBLICATION_REVIEW_REQUIRED",
+        "REVIEWER_MISSING",
+        "TARGET_AUDIENCE_DERIVED",
+        "TRANSLATION_PROVENANCE_UNVERIFIED"
+      ],
+      "lastVerifiedCommit": null
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "why-water-turns-green",
+  "type": "science-article",
+  "createdAt": "2026-07-22T14:09:28.415Z",
+  "updatedAt": "2026-07-22T14:09:28.415Z",
+  "authors": [],
+  "tags": [],
+  "media": [],
+  "shared": {
+    "articleKind": "observation-guide",
+    "publicationDate": "2026-07-08",
+    "targetAudience": "general",
+    "readingTimeMinutes": 5,
+    "references": [],
+    "relatedContentIds": []
+  },
+  "locales": {
+    "zh": {
+      "state": "draft",
+      "title": "水为什么会变绿？",
+      "summary": "悬浮藻类可能影响水色，但光线、泥沙、溶解物质和观察角度同样重要，不能只凭颜色下结论。",
+      "bodyFile": "zh.md",
+      "fields": {
+        "topic": "水环境观察",
+        "targetAudienceLabel": "公众读者",
+        "categoryLabel": "水环境观察",
+        "takeaways": []
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "draft",
+        "updatedAt": "2026-07-22",
+        "version": "0.1",
+        "reviewerIds": [],
+        "references": []
+      }
+    },
+    "en": {
+      "state": "draft",
+      "title": "Why Does Water Turn Green?",
+      "summary": "Suspended algae can affect water color, but light, sediment, dissolved material, and viewing angle matter too.",
+      "bodyFile": "en.md",
+      "fields": {
+        "topic": "Water observation",
+        "targetAudienceLabel": "General readers",
+        "categoryLabel": "Water observation",
+        "takeaways": []
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "draft",
+        "updatedAt": "2026-07-22",
+        "version": "0.1",
+        "reviewerIds": [],
+        "references": []
+      }
+    }
+  },
+  "legacy": {
+    "sourcePath": "lib/site-data.ts",
+    "exportName": "articles",
+    "sourceId": "why-water-turns-green",
+    "migratedAt": "2026-07-22T14:09:28.415Z"
+  }
+}
