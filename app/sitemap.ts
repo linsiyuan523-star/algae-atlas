@@ -1,31 +1,19 @@
 import type { MetadataRoute } from "next";
-import { algae, articles, projects } from "@/lib/site-data";
-import { liveFeedEntries } from "@/lib/live-feeds-data";
-import { researchAreas, tutorials } from "@/lib/team-data";
+import { websiteContentRepository } from "@/lib/content-repository/default-repository";
+import { contentSitemapRoutes } from "@/lib/content-repository/routes";
 
 const baseUrl = "https://sycszy.icu";
 const locales = ["zh", "en"] as const;
 const sections = ["team", "research", "live-feeds", "collaboration", "outputs", "tutorials", "algae", "news", "about", "contact", "privacy", "insights"];
+const legacyLastModified = new Date("2026-07-12");
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const paths = [
-    "",
-    ...sections,
-    ...researchAreas.map((item) => `research/${item.id}`),
-    "research/algal-blooms",
-    ...liveFeedEntries.map((item) => `live-feeds/${item.id}`),
-    ...tutorials.map((item) => `tutorials/${item.id}`),
-    ...algae.map((item) => `algae/${item.id}`),
-    ...articles.map((item) => `insights/${item.id}`),
-    ...projects.map((item) => `insights/${item.id}`),
-  ];
-
-  return locales.flatMap((locale) =>
-    paths.map((path) => ({
+  const sectionEntries: MetadataRoute.Sitemap = locales.flatMap((locale) =>
+    ["", ...sections].map((path) => ({
       url: `${baseUrl}/${locale}${path ? `/${path}` : ""}`,
-      lastModified: new Date("2026-07-12"),
+      lastModified: legacyLastModified,
       changeFrequency: path === "" ? "weekly" : "monthly",
-      priority: path === "" ? 1 : path.includes("/") ? 0.65 : 0.8,
+      priority: path === "" ? 1 : 0.8,
       alternates: {
         languages: {
           "zh-CN": `${baseUrl}/zh${path ? `/${path}` : ""}`,
@@ -35,4 +23,23 @@ export default function sitemap(): MetadataRoute.Sitemap {
       },
     })),
   );
+  const detailEntries: MetadataRoute.Sitemap = contentSitemapRoutes(
+    websiteContentRepository,
+  ).map((route) => ({
+    url: `${baseUrl}/${route.path}`,
+    lastModified:
+      route.source === "legacy" ? legacyLastModified : new Date(route.updatedAt),
+    changeFrequency: "monthly",
+    priority: 0.65,
+    alternates: {
+      languages: Object.fromEntries(
+        Object.entries(route.alternates).map(([key, path]) => [
+          key,
+          `${baseUrl}${path}`,
+        ]),
+      ),
+    },
+  }));
+
+  return [...sectionEntries, ...detailEntries];
 }

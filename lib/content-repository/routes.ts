@@ -43,6 +43,7 @@ export type ContentSitemapRoute = {
   locale: Locale;
   path: string;
   alternates: Record<string, string>;
+  source: PublicRecord["source"];
   updatedAt: string;
 };
 
@@ -170,6 +171,7 @@ export function contentSitemapRoutes(
           locale,
           path: `${locale}${route.suffix}`,
           alternates: alternates.languages,
+          source: record.source,
           updatedAt: record.content.updatedAt,
         },
       ];
