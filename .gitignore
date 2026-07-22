@@ -17,6 +17,7 @@
 /coverage/
 /outputs/
 /work/
+/packages/content-schema/.browser-contract/
 
 # Logs and temporary files
 *.log

@@ -18,7 +18,9 @@
     "check": "npm run check:schema && tsc --noEmit -p tsconfig.next.json && eslint app components lib packages scripts tests/indexnow.test.ts",
     "check:schema": "tsc --noEmit -p packages/content-schema/tsconfig.json",
     "content:validate": "tsx scripts/validate-content.ts",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/indexnow.test.ts",
+    "test": "npm run test:schema && npm run test:schema:browser && npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/indexnow.test.ts",
+    "test:schema": "tsx --test packages/content-schema/tests/*.test.ts",
+    "test:schema:browser": "vite build --config packages/content-schema/vite.browser-contract.config.ts && node packages/content-schema/.browser-contract/content-schema-browser-contract.js",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
