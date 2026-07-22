@@ -17,6 +17,7 @@
     "indexnow": "tsx scripts/submit-indexnow.ts",
     "check": "npm run check:schema && tsc --noEmit -p tsconfig.next.json && eslint app components lib packages scripts tests/indexnow.test.ts",
     "check:schema": "tsc --noEmit -p packages/content-schema/tsconfig.json",
+    "content:validate": "tsx scripts/validate-content.ts",
     "test": "npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/indexnow.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

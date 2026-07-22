@@ -95,6 +95,15 @@ export const sourceSchema = z.strictObject({
   ...referenceSchema.shape,
   verificationStatus: z.enum(["pending", "verified", "rejected"]),
   verifiedAt: isoDateSchema.optional(),
+}).superRefine((source, context) => {
+  if (source.verificationStatus === "verified" && !source.verifiedAt) {
+    context.addIssue({
+      code: "custom",
+      path: ["verifiedAt"],
+      message: "已核验来源必须记录核验日期",
+      params: { issueCode: "SOURCE_VERIFIED_AT_REQUIRED" },
+    });
+  }
 });
 
 export const licenseSchema = z.strictObject({
@@ -138,30 +147,54 @@ export const reviewSchema = z
         params: { issueCode: "REVIEWER_REQUIRED" },
       });
     }
+
+    if (review.reviewedAt && review.reviewedAt < review.updatedAt) {
+      context.addIssue({
+        code: "custom",
+        path: ["reviewedAt"],
+        message: "审核日期不能早于本版本更新时间",
+        params: { issueCode: "REVIEW_DATE_ORDER_INVALID" },
+      });
+    }
   });
 
-export const authorSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  id: stableIdSchema,
-  kind: z.enum(AUTHOR_KINDS),
-  status: z.enum(AUTHOR_STATUSES),
-  displayName: localizedTextSchema,
-  role: localizedTextSchema.optional(),
-  publicLinks: z
-    .array(
-      z.strictObject({
-        label: z.string().trim().min(1, "链接名称不能为空"),
-        href: httpsUrlSchema,
-      }),
-    )
-    .default([]),
-  publicScope: z.enum(PUBLIC_SCOPES),
-  consentReference: z
-    .string()
-    .trim()
-    .min(1, "授权引用不能为空")
-    .optional(),
-});
+export const authorSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    id: stableIdSchema,
+    kind: z.enum(AUTHOR_KINDS),
+    status: z.enum(AUTHOR_STATUSES),
+    displayName: localizedTextSchema,
+    role: localizedTextSchema.optional(),
+    publicLinks: z
+      .array(
+        z.strictObject({
+          label: z.string().trim().min(1, "链接名称不能为空"),
+          href: httpsUrlSchema,
+        }),
+      )
+      .default([]),
+    publicScope: z.enum(PUBLIC_SCOPES),
+    consentReference: z
+      .string()
+      .trim()
+      .min(1, "授权引用不能为空")
+      .optional(),
+  })
+  .superRefine((author, context) => {
+    if (
+      author.kind === "person" &&
+      author.publicScope === "approved" &&
+      !author.consentReference
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["consentReference"],
+        message: "公开人物作者必须记录非敏感授权引用",
+        params: { issueCode: "AUTHOR_CONSENT_REFERENCE_REQUIRED" },
+      });
+    }
+  });
 
 export const mediaSchema = z
   .strictObject({
@@ -172,7 +205,20 @@ export const mediaSchema = z
       .regex(
         /^public\/images\/(?:uploads\/\d{4}\/\d{2}\/)?[a-zA-Z0-9._/-]+$/,
         "图片路径必须是 public/images 下的仓库相对路径",
-      ),
+      )
+      .refine((filePath) => {
+        const parts = filePath.split("/");
+        const reserved = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+        return parts.every(
+          (part) =>
+            part.length > 0 &&
+            part !== "." &&
+            part !== ".." &&
+            !part.endsWith(".") &&
+            !part.endsWith(" ") &&
+            !reserved.test(part),
+        );
+      }, "图片路径包含不安全的 Windows 路径片段"),
     sha256: z.string().regex(SHA256_PATTERN, "SHA-256 必须是 64 位小写十六进制"),
     mimeType: z.enum(MEDIA_MIME_TYPES),
     bytes: z.number().int().positive("图片字节数必须大于 0"),
@@ -203,21 +249,20 @@ export const mediaSchema = z
     legacy: z.boolean().default(false),
   })
   .superRefine((media, context) => {
-    if (media.identifiablePeople && media.consentState !== "confirmed") {
+    const extension = media.filePath.split(".").pop()?.toLowerCase();
+    const expectedMime = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      avif: "image/avif",
+    }[extension ?? ""];
+    if (!expectedMime || expectedMime !== media.mimeType) {
       context.addIssue({
         code: "custom",
-        path: ["consentState"],
-        message: "包含可识别人物的图片必须确认公开授权",
-        params: { issueCode: "MEDIA_CONSENT_REQUIRED" },
-      });
-    }
-
-    if (media.identifiablePeople && !media.consentReference) {
-      context.addIssue({
-        code: "custom",
-        path: ["consentReference"],
-        message: "包含可识别人物的图片必须记录非敏感授权引用",
-        params: { issueCode: "MEDIA_CONSENT_REFERENCE_REQUIRED" },
+        path: ["mimeType"],
+        message: "图片扩展名与 MIME 类型不一致",
+        params: { issueCode: "MEDIA_MIME_EXTENSION_MISMATCH" },
       });
     }
 
