@@ -9,5 +9,10 @@
 /.gitignore text eol=lf
 /eslint.config.mjs text eol=lf
 /docs/content-workbench/** text eol=lf
+/docs/superpowers/** text eol=lf
 /delivery/** text eol=lf
+/scripts/content-migration/** text eol=lf
+/scripts/migrate-content.ts text eol=lf
+/tests/content-migration/** text eol=lf
+/tsconfig.content-migration.json text eol=lf
 /.gitattributes text eol=lf
