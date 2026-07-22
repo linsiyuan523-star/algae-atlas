@@ -103,15 +103,22 @@ export function zodIssuesToValidationIssues(
       ? input.id
       : undefined;
 
-  return issues.map((issue) => ({
-    code: issueCode(issue),
-    severity: "error",
-    ...(recordId ? { recordId } : {}),
-    ...(issueLocale(issue.path) ? { locale: issueLocale(issue.path) } : {}),
-    path: formatPath(issue.path),
-    message: structuralMessage(issue),
-    remedy: remedyFor(issue),
-  }));
+  return issues.flatMap((issue) => {
+    const paths =
+      issue.code === "unrecognized_keys"
+        ? issue.keys.map((key) => [...issue.path, key])
+        : [issue.path];
+
+    return paths.map((path) => ({
+      code: issueCode(issue),
+      severity: "error" as const,
+      ...(recordId ? { recordId } : {}),
+      ...(issueLocale(path) ? { locale: issueLocale(path) } : {}),
+      path: formatPath(path),
+      message: structuralMessage(issue),
+      remedy: remedyFor(issue),
+    }));
+  });
 }
 
 function parseWithSchema<T>(schema: z.ZodType<T>, input: unknown): ParseResult<T> {

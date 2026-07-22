@@ -6,6 +6,7 @@ import { validMarkdownFixture } from "../fixtures/index";
 
 test("安全 Markdown profile 通过", () => {
   assert.deepEqual(validateMarkdown(validMarkdownFixture), []);
+  assert.deepEqual(validateMarkdown("## Data\n\nData: collected offline."), []);
 });
 
 const unsafeMarkdownCases: Array<[string, string, string]> = [

@@ -108,6 +108,20 @@ test("英文 missing 时存在 en.md 被拒绝", () => {
   assert.ok(issues.some((issue) => issue.code === "UNEXPECTED_ENGLISH_BODY"));
 });
 
+test("审核人和机器翻译人工复核人必须解析到公开作者", () => {
+  const record = structuredClone(validRecordFixtures["science-article"]);
+  const locales = record.locales as Record<string, Record<string, unknown>>;
+  const zh = locales.zh;
+  const review = zh.review as Record<string, unknown>;
+  review.reviewerIds = ["missing-fictional-reviewer"];
+  const snapshot = structuredClone(validRepositorySnapshotFixture);
+  snapshot.records = [record];
+  const issues = validateRepository(snapshot);
+  assert.ok(
+    issues.some((issue) => issue.code === "REVIEWER_REFERENCE_MISSING"),
+  );
+});
+
 test("图片权利或人物授权未完成会阻止发布", () => {
   const recordInput = structuredClone(validRecordFixtures["science-article"]);
   recordInput.media = [fixtureMedia.id];

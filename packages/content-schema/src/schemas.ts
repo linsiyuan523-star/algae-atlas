@@ -817,6 +817,14 @@ export const contentRecordSchema = baseContentRecordSchema.superRefine(
             "近岸观测发布前必须完成公开范围审核",
           );
         }
+        if (!sourcesAreVerified(record.shared.dataSources)) {
+          addRecordIssue(
+            context,
+            ["shared", "dataSources"],
+            "OBSERVATION_SOURCE_REQUIRED",
+            "近岸观测发布前必须有已核验数据来源",
+          );
+        }
         break;
       case "team-member":
         if (

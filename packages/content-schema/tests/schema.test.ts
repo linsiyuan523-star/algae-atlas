@@ -111,7 +111,12 @@ test("未知字段、无效 ID 与错误时间顺序失败", () => {
     assert.fail("无效输入不应通过");
   }
   assert.ok(result.issues.some((issue) => issue.path === "id"));
-  assert.ok(result.issues.some((issue) => issue.code === "SCHEMA_UNKNOWN_FIELD"));
+  assert.ok(
+    result.issues.some(
+      (issue) =>
+        issue.code === "SCHEMA_UNKNOWN_FIELD" && issue.path === "unregistered",
+    ),
+  );
 });
 
 test("作者和图片模型使用受控授权状态", () => {

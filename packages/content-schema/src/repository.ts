@@ -115,6 +115,17 @@ function referencedIds(
   return unique(fromRules);
 }
 
+function localeReviewerIds(record: ContentRecord, locale: Locale): string[] {
+  const localized = record.locales[locale];
+  if (localized.state === "missing") {
+    return [];
+  }
+  return unique([
+    ...localized.review.reviewerIds,
+    ...(localized.humanVerifiedBy ? [localized.humanVerifiedBy] : []),
+  ]);
+}
+
 function publishedLocale(record: ContentRecord, locale: Locale) {
   const localized = record.locales[locale];
   return localized.state === "published" ? localized : undefined;
@@ -154,7 +165,10 @@ export function publicationEligibility(
     return { eligible: false, issues };
   }
 
-  for (const authorId of referencedIds(record, "author")) {
+  for (const authorId of unique([
+    ...referencedIds(record, "author"),
+    ...localeReviewerIds(record, locale),
+  ])) {
     const author = resolvedRefs.authors[authorId];
     if (!author) {
       issues.push(
@@ -468,6 +482,22 @@ export function validateRepository(
               ),
             );
           }
+        }
+      }
+    }
+
+    for (const locale of ["zh", "en"] as const) {
+      for (const reviewerId of localeReviewerIds(record, locale)) {
+        if (!authorIndex[reviewerId]) {
+          issues.push(
+            validationIssue(
+              "REVIEWER_REFERENCE_MISSING",
+              `locales.${locale}.review.reviewerIds`,
+              `找不到审核人 ${reviewerId}`,
+              "使用已批准的公开作者 ID 记录审核人或人工复核人。",
+              { recordId: record.id, locale },
+            ),
+          );
         }
       }
     }

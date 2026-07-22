@@ -22,6 +22,11 @@ const SET_LIKE_ARRAY_KEYS = new Set([
   "publicSampleIds",
   "taxonomicObservationIds",
 ]);
+const SORTED_MAP_KEYS = new Set(["captions"]);
+
+function compareCodePoints(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 export class ContentSerializationError extends Error {
   readonly issues;
@@ -41,16 +46,18 @@ function canonicalize(value: unknown, key?: string): unknown {
       SET_LIKE_ARRAY_KEYS.has(key) &&
       normalized.every((item) => typeof item === "string")
     ) {
-      return [...(normalized as string[])].sort((left, right) =>
-        left.localeCompare(right, "en"),
-      );
+      return [...(normalized as string[])].sort(compareCodePoints);
     }
     return normalized;
   }
 
   if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (key && SORTED_MAP_KEYS.has(key)) {
+      entries.sort(([left], [right]) => compareCodePoints(left, right));
+    }
     return Object.fromEntries(
-      Object.entries(value).map(([childKey, childValue]) => [
+      entries.map(([childKey, childValue]) => [
         childKey,
         canonicalize(childValue, childKey),
       ]),

@@ -109,24 +109,22 @@ export function validateMarkdown(
     );
   }
 
-  const dangerousText = decodeProtocolText(markdown);
-  if (
-    dangerousText.includes("javascript:") ||
-    dangerousText.includes("data:") ||
-    dangerousText.includes("file:") ||
-    dangerousText.includes("vbscript:")
-  ) {
-    add(
-      "MARKDOWN_UNSAFE_URL",
-      "Markdown 包含不安全的 URL 协议",
-      "外部链接仅使用 HTTPS；图片使用 media:稳定ID。",
-    );
-  }
-
   const linkPattern = /(!?)\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
   for (const match of markdown.matchAll(linkPattern)) {
     const isImage = match[1] === "!";
     const destination = match[2];
+    const normalizedDestination = decodeProtocolText(destination);
+    const unsafeScheme = ["javascript:", "data:", "file:", "vbscript:"].some(
+      (scheme) => normalizedDestination.startsWith(scheme),
+    );
+    if (unsafeScheme) {
+      add(
+        "MARKDOWN_UNSAFE_URL",
+        "Markdown 包含不安全的 URL 协议",
+        "外部链接仅使用 HTTPS；图片使用 media:稳定ID。",
+      );
+      continue;
+    }
     if (isImage ? !isMediaReference(destination) : !isSafeLink(destination)) {
       add(
         isImage ? "MARKDOWN_MEDIA_REFERENCE_INVALID" : "MARKDOWN_LINK_INVALID",
