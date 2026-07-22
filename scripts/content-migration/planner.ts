@@ -15,7 +15,7 @@ import { buildScienceArticleCandidates } from "./science-articles";
 import type {
   MigrationCandidate,
   MigrationFinding,
-  MigrationMode,
+  MigrationOptions,
   MigrationPlan,
   MigrationReport,
   PlannedFile,
@@ -25,12 +25,7 @@ import type {
 const RECORD_FILE_NAMES = ["record.json", "zh.md", "en.md"] as const;
 const LEDGER_PATH = "content/migration-ledger.json";
 
-export type BuildMigrationPlanOptions = {
-  mode: MigrationMode;
-  operationAt: string;
-  repositoryRoot: string;
-  reportPath?: string;
-};
+export type BuildMigrationPlanOptions = MigrationOptions;
 
 type TargetState = "absent" | "complete" | "conflict";
 

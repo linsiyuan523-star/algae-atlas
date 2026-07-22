@@ -6,6 +6,13 @@ import type {
 
 export type MigrationMode = "dry-run" | "write";
 
+export type MigrationOptions = {
+  mode: MigrationMode;
+  operationAt: string;
+  repositoryRoot: string;
+  reportPath?: string;
+};
+
 export type SourceLocator = {
   sourcePath: string;
   exportName: string;
@@ -61,5 +68,10 @@ export type MigrationReport = {
 
 export type MigrationPlan = {
   files: PlannedFile[];
+  report: MigrationReport;
+};
+
+export type MigrationExecutionResult = {
+  exitCode: number;
   report: MigrationReport;
 };

@@ -31,9 +31,9 @@ test("default invocation is a dry-run", async () => {
     operationAt: () => EMPTY_PLAN.report.operationAt,
     stdout: (line) => stdout.push(line),
     stderr: (line) => assert.fail(`unexpected stderr: ${line}`),
-    planner: async (options) => {
+    executor: async (options) => {
       receivedMode = options.mode;
-      return EMPTY_PLAN;
+      return { exitCode: 0, report: EMPTY_PLAN.report };
     },
   });
 
@@ -43,15 +43,48 @@ test("default invocation is a dry-run", async () => {
   assert.equal(JSON.parse(stdout[1]).mode, "dry-run");
 });
 
-test("write, report, and unknown arguments are rejected with exit code 2", async () => {
-  for (const args of [["--write"], ["--report", "report.json"], ["--unknown"]]) {
+test("invalid mode and report combinations exit with code 2", async () => {
+  const invalidArguments = [
+    ["--dry-run", "--write"],
+    ["--report"],
+    ["--report", "delivery/migration-reports/report.json"],
+    ["--write", "--report", "../report.json"],
+    ["--write", "--report", "C:\\report.json"],
+    ["--write", "--report", "delivery/migration-reports/report.txt"],
+    ["--unknown"],
+  ];
+  for (const args of invalidArguments) {
     const stderr: string[] = [];
     const exitCode = await runMigrationCli(args, {
       stdout: (line) => assert.fail(`unexpected stdout: ${line}`),
       stderr: (line) => stderr.push(line),
-      planner: async () => assert.fail("invalid arguments must not call planner"),
+      executor: async () =>
+        assert.fail("invalid arguments must not execute migration"),
     });
     assert.equal(exitCode, 2);
     assert.match(stderr.join("\n"), /Invalid migration arguments/);
   }
+});
+
+test("explicit write accepts one allowlisted JSON report", async () => {
+  const reportPath = "delivery/migration-reports/stage-03.json";
+  let received:
+    | { mode: string; reportPath?: string }
+    | undefined;
+  const writeReport = { ...EMPTY_PLAN.report, mode: "write" as const };
+  const exitCode = await runMigrationCli(
+    ["--write", "--report", reportPath],
+    {
+      stdout: () => undefined,
+      stderr: (line) => assert.fail(`unexpected stderr: ${line}`),
+      executor: async (options) => {
+        received = options;
+        return { exitCode: 0, report: writeReport };
+      },
+    },
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(received?.mode, "write");
+  assert.equal(received?.reportPath, reportPath);
 });
