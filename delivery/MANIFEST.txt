@@ -1,6 +1,6 @@
 Stage=Stage-00
 Name=Repository Audit and Overall Design
-Status=PRE-FINAL
+Status=READY_FOR_POST_COMMIT_BUNDLE
 Branch=local/stage-00
 BaselineCommit=456ff609e27ce5aa46fa0608289a30298bdd3e7f
 FinalCommit=BRANCH_TIP_AT_DELIVERY

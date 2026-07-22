@@ -1,17 +1,37 @@
 Stage: Stage-00
-Status: PRE-FINAL
+Status: PASS
+ValidatedAt: 2026-07-22
+Branch: local/stage-00
+BaselineCommit: 456ff609e27ce5aa46fa0608289a30298bdd3e7f
+FinalCommit: BRANCH_TIP_AT_DELIVERY (exact SHA in external USB copy)
 
-Completed:
-- Baseline initialization validation before Stage 0: npm ci PASS; npm run check PASS; npm test PASS (26 tests); npm run build:next PASS (97 static pages).
-- Documentation strict UTF-8/LF validation: PASS for completed files.
-- Markdown fenced-block balance: PASS for completed files.
-- Local Markdown link target validation: PASS for completed files.
-- git diff --cached --check: PASS for stable documentation commits.
+Environment:
+- Git: 2.55.0.windows.2
+- Node.js: v22.23.1
+- npm: 10.9.8
+- PowerShell: 5.1.19041.6456
+- Rust/Tauri: not required for Stage-00
 
-Stage-close commands pending:
-- npm.cmd run check
-- npm.cmd test
-- npm.cmd run build:next
-- final git status, remote, bundle verify, USB hash verification
+Pre-stage dependency installation:
+- npm.cmd ci: PASS (508 packages from package-lock.json)
+- Informational warnings: two known deprecated transitive @esbuild-kit packages; no dependency upgrade or lockfile change
 
-No test is reported as passed until its command completes in the final Stage-00 state.
+Stage-00 focused documentation validation:
+- Changed-file allowlist: PASS (13 files)
+- Required docs: PASS (9)
+- Delivery files: PASS (4)
+- Strict UTF-8 and LF: PASS
+- Markdown fence balance: PASS
+- Local Markdown links: PASS
+- Private-key/token-pattern scan: PASS
+- git diff --cached --check: PASS for all commits
+
+Repository validation:
+- npm.cmd run check: PASS
+- npm.cmd test: PASS (25 rendered tests + 1 IndexNow test = 26; 0 failures)
+- npm.cmd run build:next: PASS (97 static pages)
+- Public page/source/image/runtime changes: none
+- Git remote: none
+
+Post-final-commit delivery checks:
+- Exact final SHA, git bundle verify, bundle SHA-256, USB copy hash, and final clean status are recorded in the external USB TEST-SUMMARY.txt/MANIFEST.txt after bundle creation.

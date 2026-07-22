@@ -1,6 +1,6 @@
 # Stage 0 Handoff
 
-Status: pre-delivery; design is complete, full stage-close validation and bundle creation remain.
+Status: complete; documentation and full repository validation passed. Bundle identity is recorded in the external USB delivery after the finalization commit.
 Stage: Stage 0 — Repository Audit and Overall Design
 Branch: `local/stage-00`
 Baseline commit: `456ff609e27ce5aa46fa0608289a30298bdd3e7f`
@@ -90,24 +90,27 @@ These belong to later stages in [STAGE-DEPENDENCIES.md](STAGE-DEPENDENCIES.md).
 
 - `95b521f` — `docs: audit current content architecture`
 - `d4fc219` — `docs: design content workbench and staged migration`
-- security/test/handoff plan commit: recorded in the final branch history;
-- stage-close test/delivery commit: final branch tip.
+- `80ab854` — `docs: add security test and handoff plans`;
+- stage-close test/delivery commit: final branch tip recorded in the external manifest.
 
 ## Validation
 
-Completed before this pre-delivery handoff:
+Stage-close validation completed on 2026-07-22:
 
-- strict UTF-8 decode and LF checks for generated documents;
-- balanced Markdown fence checks;
-- local Markdown link existence checks;
-- `git diff --cached --check` for each stable documentation commit.
+- changed-file allowlist: PASS (13 documentation/delivery files only);
+- required documents: PASS (9);
+- delivery files: PASS (4);
+- strict UTF-8 and LF validation: PASS;
+- Markdown fenced-block balance and local link targets: PASS;
+- private-key/token-pattern scan of new files: PASS;
+- `git diff --cached --check`: PASS for every commit;
+- `npm.cmd run check`: PASS;
+- `npm.cmd test`: PASS (25 rendered-site tests plus 1 IndexNow test; 26 total, 0 failures);
+- `npm.cmd run build:next`: PASS (97 static pages generated);
+- tracked public page/source/image/runtime files changed: none;
+- worker remote: none.
 
-Stage-close commands and exact results are recorded in `delivery/TEST-SUMMARY.txt` after they run:
-
-- `npm.cmd run check`
-- `npm.cmd test`
-- `npm.cmd run build:next`
-- final Git status/remote and bundle verification.
+The post-commit bundle verification, bundle SHA-256, USB copy hash, and exact final commit are generated from the final branch tip and recorded in the external USB `MANIFEST.txt` and `TEST-SUMMARY.txt`.
 
 ## Known issues and pending factual data
 
