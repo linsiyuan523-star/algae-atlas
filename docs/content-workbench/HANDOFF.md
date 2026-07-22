@@ -1,108 +1,128 @@
-# Stage 2 Handoff
+# Stage 3 Handoff
 
-Status: implementation and pre-documentation validation complete; ready for the final documentation commit and verified offline bundle.
+Status: implementation, real draft migration, documentation, and pre-delivery full validation complete; ready for the final delivery-doc commit and verified offline bundle.
 
-Stage: Stage-02 — Website Content Loader
-Goal: let the website consume validated repository JSON/Markdown through a locale-aware public repository while preserving every real collection on the legacy source until reviewed migration.
-Branch: `local/stage-02-content-loader`
-Baseline / Stage-01 final commit: `050a87dbd6330270e6b47b6f74acd071a85c5fcd`
-Predecessor bundle: `stage-01-schema-v1.bundle`
-Predecessor bundle SHA-256: `74A7668B6C8F22BF8E953B038A7D909A3784013A713C4195D0258E031B8DBFF9`
-Implementation tip before documentation: `90bbaaf7d4ade0a12d4aa3bf6cd9c2919676488c`
-Final commit SHA: exact branch tip will be recorded in the verified external `MANIFEST.txt` and bundle head after the final documentation commit. A committed file cannot embed the SHA of the commit that contains itself.
+- Stage: Stage-03 — Legacy Content Migration Tool
+- Goal: provide a default-dry-run, no-overwrite migration path from explicit legacy exports to Stage-01 repository records, preserve review blockers, and keep every production collection on `legacy`.
+- Branch: `local/stage-03-migration`
+- Baseline / Stage-02 final commit: `86c2e209fe77cc644d946bff9901d740f9fb3ee1`
+- Predecessor bundle: `stage-02-content-loader-v1.bundle`
+- Predecessor bundle SHA-256: `C0114AE0EFB01D14E44D8D1A20F297A7DDB3D7513CD9384F8F665665BF9B7D88`
+- Design commit: `e43dca1c77bf2774b05b034a4a9cf5d942957051`
+- Implementation-plan commit: `77a1e677823d5ca6731b42367bb3379e641b1d2d`
+- Implementation tip before final delivery docs: `bb6075240d96e9877f2e334f484c748456127742`
+- Final commit / bundle head: recorded as `EXTERNAL_BUNDLE_HEAD` in the verified external delivery copy after the final commit. A committed file cannot embed its own containing commit SHA.
 
 ## Completed
 
-- Added the fixed `content/records`, `content/authors`, and `content/media` repository layout without adding real or fictional public records.
-- Implemented strict UTF-8/LF file discovery for records, locale Markdown, authors, and media, including symlink/junction, unexpected-file, directory-ID, BOM, line-ending, and final-newline checks.
-- Built one Stage-01 `RepositorySnapshot`, reused the shared parsers and `validateRepository`, and fail closed with bounded repository-relative diagnostics.
-- Adapted eligible repository records and all existing legacy detail sources to one `PublicContentRepository` interface.
-- Added an exhaustive 11-type collection source selection. Source choice is per content type and never silently merges records with legacy entries by ID.
-- Kept all real production collections explicitly on `legacy`, preserving current page content and route output.
-- Added deterministic per-locale list/filter/sort/get/availability behavior and reused Stage-01 `publicationEligibility`; Chinese and English remain independent.
-- Integrated existing detail lookup, static params, metadata, canonical/alternate links, language switching, 404 behavior, and sitemap through the same availability helpers.
-- Added a safe React renderer for validated structured Markdown without raw HTML or `dangerouslySetInnerHTML`.
-- Added fictional Chinese-only and bilingual fixtures under tests only, plus file, source-router, locale, sitemap, and new/legacy rendering tests.
-- Documented file authoring, compatibility selection, locale behavior, route ownership, verification, rollback, and later migration boundaries.
+- Added an explicit adapter for the three legacy `articles` in `lib/site-data.ts` and mapped them to schema-version-1 bilingual `science-article` drafts.
+- Added a read-only planner that loads the formal repository, inspects targets with `lstat`, combines existing and proposed records, runs shared repository validation, and produces a deterministic file plan and six-category report.
+- Made no-argument and `--dry-run` execution read-only. `--write` is the only write authorization.
+- Added optional report capture restricted to `delivery/migration-reports/<name>.json`; report files participate in the same atomic write plan.
+- Implemented create-new temporary files, file sync, `COPYFILE_EXCL`, complete target preflight, no-overwrite behavior, operation-created-path tracking, and non-recursive rollback.
+- Added deterministic `content/migration-ledger.json`; an identical ledger is skipped and a divergent ledger is a conflict.
+- Changed no-argument `content:validate` to validate the current formal `content/` repository while preserving record-file, snapshot, JSON, and help modes.
+- Wrote three real candidates, nine record/Markdown files, one ledger, and one traceable initial report.
+- Proved dry-run zero-write behavior, second-run byte preservation, partial-target preservation, candidate-copy rollback, final-report rollback, report preflight, repository-relative diagnostics, key-field preservation, and selector zero-change.
+- Added the operator runbook at `docs/content-workbench/MIGRATION-TOOL.md`.
 
-## Current source state
+## Candidate and source state
 
-Every entry in `collectionSourceSelection` is `legacy`. This is an explicit Stage-02 exit condition, not an implicit fallback. The formal `content/` store contains only directories and documentation; test fixtures live below `tests/fixtures/content-repository/` and are not visible to public routes.
+The formal repository now contains exactly these three candidates:
 
-The records source is exercised by injecting a file-backed repository in tests. Stage-03 owns real records, parity evidence, and reviewed per-collection switches. A switched type that is invalid or absent does not fall back to a same-ID legacy record.
+- `what-are-algae`
+- `why-water-turns-green`
+- `photobioreactor-basics`
 
-## Locale and route behavior
+Both locales are `draft`. Each candidate preserves the legacy ID, titles, summaries, category label, publication date, reading time, and legacy source trace. Candidate Markdown contains only the existing summary. Authors, reviewers, tags, references, and media remain empty where the legacy source provides no approved identity or rights evidence.
 
-- Chinese published + English missing/draft: Chinese detail/static param/canonical/sitemap only; language switch targets the English section landing.
-- Chinese and English published: both detail pages, per-locale canonical, appropriate language alternates, and reciprocal language switches.
-- Requested unavailable locale: no repository record, no static param, no sitemap URL, and detail lookup reaches 404.
-- Section pages remain bilingual and current legacy details retain their existing renderers.
-- Content cannot create route families. The adapter only registers existing research, live-feeds, tutorials, algae, and insights detail families, including the fixed research-profile ID allowlist.
+These files are preservation candidates, not published content and not permission to switch source. `collectionSourceSelection` still contains 11 explicit `legacy` values. The ledger records `parityStatus: blocked-review`, `sourceSwitchAllowed: false`, `CandidateScienceArticleCount=3`, and no verified switch commit.
+
+The three `projects` entries remain `MANUAL_CLASSIFICATION_REQUIRED`. Empty `news`, `outputs`, and `teamMembers` remain empty. Algae, tutorials, live feeds, research capabilities, collaboration areas, and component-embedded copy remain deferred.
+
+## Blockers retained explicitly
+
+- No verified public author IDs.
+- No verified reviewer IDs or publication approval.
+- English translation provenance requires human confirmation.
+- Candidate bodies contain only the existing summaries and require completeness review.
+- Referenced legacy images have pending usage-scope evidence and were not added as public media records.
+- Projects require an authorized target-type decision.
+- No Stage-00 public HTML, metadata, route, alternate, sitemap, media, and rollback parity matrix has been approved for a selector switch.
+
+The initial report is `delivery/migration-reports/stage-03-science-articles.json`.
 
 ## Key files
 
-- Loader: `lib/content-repository/file-loader.ts`
-- Record adapter: `lib/content-repository/record-source.ts`
-- Legacy adapter: `lib/content-repository/legacy-source.ts`
-- Public router/repository: `lib/content-repository/repository.ts`
-- Production selection: `lib/content-repository/default-repository.ts`
-- Route/locale/sitemap helpers: `lib/content-repository/routes.ts`
-- Structured renderer: `components/StructuredContentPage.tsx`
-- App integration: `app/[locale]/[[...slug]]/page.tsx`, `app/sitemap.ts`, `components/SiteShell.tsx`
-- Test fixtures and tests: `tests/fixtures/content-repository/`, `tests/content-repository/`
-- Authoring guide: `docs/content-workbench/CONTENT-LOADER.md`
-- Delivery: `delivery/`
+- CLI entry: `scripts/migrate-content.ts`
+- Argument parser: `scripts/content-migration/cli.ts`
+- Legacy adapter: `scripts/content-migration/science-articles.ts`
+- Read-only planner and ledger generation: `scripts/content-migration/planner.ts`
+- Exclusive writer and rollback: `scripts/content-migration/writer.ts`
+- Shared migration types: `scripts/content-migration/types.ts`
+- Formal validator: `scripts/validate-content.ts`
+- Candidates and ledger: `content/records/science-article/`, `content/migration-ledger.json`
+- Initial report: `delivery/migration-reports/stage-03-science-articles.json`
+- Operator guide: `docs/content-workbench/MIGRATION-TOOL.md`
+- Tests: `tests/content-migration/`, `tests/content-repository/file-loader.test.ts`, `packages/content-schema/tests/cli.test.ts`
 
-The exact file list is in `delivery/CHANGED-FILES.txt`.
+The exact baseline diff is listed in `delivery/CHANGED-FILES.txt`.
 
 ## Local commits
 
-- `1d9827d` — `feat: add structured content file loader`
-- `35d3c32` — `feat: add explicit content source router`
-- `e06c130` — `feat: integrate localized content routing`
-- `90bbaaf` — `test: cover language fallback and sitemap behavior`
-- final documentation/delivery commit: exact branch tip in the external manifest.
+- `e43dca1` — `docs: design stage 3 migration tool`
+- `77a1e67` — `docs: plan stage 3 migration implementation`
+- `33a4742` — `feat: add dry-run legacy content migration`
+- `35074ae` — `feat: add migration reports and conflict handling`
+- `143ffb7` — `feat: validate the formal content repository`
+- `d5cd3c4` — `test: cover repeatable and non-destructive migration`
+- `bb60752` — `docs: add migration operation guide`
+- final delivery documentation commit: exact SHA is the external bundle head.
 
 ## Validation
 
-Final code-state validation on 2026-07-22:
+Final pre-delivery validation on 2026-07-22:
 
-- Stage-01 predecessor bundle hash and exact head: PASS.
-- `npm.cmd ci --offline --ignore-scripts`: PASS (509 packages installed; 0 vulnerabilities; only the two known deprecated transitive `@esbuild-kit` warnings).
-- `npm.cmd run check`: PASS with no warnings.
-- `npm.cmd run test:content-loader`: PASS (10 tests, 0 failed).
+- Stage-02 predecessor bundle SHA-256 and exact head: PASS.
+- `npm.cmd ci --offline --ignore-scripts`: PASS (509 packages installed, 0 vulnerabilities; two known deprecated transitive `@esbuild-kit` warnings only).
+- `npm.cmd run content:validate`: PASS against the three formal drafts.
+- First real dry-run: 3 planned, 11 skipped, 0 conflicts, 0 validation issues; Git status unchanged.
+- First explicit write: 3 written, 11 skipped, 0 conflicts, 0 validation issues.
+- Second explicit write: 0 written, 15 skipped, including 3 `TARGET_EXISTS` and 1 `LEDGER_EXISTS`; no duplicate or file change.
+- `npm.cmd run check`: PASS, no TypeScript or ESLint warnings.
 - `npm.cmd test`: PASS.
-  - Stage-01 schema tests: 58 passed, 0 failed.
-  - Browser-compatible contract: 94 modules transformed and generated ES module executed.
-  - Stage-02 content-loader/source/route/render tests: 10 passed, 0 failed.
-  - Existing rendered-site tests: 25 passed, 0 failed.
-  - Existing IndexNow tests: 1 passed, 0 failed.
-- `npm.cmd run build:next`: PASS; 97 static pages generated.
-- Existing 24 real detail records remain legacy and bilingual in the default repository.
-- Worker Git remote: empty; no fetch, pull, push, PR, tag, release, deployment, production connection, or secret use.
+  - Schema: 58 passed, 0 failed.
+  - Browser contract: 94 modules transformed and generated module executed.
+  - Content loader/source/route/render: 10 passed, 0 failed.
+  - Migration: 15 passed, 0 failed.
+  - vinext compatibility build: PASS; only its existing informational dynamic-route classification notice.
+  - Rendered site: 25 passed, 0 failed.
+  - IndexNow: 1 passed, 0 failed.
+- `npm.cmd run build:next`: PASS; 97/97 static pages generated.
+- Legacy data files, images, routes, selectors, and public output regressions: unchanged/PASS.
+- Worker Git remote list: empty; no fetch, pull, push, PR, merge, tag, release, deployment, production connection, or secret use.
 
-The initial sandboxed `npm.cmd test` attempt could not write Vite's `node_modules/.vite-temp` and stopped with `EPERM`. The exact same command was rerun with approved worktree write access and passed completely; this was an execution-permission limitation, not a code/test failure.
+One early parallel approval request for focused read-only checks lost its control stream. The same read-only commands ran in the restricted sandbox and passed. No code assertion or final gate required a retry.
 
-Final post-documentation status, diff checks, UTF-8/LF checks, secret scan, exact final SHA, bundle verification, hashes, and USB-copy verification are recorded in the external delivery files after bundle creation.
+## Design decisions
 
-## Design decisions and deviations
+1. The tool imports only approved code-owned exports; it does not evaluate arbitrary TypeScript paths or scan for executable content.
+2. Planning and writing are separate. Dry-run builds the same validated plan but never calls the writer.
+3. A complete existing record is idempotently skipped; a partial/unsafe target, divergent ledger, or existing report is a conflict, never an overwrite.
+4. Report capture is write-only and confined to one allowlisted directory.
+5. The writer preflights all targets before creating directories, uses exclusive final copies, and removes only operation-created paths on failure.
+6. Candidate records remain drafts with empty unapproved relationships rather than fabricated authors, reviewers, references, or media.
+7. No production selector changed because review and parity evidence are incomplete.
+8. The ledger is deterministic audit state without a volatile timestamp; it does not control runtime precedence.
 
-1. The Stage-01 canonical filename is `record.json`, so the Stage-02 loader follows it instead of the stage note's illustrative `metadata.json` name.
-2. Repository validation and publication eligibility are imported from `@algae-atlas/content-schema`; the website does not implement a second policy.
-3. Source selection is whole-type and exhaustive. Silent per-ID blending was rejected to keep migration and rollback auditable.
-4. All real types stay on legacy because Stage-03, not Stage-02, owns factual migration and parity evidence.
-5. Only existing route families are registered; records cannot create routes or navigation.
-6. Structured Markdown is rendered as safe React nodes. The implementation intentionally does not add a general Markdown/MDX runtime or raw-HTML path.
-7. Legacy sitemap dates remain the existing fixed date; future file-backed entries use validated `updatedAt` values.
+## Known limits
 
-## Known issues and limits
-
-- No real content, author, media, or collection has been migrated.
-- Source switching in the production repository remains a Stage-03 code/config change with parity evidence and full gates.
-- List-page migration for non-registered types requires later code-owned integration; content data cannot create it.
-- Stage-02 does not implement desktop editing, preview, media byte/signature/dimension/EXIF processing, atomic writes, Git publishing, database changes, or deployment.
-- The first safe renderer deliberately supports only the Stage-01 Markdown profile subset documented in `CONTENT-LOADER.md`.
-- Existing factual gaps and review boundaries remain unchanged; no team fact was inferred or invented.
+- Only the three legacy `articles` have an adapter and formal candidates.
+- Candidate body completeness, author/reviewer identities, translation provenance, image rights, and publication approval remain unresolved.
+- No candidate is eligible for public rendering through the records source.
+- No collection source switch or full page-level parity approval is included.
+- The tool does not migrate authors, media bytes/metadata, projects, other collections, or component-embedded copy.
+- No desktop editor, preview system, Git publisher, database change, remote operation, deployment, or production change is included.
 
 ## Interface versions
 
@@ -117,28 +137,28 @@ Final post-documentation status, diff checks, UTF-8/LF checks, secret scan, exac
 
 ## Integration order and conflict risks
 
-1. Verify this bundle, SHA-256, exact `local/stage-02-content-loader` head, and the Stage-01 predecessor identity.
-2. Import after Stage-01 and before Stage-03/06 consumers.
-3. Run the offline install, check, full test, and native Next build gates.
-4. Stage-03 must add reviewed repository files and parity evidence before changing a collection selector from `legacy` to `records`.
-5. Review shared conflicts line by line. Likely surfaces are `package.json`, `.gitattributes`, the catch-all localized route, `app/sitemap.ts`, `components/SiteShell.tsx`, `docs/content-workbench/HANDOFF.md`, and `delivery/`.
+1. Verify the Stage-03 bundle SHA-256, complete history, branch head, and exact Stage-02 baseline.
+2. Import after Stage-02 and before later content/editor/publishing consumers.
+3. Run offline install, `content:validate`, `check`, full tests, and native Next build.
+4. Keep all selectors on `legacy`; importing candidates does not authorize public activation.
+5. Resolve shared conflicts line by line. Likely surfaces are `package.json`, `.gitattributes`, `scripts/validate-content.ts`, `tests/content-repository/file-loader.test.ts`, content-workbench handoff files, and `delivery/`.
 
 Do not resolve shared files by choosing wholesale ours/theirs versions.
 
 ## Next executor's first step
 
-Verify/import the Stage-02 bundle on top of the exact Stage-01 tip, run all gates, then read `CONTENT-LOADER.md`. For Stage-03, choose one real collection, prepare migration/parity evidence, load it through `createFileBackedContentRepository`, and change only that collection's explicit selector after review.
+Verify/import the bundle on the exact Stage-02 tip, run the full gates, then read `MIGRATION-TOOL.md`, the ledger, and the initial migration report. If continuing migration, first obtain authorized author/reviewer, translation, body, and image-rights evidence for one candidate set and build the complete public parity matrix. Do not begin by changing a selector.
 
 ## Do not repeat or redesign silently
 
-- Do not copy or reimplement the schema, workflow, publication eligibility, or Markdown policy.
-- Do not silently fall back from a selected records collection to legacy by ID.
-- Do not publish test fixtures or invent missing real data.
-- Do not couple English publication to Chinese or generate an English detail for missing/draft English.
-- Do not let content files create routes, navigation, footer entries, or renderers.
-- Do not delete legacy files, D1/Drizzle, Worker, Sites, vinext, or deployment compatibility structures.
-- Do not add a remote, push, merge `main`, tag, release, deploy, or connect to production from a stage host.
+- Do not rerun the initial `--report delivery/migration-reports/stage-03-science-articles.json`; the existing report is intentionally protected.
+- Do not overwrite or delete legacy sources, images, candidate files, the ledger, or unrelated work.
+- Do not recreate Stage-01 schema/publication rules or Stage-02 repository routing.
+- Do not infer authors, reviewers, team facts, references, translation provenance, licenses, or approval.
+- Do not mark candidates published or switch any selector without reviewed parity evidence.
+- Do not add a remote, push, merge `main`, tag, release, deploy, connect to production, or expose secrets from a stage host.
+- Do not use `reset --hard`, recursive cleanup, `clean`, `restore`, or `stash` to integrate or roll back this stage.
 
 ## Rollback
 
-Before integration, omit the bundle. After local integration, use ordinary revert commits for the Stage-02 commits in reverse order and rerun all gates. During a later collection migration, first switch that reviewed collection explicitly back to `legacy`; do not reset, rewrite history, or remove unrelated files.
+Before integration, omit the bundle. After local integration, create ordinary revert commits for the Stage-03 commits in reverse order and rerun all gates. Because all production selectors remain `legacy`, candidate rollback does not require a public source switch. Preserve legacy sources and unrelated files; never rewrite history or recursively clean the worktree.

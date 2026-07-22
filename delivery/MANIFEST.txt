@@ -1,13 +1,19 @@
-Stage=Stage-02
-Name=Website Content Loader
+Stage=Stage-03
+Name=Legacy Content Migration Tool
 Status=READY_FOR_POST_COMMIT_BUNDLE
-Branch=local/stage-02-content-loader
-BaselineCommit=050a87dbd6330270e6b47b6f74acd071a85c5fcd
-PredecessorBundle=stage-01-schema-v1.bundle
-PredecessorBundleSha256=74A7668B6C8F22BF8E953B038A7D909A3784013A713C4195D0258E031B8DBFF9
-ImplementationCommit=90bbaaf7d4ade0a12d4aa3bf6cd9c2919676488c
-FinalCommit=BRANCH_TIP_AT_DELIVERY
-FinalCommitResolution=Exact SHA will be written to the external USB manifest and verified bundle heads after the final commit
+Branch=local/stage-03-migration
+BaselineCommit=86c2e209fe77cc644d946bff9901d740f9fb3ee1
+PredecessorBundle=stage-02-content-loader-v1.bundle
+PredecessorBundleSha256=C0114AE0EFB01D14E44D8D1A20F297A7DDB3D7513CD9384F8F665665BF9B7D88
+DesignCommit=e43dca1c77bf2774b05b034a4a9cf5d942957051
+PlanCommit=77a1e677823d5ca6731b42367bb3379e641b1d2d
+DryRunImplementationCommit=33a4742f90d4c4fd0abb84fe9df96df79b6832b7
+WriterImplementationCommit=35074ae40440adfaf5dcfaaac220d986d8cd5bb9
+ValidatorImplementationCommit=143ffb791d0f65cb06947e9d9fa3a2cc69d80673
+CandidateEvidenceCommit=d5cd3c4534d68eb76e680509202c3c4a63d9a4c7
+OperationGuideCommit=bb6075240d96e9877f2e334f484c748456127742
+FinalCommit=EXTERNAL_BUNDLE_HEAD
+FinalCommitResolution=Exact SHA is inserted in the external USB copy and must equal the verified bundle head
 ContentSchemaVersion=1
 RepositoryApiVersion=1
 DesktopCommandApiVersion=1
@@ -16,18 +22,22 @@ GitPublishPlanVersion=1
 MigrationLedgerVersion=1
 ContentTypeCount=11
 RealCollectionSource=legacy
-RealLegacyDetailRecordCount=24
+CandidateScienceArticleCount=3
+SourceSwitchCount=0
+RemoteCount=0
+SchemaTestCount=58
 ContentLoaderTestCount=10
+ContentMigrationTestCount=15
 ExistingRenderedTestCount=25
 ExistingIndexNowTestCount=1
 NextStaticPageCount=97
-BundleName=stage-02-content-loader-v1.bundle
+BundleName=stage-03-migration-v1.bundle
 BundleSha256=TO_BE_GENERATED_AFTER_FINAL_COMMIT
-ExpectedUsbDirectory=E:\stage-02-content-loader
+ExpectedUsbDirectory=E:\stage-03-migration
 RepositoryFiles=See delivery/CHANGED-FILES.txt
 ExternalArtifacts:
-stage-02-content-loader-v1.bundle
-stage-02-content-loader-v1.bundle.sha256.txt
+stage-03-migration-v1.bundle
+stage-03-migration-v1.bundle.sha256.txt
 HANDOFF.md
 MANIFEST.txt
 TEST-SUMMARY.txt
