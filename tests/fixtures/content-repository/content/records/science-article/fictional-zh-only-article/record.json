@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "fictional-zh-only-article",
+  "type": "science-article",
+  "createdAt": "2026-07-22T09:00:00+08:00",
+  "updatedAt": "2026-07-22T09:00:00+08:00",
+  "authors": [
+    "fictional-site-reader"
+  ],
+  "tags": [
+    "fictional-fixture",
+    "loader"
+  ],
+  "media": [],
+  "shared": {
+    "articleKind": "foundation",
+    "publicationDate": "2026-07-22",
+    "targetAudience": "general",
+    "references": [],
+    "relatedContentIds": []
+  },
+  "locales": {
+    "zh": {
+      "state": "published",
+      "title": "虚构的仅中文读取测试",
+      "summary": "此内容仅用于验证网站读取层，不描述任何真实团队事实。",
+      "bodyFile": "zh.md",
+      "fields": {
+        "topic": "虚构读取测试",
+        "targetAudienceLabel": "自动化测试",
+        "takeaways": [
+          "不进入正式内容目录"
+        ]
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "reviewed",
+        "updatedAt": "2026-07-22",
+        "reviewedAt": "2026-07-22",
+        "version": "1.0",
+        "reviewerIds": [
+          "fictional-site-reader"
+        ],
+        "references": []
+      },
+      "publishedAt": "2026-07-22T09:00:00+08:00"
+    },
+    "en": {
+      "state": "missing"
+    }
+  }
+}
