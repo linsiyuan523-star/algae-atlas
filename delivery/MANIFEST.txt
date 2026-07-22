@@ -1,0 +1,37 @@
+Stage=Stage-00
+Name=Repository Audit and Overall Design
+Status=PRE-FINAL
+Branch=local/stage-00
+BaselineCommit=456ff609e27ce5aa46fa0608289a30298bdd3e7f
+FinalCommit=BRANCH_TIP_AT_DELIVERY
+FinalCommitResolution=Exact SHA will be written to the external USB manifest and verified bundle heads after the final commit
+ContentSchemaVersion=1
+RepositoryApiVersion=1
+DesktopCommandApiVersion=1
+MediaMetadataVersion=1
+GitPublishPlanVersion=1
+MigrationLedgerVersion=1
+BundleName=stage-00-design-v1.bundle
+BundleSha256=TO_BE_GENERATED_AFTER_FINAL_COMMIT
+ExpectedUsbDirectory=E:\stage-00-design
+RepositoryFiles:
+docs/content-workbench/REQUIREMENTS.md
+docs/content-workbench/CONTENT-TYPES.md
+docs/content-workbench/CONTENT-SCHEMA.md
+docs/content-workbench/ARCHITECTURE.md
+docs/content-workbench/MIGRATION-PLAN.md
+docs/content-workbench/SECURITY-MODEL.md
+docs/content-workbench/TEST-STRATEGY.md
+docs/content-workbench/STAGE-DEPENDENCIES.md
+docs/content-workbench/HANDOFF.md
+delivery/HANDOFF.md
+delivery/MANIFEST.txt
+delivery/TEST-SUMMARY.txt
+delivery/CHANGED-FILES.txt
+ExternalArtifacts:
+stage-00-design-v1.bundle
+stage-00-design-v1.bundle.sha256.txt
+HANDOFF.md
+MANIFEST.txt
+TEST-SUMMARY.txt
+CHANGED-FILES.txt
