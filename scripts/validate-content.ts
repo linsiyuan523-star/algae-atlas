@@ -8,6 +8,11 @@ import {
   type ValidationIssue,
 } from "@algae-atlas/content-schema";
 
+import {
+  ContentRepositoryLoadError,
+  loadContentRepository,
+} from "../lib/content-repository/file-loader";
+
 type CliIO = {
   stdout: (message: string) => void;
   stderr: (message: string) => void;
@@ -15,6 +20,7 @@ type CliIO = {
 
 type ParsedArguments =
   | { mode: "help"; json: boolean }
+  | { mode: "repository"; json: boolean }
   | { mode: "records"; json: boolean; files: string[] }
   | { mode: "snapshot"; json: boolean; file: string };
 
@@ -26,6 +32,7 @@ const defaultIO: CliIO = {
 function usage(): string {
   return [
     "用法:",
+    "  npm.cmd run content:validate",
     "  npm.cmd run content:validate -- <record.json> [更多 record.json]",
     "  npm.cmd run content:validate -- --snapshot <snapshot.json>",
     "选项:",
@@ -37,9 +44,10 @@ function usage(): string {
 function parseArguments(args: string[]): ParsedArguments {
   const json = args.includes("--json");
   const filtered = args.filter((arg) => arg !== "--json");
-  if (filtered.length === 0 || filtered.includes("--help")) {
+  if (filtered.includes("--help")) {
     return { mode: "help", json };
   }
+  if (filtered.length === 0) return { mode: "repository", json };
 
   const snapshotIndex = filtered.indexOf("--snapshot");
   if (snapshotIndex >= 0) {
@@ -66,6 +74,17 @@ function fileIssue(file: string, error: unknown): ValidationIssue {
     path: file,
     message: `无法读取或解析输入文件：${message}`,
     remedy: "确认文件存在、使用 UTF-8 JSON，且不包含注释或尾随逗号。",
+  };
+}
+
+function repositoryIssue(): ValidationIssue {
+  return {
+    code: "CLI_REPOSITORY_READ_FAILED",
+    severity: "error",
+    path: "content",
+    message: "Unable to read the formal content repository.",
+    remedy:
+      "Confirm that content paths are readable ordinary files inside the current worktree.",
   };
 }
 
@@ -96,6 +115,7 @@ function printIssues(
 export async function runContentValidationCli(
   args: string[],
   io: CliIO = defaultIO,
+  repositoryRoot = process.cwd(),
 ): Promise<number> {
   let parsed: ParsedArguments;
   try {
@@ -108,11 +128,21 @@ export async function runContentValidationCli(
 
   if (parsed.mode === "help") {
     io.stdout(usage());
-    return args.includes("--help") ? 0 : 2;
+    return 0;
   }
 
   const issues: ValidationIssue[] = [];
-  if (parsed.mode === "snapshot") {
+  if (parsed.mode === "repository") {
+    try {
+      await loadContentRepository(repositoryRoot);
+    } catch (error) {
+      if (error instanceof ContentRepositoryLoadError) {
+        issues.push(...error.issues);
+      } else {
+        issues.push(repositoryIssue());
+      }
+    }
+  } else if (parsed.mode === "snapshot") {
     try {
       const snapshot = (await readJson(parsed.file)) as RepositorySnapshot;
       issues.push(...validateRepository(snapshot));
