@@ -1,37 +1,50 @@
-Stage: Stage-00
-Status: PASS
+Stage: Stage-01
+Status: PASS; ready for final documentation commit and post-commit bundle verification
 ValidatedAt: 2026-07-22
-Branch: local/stage-00
-BaselineCommit: 456ff609e27ce5aa46fa0608289a30298bdd3e7f
+Branch: local/stage-01-schema
+BaselineCommit: 6dc2e71f4eaf45fca22ef351b14535d7782583b4
+ImplementationCommit: ede1d861f853e12086fb275f0e15b8c5618e0953
 FinalCommit: BRANCH_TIP_AT_DELIVERY (exact SHA in external USB copy)
+PredecessorBundleSha256: 5E6F79AF71AD3DF029B87772DA4C6A74B88C083326472056B50616DBFAB1BC31
 
 Environment:
 - Git: 2.55.0.windows.2
 - Node.js: v22.23.1
 - npm: 10.9.8
 - PowerShell: 5.1.19041.6456
-- Rust/Tauri: not required for Stage-00
+- TypeScript: 5.9.3
+- Zod: 4.4.3 exact
+- Vite browser-contract target: 8.0.13
 
-Pre-stage dependency installation:
-- npm.cmd ci: PASS (508 packages from package-lock.json)
-- Informational warnings: two known deprecated transitive @esbuild-kit packages; no dependency upgrade or lockfile change
+Dependency installation:
+- npm.cmd ci --offline --ignore-scripts: PASS
+- Installed: 509 packages; audited: 511 packages; vulnerabilities: 0
+- Informational warnings: two known deprecated transitive @esbuild-kit packages; no unrelated upgrade performed
 
-Stage-00 focused documentation validation:
-- Changed-file allowlist: PASS (13 files)
-- Required docs: PASS (9)
-- Delivery files: PASS (4)
-- Strict UTF-8 and LF: PASS
-- Markdown fence balance: PASS
-- Local Markdown links: PASS
-- Private-key/token-pattern scan: PASS
-- git diff --cached --check: PASS for all commits
+Stage-01 focused validation:
+- npm.cmd run check: PASS, no warnings
+- npm.cmd run test:schema: PASS (58 tests, 0 failures)
+- npm.cmd run test:schema:browser: PASS (94 modules transformed; browser-target ES module executed)
+- npm.cmd run content:validate -- packages/content-schema/fixtures/example-science-article/record.json: PASS
+- Every one of 11 content types: valid fixture PASS; invalid dedicated-field fixture rejected with field path
+- Chinese published + English missing: PASS
+- English published with incomplete body/review/time/human verification: rejected as expected
+- Workflow transition matrix: PASS
+- Duplicate stable ID, wrong-type/broken reference, reviewer resolution, URL collision, media rights/consent, and unexpected en.md tests: PASS
+- Markdown raw HTML/MDX/unsafe protocol/path tests: PASS
+- Deterministic serialization and schema migration harness: PASS
 
-Repository validation:
-- npm.cmd run check: PASS
-- npm.cmd test: PASS (25 rendered tests + 1 IndexNow test = 26; 0 failures)
+Repository regression validation:
+- npm.cmd test: PASS
+- Stage-01 Node tests: 58 passed
+- Browser-compatible target: PASS
+- Existing rendered-site tests: 25 passed
+- Existing IndexNow tests: 1 passed
 - npm.cmd run build:next: PASS (97 static pages)
-- Public page/source/image/runtime changes: none
-- Git remote: none
+- Protected app/components/lib/public/db/drizzle/worker/.openai/build/runtime diff: empty
+- Website read path changed: no
+- Public page output intentionally changed: no
+- Worker Git remote: empty
 
 Post-final-commit delivery checks:
-- Exact final SHA, git bundle verify, bundle SHA-256, USB copy hash, and final clean status are recorded in the external USB TEST-SUMMARY.txt/MANIFEST.txt after bundle creation.
+- Final clean Git status, changed-file allowlist, strict UTF-8/LF, secret scan, git diff check, exact final SHA, bundle verify, bundle SHA-256, USB copy hash, and USB bundle verify are written into the external USB TEST-SUMMARY.txt/MANIFEST.txt after bundle creation.

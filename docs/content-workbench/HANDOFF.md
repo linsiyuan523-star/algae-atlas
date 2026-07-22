@@ -1,128 +1,101 @@
-# Stage 0 Handoff
+# Stage 1 Handoff
 
-Status: complete; documentation and full repository validation passed. Bundle identity is recorded in the external USB delivery after the finalization commit.
-Stage: Stage 0 — Repository Audit and Overall Design
-Branch: `local/stage-00`
-Baseline commit: `456ff609e27ce5aa46fa0608289a30298bdd3e7f`
-Final commit SHA: the branch tip recorded in the verified USB `MANIFEST.txt` and bundle heads after finalization. A committed file cannot embed the SHA of the commit that contains itself.
+Status: implementation complete; all code, schema, fixture, browser-contract, website regression, and native production-build gates pass. Exact final branch SHA and bundle identity are written to the external delivery after the final documentation commit.
 
-## Goal
-
-Provide an evidence-based, implementation-ready contract for a Windows-first Tauri content publishing workbench without changing public pages, content data, dependencies, images, routes, database, deployment, or production.
+Stage: Stage 1 — Shared Content Model and Validation Rules
+Goal: provide one environment-neutral content schema, runtime validator, field registry, policy API, fixtures, tests, serializer, migration harness, and validation CLI without changing website reads or public output.
+Branch: `local/stage-01-schema`
+Baseline / predecessor final commit: `6dc2e71f4eaf45fca22ef351b14535d7782583b4`
+Predecessor bundle: `stage-00-design-v1.bundle`
+Predecessor bundle SHA-256: `5E6F79AF71AD3DF029B87772DA4C6A74B88C083326472056B50616DBFAB1BC31`
+Implementation tip before this handoff commit: `ede1d861f853e12086fb275f0e15b8c5618e0953`
+Final commit SHA: branch tip recorded in the verified external `MANIFEST.txt` and bundle head after finalization. A committed file cannot embed the SHA of the commit that contains itself.
 
 ## Completed
 
-- Audited the actual Next.js/React/TypeScript repository, route dispatch, locale behavior, content sources, images, review model, tests, and build commands.
-- Confirmed D1 schema/migrations are empty, D1/R2 bindings are null, and D1/Drizzle/Worker files are compatibility scaffolding rather than the current public content source.
-- Defined the workbench/code ownership boundary.
-- Defined 11 content types and their dedicated fields/publication gates.
-- Selected versioned JSON metadata plus per-locale Markdown bodies.
-- Defined stable English IDs, independent Chinese/English state, review/translation gates, authors, media, references, and deterministic serialization.
-- Defined Chinese-only routing, metadata, sitemap, and language-switch fallback behavior.
-- Designed the shared schema, website adapter, Tauri desktop, local Git safety service, preview, delivery, and trust boundaries.
-- Defined collection-by-collection migration, explicit legacy/record source selection, parity gates, compatibility rollback, and failure stops.
-- Defined Stage-01 through Stage-08 interfaces, owners, prerequisites, integration order, branch names, and bundle protocol.
-- Defined security and test strategies.
+- Created the npm workspace package `@algae-atlas/content-schema` with exact `zod@4.4.3`.
+- Kept the schema core browser-compatible and free of Node, React, Next.js, Tauri, filesystem, Git, and network imports.
+- Implemented the 11 Stage-00 content types as a strict discriminated union with dedicated shared/localized fields.
+- Implemented stable IDs, exact schema version, ISO date/time ordering, DOI, unknown-key, new-media path/MIME, duplicate-reference, and type-specific publication gates.
+- Implemented independent Chinese/English locale state, reviewed publication requirements, machine-assisted human verification, substantive-edit fallback, and tested transition policy.
+- Implemented author, media, review, structured reference/source, and license models with controlled rights, consent, identification, disclosure, and public-scope values.
+- Implemented a serializable field/type registry and deterministic draft defaults for later dynamic forms.
+- Implemented field-path Chinese issues, deterministic JSON serialization, explicit schema migration harness, safe Markdown profile, repository snapshot validation, reference resolution, publication eligibility, and URL collision detection.
+- Implemented the explicit-file/snapshot CLI at `scripts/validate-content.ts`.
+- Added fictional TypeScript and JSON/Markdown fixtures, valid/invalid coverage for every type, repository/Markdown/CLI/workflow tests, and a browser-compatible ES-module contract.
+- Added scoped LF attributes for implementation and delivery files.
+- Preserved all existing app, component, legacy content, route, image, compatibility, database, Worker, hosting, and deployment files.
 
 ## Not completed by design
 
-Stage 0 does not implement:
+- No website loader, collection source switch, route/static-param/metadata/sitemap/language-switch change, or public record migration.
+- No real `content/records`, authors, media catalog, or real content data.
+- No desktop/Tauri project, form UI, preview, media processing, filesystem transaction, Git safety service, or packaging.
+- No image byte/signature/EXIF processing; Stage-01 validates catalog metadata and publication policy only.
+- No D1/R2/Drizzle/Worker activation or deletion.
+- No remote, fetch/pull/push, PR, tag, release, deployment, or production connection.
 
-- schema/runtime validation code or dependencies;
-- content directories/records or any migration;
-- Next.js loader, routes, metadata, sitemap, language switch, or page changes;
-- Tauri/React desktop code, Rust toolchain, media processing, preview, or Git publisher;
-- image moves/optimization/CDN/object storage;
-- D1/Drizzle/Worker removal or database activation;
-- GitHub remote, push, PR, tag, release, deployment, or production connection.
+## Design decisions and deviations
 
-These belong to later stages in [STAGE-DEPENDENCIES.md](STAGE-DEPENDENCIES.md).
+1. Stage-00 canonical storage remains authoritative. Common `status`, `publishedAt`, and `review` concepts live per locale; cover/featured concepts map to type-specific shared fields. No duplicate root state was introduced.
+2. Version 1 retains `missing`, `draft`, `internal-review`, `approved`, `published`, and `archived`. The suggested `withdrawn` state was not added because doing so would silently contradict Stage-00; it requires a future versioned amendment.
+3. `research-profile` remains the eleventh fixed-ID type even though the shorter Stage-01 minimum list named ten types.
+4. The canonical validator is Zod 4.4.3 already present in the locked dependency graph and now pinned as the workspace package dependency.
+5. Repository validation accepts an in-memory snapshot. Filesystem discovery/loading belongs to Stage-02, preventing Node-only I/O from entering the shared core.
+6. The Markdown profile rejects unsafe input and media paths; it is a validation contract, not a second renderer or sanitizer.
+7. A Vite browser library target proves that the same schemas/fixtures bundle without Node polyfills and execute as an ES module. No desktop/browser UI is part of this stage.
 
-## Principal decisions
+## Key files
 
-| Topic | Decision |
-| --- | --- |
-| Initial source | Repository files; no runtime database requirement. |
-| Record layout | `content/records/<type>/<id>/record.json` plus `zh.md` and optional `en.md`. |
-| Identity | Globally stable English kebab-case ID; type/ID immutable after first publication. |
-| Locale | Chinese required; English independent and optional. |
-| Missing English | No English detail, alternate, or sitemap URL; language switch goes to English section landing. |
-| Publication | Only an eligible per-locale `published` state is public. |
-| Translation | Machine-assisted text cannot publish without recorded human verification. |
-| Media | New uploads under `public/images/uploads/YYYY/MM/` with catalog, hash, rights, consent, and localized accessibility text. |
-| Existing media | Paths/bytes protected; no automatic move/delete. |
-| Authors | Public attribution IDs only; private personnel/consent records stay outside Git. |
-| Markdown | Safe non-executable profile; no raw HTML/MDX in the first version. |
-| Migration | One collection/source at a time, explicit switch, no silent fallback. |
-| Desktop authority | Approved worktree, allowlisted files, exact local commit only; no remote/network/deploy. |
-| Production | Existing main-only integration, PR, and deployment flow remains authoritative. |
+- Implementation: `packages/content-schema/src/`
+- Machine-readable registry: `packages/content-schema/src/registry.ts`
+- Fixtures: `packages/content-schema/fixtures/`
+- Tests: `packages/content-schema/tests/`
+- Browser contract: `packages/content-schema/browser/contract.ts`
+- CLI: `scripts/validate-content.ts`
+- Usage: `docs/content-workbench/SCHEMA-USAGE.md`
+- Delivery: `delivery/`
 
-## Repository findings important to later stages
-
-- Current `LocalizedText` requires both `zh` and `en`; current static params/metadata/sitemap/language switch assume paired locales.
-- Draft review metadata is currently informational and does not gate rendering.
-- Maintainable content is split among `lib/*.ts` and component-embedded copy.
-- Existing arrays: six algae profiles, three live-feed profiles, four research capabilities, six collaboration areas, six tutorial shells; real members, outputs, and news are empty.
-- Current `projects` are sample observation frameworks and must not be migrated as verified team projects.
-- Seven current image binaries are protected by exact-hash tests; three unreferenced binaries remain protected inventory.
-- Existing rendered tests encode important scientific, privacy, attribution, empty-state, route, and SEO boundaries.
-
-## Design documents
-
-- `REQUIREMENTS.md`
-- `CONTENT-TYPES.md`
-- `CONTENT-SCHEMA.md`
-- `ARCHITECTURE.md`
-- `MIGRATION-PLAN.md`
-- `SECURITY-MODEL.md`
-- `TEST-STRATEGY.md`
-- `STAGE-DEPENDENCIES.md`
-- `HANDOFF.md`
-
-## Delivery files
-
-- `delivery/HANDOFF.md`
-- `delivery/MANIFEST.txt`
-- `delivery/TEST-SUMMARY.txt`
-- `delivery/CHANGED-FILES.txt`
+The exact file list is in `delivery/CHANGED-FILES.txt`.
 
 ## Local commits
 
-- `95b521f` — `docs: audit current content architecture`
-- `d4fc219` — `docs: design content workbench and staged migration`
-- `80ab854` — `docs: add security test and handoff plans`;
-- stage-close test/delivery commit: final branch tip recorded in the external manifest.
+- `04fd809` — `feat: add shared content domain foundation`
+- `eaa24de` — `feat: add schema validation and field registry`
+- `27f5cad` — `test: cover content schemas and language states`
+- `ede1d86` — `feat: enforce locale workflow and reference policy`
+- final documentation/delivery commit: exact branch tip in the external manifest.
 
 ## Validation
 
-Stage-close validation completed on 2026-07-22:
+Final code-state validation on 2026-07-22:
 
-- changed-file allowlist: PASS (13 documentation/delivery files only);
-- required documents: PASS (9);
-- delivery files: PASS (4);
-- strict UTF-8 and LF validation: PASS;
-- Markdown fenced-block balance and local link targets: PASS;
-- private-key/token-pattern scan of new files: PASS;
-- `git diff --cached --check`: PASS for every commit;
-- `npm.cmd run check`: PASS;
-- `npm.cmd test`: PASS (25 rendered-site tests plus 1 IndexNow test; 26 total, 0 failures);
-- `npm.cmd run build:next`: PASS (97 static pages generated);
-- tracked public page/source/image/runtime files changed: none;
-- worker remote: none.
+- `npm.cmd ci --offline --ignore-scripts`: PASS (509 packages installed; 0 vulnerabilities; only two known deprecated transitive `@esbuild-kit` warnings).
+- `npm.cmd run check`: PASS with no warnings.
+- `npm.cmd test`: PASS.
+  - Stage-01 Node schema/CLI/repository/Markdown/workflow tests: 58 passed, 0 failed.
+  - Browser-compatible bundle: 94 modules transformed; generated ES module executed successfully.
+  - Existing rendered-site tests: 25 passed, 0 failed.
+  - Existing IndexNow test: 1 passed, 0 failed.
+- `npm.cmd run build:next`: PASS; 97 static pages generated.
+- Standalone example CLI validation: PASS.
+- Protected page/source/image/runtime surface diff: empty.
+- Worker Git remote: empty.
 
-The post-commit bundle verification, bundle SHA-256, USB copy hash, and exact final commit are generated from the final branch tip and recorded in the external USB `MANIFEST.txt` and `TEST-SUMMARY.txt`.
+Final post-documentation status, diff checks, secret scan, bundle verify, hashes, USB copy verification, and exact final SHA are recorded in the external delivery files.
 
-## Known issues and pending factual data
+## Known issues and limits
 
-- Existing user-provided image usage scope remains pending where the site already says so.
-- No public team members, outputs, news, detailed contacts, or operational tutorial procedures have been supplied; later stages must not invent them.
-- Existing component copy will require a later record-by-record extraction decision.
-- The exact schema validation dependency/version is selected and pinned in Stage-01 after dependency review; all consumers must use the same canonical module.
-- Windows Git currently warns that global autocrlf may convert LF on a future checkout. Generated files and committed blobs are LF; Stage-01 should add a scoped line-ending policy if implementation files require it.
+- `withdrawn` is not a schema 1 state; do not add it ad hoc in Stage-02/04.
+- Stage-02 must provide filesystem snapshots and use these exact APIs; it must not reimplement publication eligibility.
+- Stage-04 must import the workspace package; it must not copy the union or registry.
+- Image magic-byte, dimension, EXIF, normalization, and atomic media writes remain Stage-05B work.
+- The schema contains no real team/member/output/project/news data, by design.
+- Existing Stage-00 factual gaps about real people, outputs, images, sites, procedures, partners, and permissions remain unresolved and must not be invented.
 
 ## Interface versions
 
-| Interface | Design version |
+| Interface | Version tested |
 | --- | --- |
 | Content schema | 1 |
 | Repository API | 1 |
@@ -131,35 +104,30 @@ The post-commit bundle verification, bundle SHA-256, USB copy hash, and exact fi
 | Git publish plan | 1 |
 | Migration ledger | 1 |
 
-## Integration order
+## Integration order and conflict risks
 
-1. Verify this bundle and checksum.
-2. Import its branch under a namespaced local ref.
-3. Confirm the baseline is an ancestor and review all documentation commits.
-4. Use this branch tip as Stage-01's design prerequisite.
-5. Follow the graph in `STAGE-DEPENDENCIES.md`; parallel workers do not merge ambiguous prerequisites themselves.
-6. Keep worker/integration remotes absent until a later explicit authorization.
+1. Verify this bundle, SHA-256, exact `local/stage-01-schema` head, and predecessor SHA.
+2. Import Stage-01 after Stage-00 and before Stage-02 or Stage-04.
+3. Review the root workspace/package-lock changes; do not replace the existing package manager, lockfile, build scripts, or hosting structure.
+4. Run `npm.cmd ci`, `npm.cmd run check`, `npm.cmd test`, and `npm.cmd run build:next` on the integration host.
+5. Branch Stage-02 and Stage-04 only from the tested integrated Stage-01 tip.
+
+Likely conflict surfaces are `package.json`, `package-lock.json`, `.gitattributes`, `.gitignore`, `eslint.config.mjs`, and the latest HANDOFF/delivery files. Resolve them in prerequisite order; do not select wholesale ours/theirs versions.
 
 ## Next executor's first step
 
-For Stage-01:
-
-1. verify the Stage-00 USB checksum and `git bundle verify`;
-2. read `CONTENT-SCHEMA.md`, `CONTENT-TYPES.md`, `SECURITY-MODEL.md`, `TEST-STRATEGY.md`, and the Stage-01 contract;
-3. confirm the imported final SHA and interface version 1;
-4. create a dedicated Stage-01 worktree/branch from that exact integrated tip;
-5. implement only the shared schema/fixtures/CLI contract, with no website or desktop feature work.
+For Stage-02 or Stage-04, verify/import the Stage-01 bundle and exact predecessor chain, run the four validation commands, then read `SCHEMA-USAGE.md` and import `@algae-atlas/content-schema`. Do not create a parallel type or validator.
 
 ## Do not repeat or redesign silently
 
-- Do not redo the Stage-00 repository audit from assumptions.
-- Do not promote D1 into the source of truth.
-- Do not couple English publication to Chinese.
-- Do not change stable type IDs, record layout, locale route contract, or stage graph without an explicit design amendment.
-- Do not migrate current sample observations as team projects.
-- Do not move/delete current images or compatibility files.
-- Do not add GitHub remote, push, merge main, tag, release, or deploy.
+- Do not re-audit or rewrite the Stage-00 schema contract from assumptions.
+- Do not copy schema/type definitions into website or desktop code.
+- Do not add a second publication eligibility function.
+- Do not couple English publication to Chinese or synthesize missing English.
+- Do not activate routes, migrate content, move images, or promote a database in this bundle.
+- Do not loosen strict issues or tests to accept unverified real content.
+- Do not add a remote, push, merge `main`, tag, release, or deploy.
 
 ## Rollback
 
-Stage 0 changes documentation only. Before integration, omit the Stage-00 branch. After local integration, revert the Stage-00 documentation commits with ordinary revert commits if the design is rejected. Do not reset, rewrite history, delete unrelated work, or alter the baseline.
+Before integration, omit the bundle. After local integration, use ordinary revert commits for the Stage-01 commits in reverse order, then rerun all gates. Do not reset, rewrite history, delete Stage-00 documents, or remove unrelated compatibility files.

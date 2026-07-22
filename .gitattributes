@@ -3,4 +3,6 @@
 /package*.json text eol=lf
 /.gitignore text eol=lf
 /eslint.config.mjs text eol=lf
+/docs/content-workbench/** text eol=lf
+/delivery/** text eol=lf
 /.gitattributes text eol=lf
