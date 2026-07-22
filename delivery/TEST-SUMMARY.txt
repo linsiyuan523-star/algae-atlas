@@ -1,11 +1,11 @@
-Stage: Stage-01
+Stage: Stage-02
 Status: PASS; ready for final documentation commit and post-commit bundle verification
 ValidatedAt: 2026-07-22
-Branch: local/stage-01-schema
-BaselineCommit: 6dc2e71f4eaf45fca22ef351b14535d7782583b4
-ImplementationCommit: ede1d861f853e12086fb275f0e15b8c5618e0953
+Branch: local/stage-02-content-loader
+BaselineCommit: 050a87dbd6330270e6b47b6f74acd071a85c5fcd
+ImplementationCommit: 90bbaaf7d4ade0a12d4aa3bf6cd9c2919676488c
 FinalCommit: BRANCH_TIP_AT_DELIVERY (exact SHA in external USB copy)
-PredecessorBundleSha256: 5E6F79AF71AD3DF029B87772DA4C6A74B88C083326472056B50616DBFAB1BC31
+PredecessorBundleSha256: 74A7668B6C8F22BF8E953B038A7D909A3784013A713C4195D0258E031B8DBFF9
 
 Environment:
 - Git: 2.55.0.windows.2
@@ -13,38 +13,45 @@ Environment:
 - npm: 10.9.8
 - PowerShell: 5.1.19041.6456
 - TypeScript: 5.9.3
-- Zod: 4.4.3 exact
-- Vite browser-contract target: 8.0.13
+- Next.js: 16.2.6
+- Vite/vinext target: 8.0.13
 
-Dependency installation:
+Dependency and predecessor verification:
+- Stage-01 bundle SHA-256: PASS
+- Stage-01 bundle head equals baseline commit: PASS
 - npm.cmd ci --offline --ignore-scripts: PASS
 - Installed: 509 packages; audited: 511 packages; vulnerabilities: 0
 - Informational warnings: two known deprecated transitive @esbuild-kit packages; no unrelated upgrade performed
 
-Stage-01 focused validation:
+Stage-02 focused validation:
 - npm.cmd run check: PASS, no warnings
-- npm.cmd run test:schema: PASS (58 tests, 0 failures)
-- npm.cmd run test:schema:browser: PASS (94 modules transformed; browser-target ES module executed)
-- npm.cmd run content:validate -- packages/content-schema/fixtures/example-science-article/record.json: PASS
-- Every one of 11 content types: valid fixture PASS; invalid dedicated-field fixture rejected with field path
-- Chinese published + English missing: PASS
-- English published with incomplete body/review/time/human verification: rejected as expected
-- Workflow transition matrix: PASS
-- Duplicate stable ID, wrong-type/broken reference, reviewer resolution, URL collision, media rights/consent, and unexpected en.md tests: PASS
-- Markdown raw HTML/MDX/unsafe protocol/path tests: PASS
-- Deterministic serialization and schema migration harness: PASS
+- npm.cmd run check:content-loader: PASS
+- npm.cmd run test:content-loader: PASS (10 tests, 0 failures)
+- File discovery/snapshot/filter/sort tests: PASS
+- Formal content directory excludes fictional fixtures: PASS
+- Unexpected English Markdown, directory-ID mismatch, BOM/CRLF, unsafe-path-relative diagnostics: PASS
+- Whole-type source selection with no per-ID legacy blend: PASS
+- Chinese-only static params, 404 lookup, canonical/alternates, sitemap, and English-section language fallback: PASS
+- Bilingual detail language switch: PASS
+- Structured-record and legacy-record rendering: PASS
 
 Repository regression validation:
 - npm.cmd test: PASS
-- Stage-01 Node tests: 58 passed
-- Browser-compatible target: PASS
+- Stage-01 schema tests: 58 passed
+- Browser-compatible schema target: PASS (94 modules transformed; generated ES module executed)
+- Stage-02 content repository tests: 10 passed
+- vinext compatibility build: PASS
 - Existing rendered-site tests: 25 passed
 - Existing IndexNow tests: 1 passed
 - npm.cmd run build:next: PASS (97 static pages)
-- Protected app/components/lib/public/db/drizzle/worker/.openai/build/runtime diff: empty
-- Website read path changed: no
-- Public page output intentionally changed: no
+- Existing real detail records in default repository: 24, all legacy, all bilingual
+- Website public output regression suite: PASS
 - Worker Git remote: empty
 
+Environment retry disclosure:
+- First sandboxed npm.cmd test attempt: stopped at node_modules/.vite-temp with EPERM because the sandbox could not write the worktree temporary directory.
+- Approved rerun of the identical npm.cmd test command: PASS in full.
+- Classification: execution permission retry; no code assertion, build, rendered-page, or IndexNow failure.
+
 Post-final-commit delivery checks:
-- Final clean Git status, changed-file allowlist, strict UTF-8/LF, secret scan, git diff check, exact final SHA, bundle verify, bundle SHA-256, USB copy hash, and USB bundle verify are written into the external USB TEST-SUMMARY.txt/MANIFEST.txt after bundle creation.
+- Final clean Git status, changed-file allowlist, strict UTF-8/LF, secret scan, git diff check, exact final SHA, bundle verify, bundle SHA-256, local-copy hash, USB-copy hash, and USB bundle verify will be written into the external TEST-SUMMARY.txt/MANIFEST.txt after bundle creation.

@@ -4,7 +4,7 @@
 
 Publish only information that the team has confirmed for public use. When a member, output, project, event, contact detail, capability or procedure is not verified, preserve the explicit pending state instead of inventing a plausible value.
 
-Every public content change must update Chinese and English together.
+Chinese is required and may be published independently. English is optional and is evaluated independently; never block valid Chinese publication or synthesize published English. When both locales are public, keep their factual claims aligned.
 
 ## Maintenance map
 
@@ -21,6 +21,24 @@ Every public content change must update Chinese and English together.
 | Algae Atlas and public articles | `lib/site-data.ts` | Scientific name, habitat, bilingual text, source |
 | Navigation and brand | `lib/site-data.ts` | Header, footer, language paths and route tests |
 | Images and credits | `public/images/`, `imageCredits` | Author/provider, source URL, licence, usage scope |
+
+The table above remains the production source map while every collection selects `legacy`. Stage-03 may switch a complete reviewed collection to repository records; it must not mix both sources by ID.
+
+## Structured repository workflow
+
+Structured content uses the fixed Stage-01/02 layout:
+
+~~~text
+content/records/<content-type>/<stable-id>/record.json
+content/records/<content-type>/<stable-id>/zh.md
+content/records/<content-type>/<stable-id>/en.md
+content/authors/<stable-id>.json
+content/media/<stable-id>.json
+~~~
+
+Use stable lowercase English IDs. Save every JSON and Markdown file as UTF-8 without BOM, LF only, with a final newline. The full repository graph must pass the shared schema, Markdown, author/media, review, reference, and per-locale publication rules before the website reads it.
+
+Do not copy fictional fixtures from `tests/fixtures/` into `content/`. See `docs/content-workbench/CONTENT-LOADER.md` for source selection, locale routing, metadata, sitemap, renderer, rollback, and validation details.
 
 ## Review metadata
 
@@ -78,6 +96,8 @@ Do not copy images from search results or remove a “usage scope pending confir
 After a content change:
 
 ```bash
+npm run check:content-loader
+npm run test:content-loader
 npm run check
 npm test
 npm run build:next

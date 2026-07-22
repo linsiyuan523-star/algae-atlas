@@ -1,11 +1,11 @@
-Stage=Stage-01
-Name=Shared Content Model and Validation Rules
+Stage=Stage-02
+Name=Website Content Loader
 Status=READY_FOR_POST_COMMIT_BUNDLE
-Branch=local/stage-01-schema
-BaselineCommit=6dc2e71f4eaf45fca22ef351b14535d7782583b4
-PredecessorBundle=stage-00-design-v1.bundle
-PredecessorBundleSha256=5E6F79AF71AD3DF029B87772DA4C6A74B88C083326472056B50616DBFAB1BC31
-ImplementationCommit=ede1d861f853e12086fb275f0e15b8c5618e0953
+Branch=local/stage-02-content-loader
+BaselineCommit=050a87dbd6330270e6b47b6f74acd071a85c5fcd
+PredecessorBundle=stage-01-schema-v1.bundle
+PredecessorBundleSha256=74A7668B6C8F22BF8E953B038A7D909A3784013A713C4195D0258E031B8DBFF9
+ImplementationCommit=90bbaaf7d4ade0a12d4aa3bf6cd9c2919676488c
 FinalCommit=BRANCH_TIP_AT_DELIVERY
 FinalCommitResolution=Exact SHA will be written to the external USB manifest and verified bundle heads after the final commit
 ContentSchemaVersion=1
@@ -14,20 +14,20 @@ DesktopCommandApiVersion=1
 MediaMetadataVersion=1
 GitPublishPlanVersion=1
 MigrationLedgerVersion=1
-SchemaPackage=@algae-atlas/content-schema
-ValidationDependency=zod@4.4.3
 ContentTypeCount=11
-NodeSchemaTestCount=58
+RealCollectionSource=legacy
+RealLegacyDetailRecordCount=24
+ContentLoaderTestCount=10
 ExistingRenderedTestCount=25
 ExistingIndexNowTestCount=1
 NextStaticPageCount=97
-BundleName=stage-01-schema-v1.bundle
+BundleName=stage-02-content-loader-v1.bundle
 BundleSha256=TO_BE_GENERATED_AFTER_FINAL_COMMIT
-ExpectedUsbDirectory=E:\stage-01-schema
+ExpectedUsbDirectory=E:\stage-02-content-loader
 RepositoryFiles=See delivery/CHANGED-FILES.txt
 ExternalArtifacts:
-stage-01-schema-v1.bundle
-stage-01-schema-v1.bundle.sha256.txt
+stage-02-content-loader-v1.bundle
+stage-02-content-loader-v1.bundle.sha256.txt
 HANDOFF.md
 MANIFEST.txt
 TEST-SUMMARY.txt

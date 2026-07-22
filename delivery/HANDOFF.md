@@ -1,61 +1,65 @@
-# Stage 1 Delivery Handoff
+# Stage 2 Delivery Handoff
 
-Status: PASS, ready for post-final-commit bundle creation.
-Stage: Stage-01 — Shared Content Model and Validation Rules
-Branch: `local/stage-01-schema`
-Baseline / predecessor final commit: `6dc2e71f4eaf45fca22ef351b14535d7782583b4`
-Predecessor bundle: `stage-00-design-v1.bundle`
-Predecessor SHA-256: `5E6F79AF71AD3DF029B87772DA4C6A74B88C083326472056B50616DBFAB1BC31`
-Implementation tip before delivery docs: `ede1d861f853e12086fb275f0e15b8c5618e0953`
-Final commit SHA: exact branch tip in the external USB `MANIFEST.txt` and verified bundle head.
+Status: PASS, ready for the final documentation commit and post-commit bundle creation.
+
+Stage: Stage-02 — Website Content Loader
+Branch: `local/stage-02-content-loader`
+Baseline / Stage-01 final commit: `050a87dbd6330270e6b47b6f74acd071a85c5fcd`
+Predecessor bundle: `stage-01-schema-v1.bundle`
+Predecessor SHA-256: `74A7668B6C8F22BF8E953B038A7D909A3784013A713C4195D0258E031B8DBFF9`
+Implementation tip before delivery docs: `90bbaaf7d4ade0a12d4aa3bf6cd9c2919676488c`
+Final commit SHA: exact branch tip will be written to the external USB `MANIFEST.txt` and verified bundle head after this committed handoff is finalized.
 
 ## Goal and result
 
-Stage-01 implemented one strict, environment-neutral, version 1 TypeScript/Zod contract shared by later website and Tauri stages. It includes 11 content types, locale/review workflow, author/media/source/license models, field registry, defaults, publication eligibility, repository snapshot validation, safe Markdown, deterministic serialization, migration harness, CLI, fictional fixtures, Node tests, and a browser-compatible contract.
+Stage-02 implemented the fail-closed website filesystem reader, legacy and repository adapters, exhaustive per-type source router, public repository/availability API, locale-aware route/metadata/static-param/language-switch/sitemap integration, and a safe structured Markdown renderer.
 
-The website still reads the same legacy TypeScript data. No page, route, content, image, database, Worker, hosting, deployment, remote, or production state changed.
+All 11 real collection selectors remain explicitly `legacy`. No real records were migrated, and the existing public page content remains equivalent. Fictional Chinese-only and bilingual records exist only in test fixtures.
 
 ## Important decisions
 
-- Per-locale state is canonical: `locales.zh` is required; `locales.en` may be `missing`.
-- Version 1 states are `missing` (English only), `draft`, `internal-review`, `approved`, `published`, and `archived`. `withdrawn` requires a future explicit versioned amendment.
-- All 11 Stage-00 type IDs are present, including fixed-ID `research-profile`.
-- `zod@4.4.3` is exact and shared; consumers must not copy validation policy.
-- Repository/platform I/O stays outside the schema core.
-- `contentTypeRegistry` is form metadata, not route-creation authority.
+- Stage-01 `record.json` and schema version 1 remain canonical.
+- The loader accepts only regular repository files encoded as UTF-8 without BOM, LF only, with a final newline; it rejects unsafe paths and validates the full snapshot.
+- Publication eligibility is imported from `@algae-atlas/content-schema` and evaluated independently by locale.
+- Source choice applies to a whole content type and never silently blends records with legacy entries by ID.
+- Chinese-only publication creates no English detail, alternate, static param, or sitemap URL; its language switch returns to the English section landing.
+- Content cannot create route families, navigation, footer entries, or renderers.
 
 ## Validation
 
-- Offline lock install: PASS (509 packages, 0 vulnerabilities).
+- Offline dependency install: PASS (509 packages, 0 vulnerabilities).
 - `npm.cmd run check`: PASS, no warnings.
-- `npm.cmd test`: PASS (58 Stage-01 Node tests; browser bundle/ES-module execution; 25 existing rendered tests; 1 existing IndexNow test).
+- `npm.cmd run test:content-loader`: PASS (10 tests).
+- `npm.cmd test`: PASS (58 schema tests; browser contract; 10 content-loader/source/route/render tests; 25 existing rendered tests; 1 IndexNow test).
 - `npm.cmd run build:next`: PASS (97 static pages).
-- Example CLI fixture: PASS.
-- Protected website/page/content/image/runtime diff: empty.
-- Worker remote: empty.
+- Existing 24 real detail records: all legacy and bilingual in the default repository.
+- Worker remote: empty; no network, remote, production, release, or deployment action.
+
+One initial sandboxed `npm.cmd test` attempt stopped at Vite's temporary-directory write with `EPERM`. The approved rerun of the identical command passed; this is recorded as an environment permission retry, not a test failure.
 
 ## Modified files
 
-See `delivery/CHANGED-FILES.txt`. Primary areas are `packages/content-schema/`, `scripts/validate-content.ts`, root workspace/check/test configuration, `docs/content-workbench/SCHEMA-USAGE.md`, and delivery handoff files.
+See `delivery/CHANGED-FILES.txt`. Primary areas are `content/`, `lib/content-repository/`, the localized catch-all page, sitemap, language switch, structured renderer, content fixtures/tests, authoring docs, and delivery files.
 
 ## Not completed / known limits
 
-- No website loader, content migration, desktop UI, media byte processing, Git publisher, database, route change, or deployment.
-- No real content records or real personal/partner/site/permission data.
-- Stage-02 owns snapshot construction; Stage-04 owns desktop consumption; Stage-05B owns privileged media/path operations.
+- No real record, author, media, or collection migration.
+- No desktop editor, preview, media-byte processing, Git publisher, database change, remote operation, deployment, or production change.
+- Stage-03 owns migration evidence and explicit real collection source switches.
+- Non-registered content types need separately reviewed, code-owned page integration.
 
 ## Integration order
 
-Import after Stage-00 and before Stage-02/04. Verify the bundle/hash/head, run `npm.cmd ci`, `npm.cmd run check`, `npm.cmd test`, and `npm.cmd run build:next`, then branch consumers from the tested integrated tip. Resolve package/config conflicts in prerequisite order, never by wholesale ours/theirs selection.
+Import after the exact Stage-01 tip and before Stage-03/06 consumers. Verify bundle/hash/head, run offline install, check, full tests, and native Next build. Resolve shared files line by line; never choose wholesale ours/theirs versions.
 
 ## Next executor's first step
 
-Read `docs/content-workbench/SCHEMA-USAGE.md`, import the package, and consume `parseRecord`, `validateRepository`, `publicationEligibility`, and `contentTypeRegistry`; do not write a parallel validator.
+Read `docs/content-workbench/CONTENT-LOADER.md`. For Stage-03, migrate one reviewed collection with parity evidence, load it through the file-backed repository, and change only that collection's explicit selector.
 
 ## Do not repeat
 
-Do not reimplement schema/workflow policy, add `withdrawn` ad hoc, duplicate types, couple locales, activate routes, migrate legacy content, move images, add a remote, push, merge main, tag, release, or deploy.
+Do not copy schema/publication rules, blend sources by ID, publish fixtures, invent facts, couple locales, create routes from data, delete compatibility structures, add a remote, push, merge main, tag, release, deploy, or connect to production.
 
 ## Rollback
 
-Omit the bundle before integration, or revert the Stage-01 commits with ordinary revert commits after integration and rerun all gates. Never reset or clean unrelated work.
+Omit the bundle before integration, or revert Stage-02 commits with ordinary revert commits and rerun all gates. Later migrated collections first roll back through their explicit selector; never reset or clean unrelated work.
