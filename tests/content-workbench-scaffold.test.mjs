@@ -52,7 +52,6 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   assert.equal(workspacePackage.private, true);
 
   const expectedDependencies = {
-    "@algae-atlas/content-schema": "1.0.0",
     "@tauri-apps/api": "2.11.1",
     "lucide-react": "1.25.0",
     react: "19.2.6",

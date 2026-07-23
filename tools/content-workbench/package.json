@@ -19,7 +19,6 @@
     "rust:test": "cargo +1.97.1 test --locked --manifest-path src-tauri/Cargo.toml --all-targets"
   },
   "dependencies": {
-    "@algae-atlas/content-schema": "1.0.0",
     "@tauri-apps/api": "2.11.1",
     "lucide-react": "1.25.0",
     "react": "19.2.6",

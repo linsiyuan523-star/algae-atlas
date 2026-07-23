@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Algae Atlas Content Workbench",
+  "productName": "藻类团队内容发布工作台",
   "version": "0.1.0",
   "identifier": "icu.sycszy.content-workbench",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Algae Atlas Content Workbench",
+        "title": "藻类团队内容发布工作台",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
