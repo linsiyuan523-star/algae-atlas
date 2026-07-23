@@ -1,47 +1,47 @@
-# Stage 4D Delivery Handoff
+# Stage 4E Delivery Handoff
 
-Stage: Stage-04D - Autosave and Interrupted-session Recovery
-Branch: `local/stage-04d-autosave-recovery`
-Start commit: `f50819f0533e166ccc8b72b7153972a8ba981cdd`
-Feature commit: `83f1cb9539a5d9d5f2c043265575ac4e1744bdac`
-End commit: `BRANCH_TIP_AT_DELIVERY` (the commit containing this record)
+- Stage: Stage-04E - Shared Schema Integration and Stage 4 Checkpoint
+- Branch: `local/stage-04e-schema-integration`
+- Start commit: `fe980a1adba3be255a6ebc540986c22224d08c82`
+- Feature commit: `ed275aeada2c3b8e140ff108c217f2850b5cd832`
+- End commit: `BRANCH_TIP_AT_DELIVERY` (the commit containing this record)
 
 ## Completed
 
-- 700 ms debounced autosave with manual save/retry and visible waiting, saving, saved, and failed states.
-- Dirty-draft close confirmation through Tauri close requests and a browser fallback.
-- Startup session marker, normal-exit cleanup, and one-time recovery of the latest valid draft after interruption.
-- StrictMode-safe recovery delivery.
-- Central format-version migration dispatch.
-- Corrupt JSON isolation under `drafts/v1/quarantine` while valid drafts and atomic replacement remain intact.
-- Rust and React coverage across the complete Stage-04D boundary.
+- Shared registry-backed 11-type selector with bilingual labels.
+- Shared default factory, stable ID validation, Chinese title, and field-level error handling.
+- Schema v1 recorded inside an opaque shared `recordDraft` envelope.
+- Draft format v2 persistence with read compatibility and save-time migration for v1 drafts.
+- Future Schema/envelope versions fail closed without silent overwrite.
+- Stage 4B navigation and Stage 4D save/recovery behavior retained.
+- Stage 4 desktop checkpoint verified on Windows.
 
 ## Not Completed
 
-- No multi-window sync, journal, history, cloud sync, encryption, search, shared Schema, typed forms, media, preview, repository export, Git, network, packaging, remote, merge, or deployment behavior.
-- Complete website tests, root production build, and native Tauri smoke were not run.
+- No dynamic type-specific forms, body/English/media editing, preview, export, Git, remote, installer, merge, or deployment.
+- Website-wide checks were not run because shared package source and website behavior were unchanged.
 
 ## Test Summary
 
-- Offline locked npm install: PASS; 601 packages, 0 vulnerabilities.
-- Frontend tests: PASS; 3 files, 7 tests.
-- Rust tests: PASS; 7 tests.
-- Desktop TypeScript/ESLint check: PASS.
-- Cargo check, format check, and Clippy with warnings denied: PASS.
-- Git whitespace check: PASS.
+- Offline npm install: PASS; 601 packages, 0 vulnerabilities.
+- Frontend: PASS; 5 files, 15 tests; TypeScript/ESLint and production build passed.
+- Scaffold contract: PASS; 1 test.
+- Rust: PASS; 8 tests; check, format, and Clippy passed.
+- Native Tauri smoke: PASS with isolated app-data and clean session shutdown.
+- Responsive layout and Git whitespace checks: PASS.
 
 ## Known Issues
 
-- ESLint emits a non-fatal missing Next.js `pages` directory notice for the Vite desktop workspace.
-- Native window smoke was outside this stage's test boundary.
+- ESLint retains the non-fatal missing Next.js `pages` informational message.
+- Standalone Vite lacks Tauri IPC; the supported native runtime passed.
 
 ## Next Stage Exact Start
 
-- Use the clean Stage-04D delivery tip or verified Stage-04D bundle.
-- Next instruction: `18_Stage4E_共享Schema接入与检查点.md`.
+- Use the clean Stage-04E delivery tip or verified bundle.
+- Next instruction: `19_Stage5A1_动态表单引擎试点.md`.
 
 ## Do Not Repeat
 
-- Do not use Vitest fake timers for the current `user-event` autosave test; use the real debounce interval.
-- Preserve StrictMode-safe recovery caching and mounted-state reset.
-- Preserve UUID/path validation, corrupt-file quarantine, and atomic replacement.
+- Do not full-parse intentionally incomplete shared defaults.
+- Do not duplicate shared type/default/validation rules or inspect nested records in Rust.
+- Do not overwrite unsupported future versions.
