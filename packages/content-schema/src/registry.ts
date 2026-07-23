@@ -158,7 +158,24 @@ const teamNewsFields = {
     field("eventDate", "shared.eventDate", "事件日期", "Event date", "date", "always"),
     field("endDate", "shared.endDate", "结束日期", "End date", "date", "optional"),
     field("locationLabel", "shared.locationLabel", "地点", "Location", "group", "optional"),
-    field("category", "shared.category", "活动类型", "Activity type", "enum", "always"),
+    field(
+      "category",
+      "shared.category",
+      "活动类型",
+      "Activity type",
+      "enum",
+      "always",
+      {
+        options: [
+          "research",
+          "teaching",
+          "fieldwork",
+          "meeting",
+          "student-research",
+          "other",
+        ],
+      },
+    ),
     field(
       "participantAuthorIds",
       "shared.participantAuthorIds",
@@ -168,6 +185,15 @@ const teamNewsFields = {
       "optional",
     ),
     field("sources", "shared.sources", "新闻来源", "News sources", "reference-list", "published-locale"),
+    field(
+      "disclosureStatus",
+      "shared.disclosureStatus",
+      "公开确认",
+      "Disclosure status",
+      "enum",
+      "always",
+      { options: ["pending", "approved"] },
+    ),
   ],
   localized: [
     field(

@@ -8,6 +8,10 @@ import {
   createSharedRecordDraft,
   inspectRecordDraft,
 } from "../schema-drafts";
+import {
+  emptyTeamNewsFormValues,
+  validateTeamNewsRecordDraft,
+} from "../forms/team-news";
 
 function makeDraft(titleZh = "初始标题"): Draft {
   const prepared = createSharedRecordDraft(
@@ -21,10 +25,20 @@ function makeDraft(titleZh = "初始标题"): Draft {
   if (!prepared.success) {
     throw new Error("test draft must be valid");
   }
+  const completed = validateTeamNewsRecordDraft(prepared.recordDraft, {
+    ...emptyTeamNewsFormValues(),
+    summaryZh: "仅用于组件测试的虚构摘要。",
+    eventDate: "2026-07-23",
+    category: "research",
+    disclosureStatus: "pending",
+  });
+  if (!completed.success) {
+    throw new Error("test team-news form must be valid");
+  }
   return {
     formatVersion: 2,
     draftId: "11111111-1111-4111-8111-111111111111",
-    recordDraft: prepared.recordDraft,
+    recordDraft: completed.recordDraft,
     createdAt: "2026-07-23T08:00:00Z",
     updatedAt: "2026-07-23T08:00:00Z",
   };
@@ -116,6 +130,45 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
   expect(window.confirm).toHaveBeenCalledWith("确定删除“虚构文章”？");
   expect(api.deleteDraft).toHaveBeenCalledWith(draft.draftId);
   expect(await screen.findByText("目前没有草稿。")).toBeVisible();
+});
+
+test("validates and serializes the team-news pilot before saving", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  render(<DraftsPage api={api} initialDraft={draft} />);
+
+  expect(screen.getByRole("heading", { name: "团队动态字段" })).toBeVisible();
+  expect(screen.getByLabelText("团队动态字段只读结构")).toHaveTextContent(
+    '"shared.eventDate": "2026-07-23"',
+  );
+
+  await user.clear(screen.getByLabelText(/事件日期/));
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+  expect(api.saveDraft).not.toHaveBeenCalled();
+  expect(screen.getByText("事件日期不能为空。")).toBeVisible();
+
+  await user.type(screen.getByLabelText(/事件日期/), "2026-07-25");
+  await user.clear(screen.getByLabelText(/中文摘要/));
+  await user.type(screen.getByLabelText(/中文摘要/), "更新后的虚构摘要。");
+  await user.click(screen.getByLabelText("精选内容"));
+  await user.type(screen.getByLabelText("负责作者稳定 ID"), "fictional-author");
+  await user.type(screen.getByLabelText("主要来源标题"), "虚构来源");
+  await user.type(
+    screen.getByLabelText("主要来源链接"),
+    "https://example.invalid/news",
+  );
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0].recordDraft).toMatchObject({
+    authors: ["fictional-author"],
+    shared: {
+      eventDate: "2026-07-25",
+      pinned: true,
+      sources: [{ href: "https://example.invalid/news" }],
+    },
+    locales: { zh: { summary: "更新后的虚构摘要。" } },
+  });
 });
 
 test("debounces autosave, reports progress and failure, and warns while dirty", async () => {

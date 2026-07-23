@@ -175,6 +175,23 @@ test("字段注册表覆盖基础字段和全部内容类型", () => {
     );
     assert.doesNotThrow(() => JSON.stringify(definition));
   }
+
+  const teamNewsFields = getFieldRegistry("team-news").shared;
+  assert.deepEqual(
+    teamNewsFields.find((field) => field.key === "category")?.options,
+    [
+      "research",
+      "teaching",
+      "fieldwork",
+      "meeting",
+      "student-research",
+      "other",
+    ],
+  );
+  assert.deepEqual(
+    teamNewsFields.find((field) => field.key === "disclosureStatus")?.options,
+    ["pending", "approved"],
+  );
 });
 
 test("草稿默认值区分中文草稿和英文缺失", () => {

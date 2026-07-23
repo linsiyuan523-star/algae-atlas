@@ -15,6 +15,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { inspectDraft } from "../drafts";
 import type { Draft, DraftApi } from "../drafts";
+import { sameFormValues } from "../forms/form-engine";
+import type { FormErrors, FormValue } from "../forms/form-engine";
+import {
+  inspectTeamNewsForm,
+  teamNewsFormSchema,
+  validateTeamNewsRecordDraft,
+} from "../forms/team-news";
+import type { TeamNewsFormValues } from "../forms/team-news";
 import {
   contentTypeLabel,
   contentTypeOptions,
@@ -26,6 +34,7 @@ import type {
   DraftFieldErrors,
   DraftFields,
 } from "../schema-drafts";
+import { SchemaForm } from "./SchemaForm";
 
 type NewDraftPageProps = {
   api: DraftApi;
@@ -319,23 +328,37 @@ type DraftEditorProps = {
   onDeleted: (draftId: string) => void;
 };
 
+type EditorInput = {
+  fields: DraftFields;
+  teamNews: TeamNewsFormValues;
+};
+
 function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   const initialInspection = inspectDraft(draft);
-  const initialFields = initialInspection.fields;
-  const [fields, setFields] = useState<DraftFields>(initialFields);
-  const [savedFields, setSavedFields] = useState<DraftFields>(initialFields);
+  const initialTeamNewsInspection = inspectTeamNewsForm(draft.recordDraft);
+  const initialInput: EditorInput = {
+    fields: initialInspection.fields,
+    teamNews: initialTeamNewsInspection.values,
+  };
+  const [editorInput, setEditorInput] = useState<EditorInput>(initialInput);
+  const [savedInput, setSavedInput] = useState<EditorInput>(initialInput);
   const [fieldErrors, setFieldErrors] = useState<DraftFieldErrors>(
     initialInspection.errors,
+  );
+  const [teamNewsErrors, setTeamNewsErrors] = useState<FormErrors>(
+    initialInspection.fields.contentType === "team-news"
+      ? initialTeamNewsInspection.errors
+      : {},
   );
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"delete" | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const fieldsRef = useRef(fields);
+  const editorInputRef = useRef(editorInput);
   const recordDraftRef = useRef(draft.recordDraft);
   const saveInFlightRef = useRef(false);
   const mountedRef = useRef(true);
-  const isDirty = !sameSaveInput(fields, savedFields);
+  const isDirty = !sameEditorInput(editorInput, savedInput);
   useUnsavedCloseWarning(isDirty || saveStatus === "saving");
 
   useEffect(() => {
@@ -350,14 +373,14 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   }, [draft.recordDraft]);
 
   const persist = useCallback(
-    async (snapshot: DraftFields) => {
+    async (snapshot: EditorInput) => {
       if (saveInFlightRef.current) {
         return;
       }
 
       const prepared = updateSharedRecordDraft(
         recordDraftRef.current,
-        snapshot,
+        snapshot.fields,
         new Date().toISOString(),
       );
       if (!prepared.success) {
@@ -367,25 +390,56 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         return;
       }
 
+      let nextRecordDraft = prepared.recordDraft;
+      if (snapshot.fields.contentType === "team-news") {
+        const teamNewsPrepared = validateTeamNewsRecordDraft(
+          nextRecordDraft,
+          snapshot.teamNews,
+        );
+        if (!teamNewsPrepared.success) {
+          setTeamNewsErrors(teamNewsPrepared.errors);
+          setSaveError("请修正标出的字段后重试。");
+          setSaveStatus("failed");
+          return;
+        }
+        nextRecordDraft = teamNewsPrepared.recordDraft;
+      }
+
       saveInFlightRef.current = true;
       setSaveStatus("saving");
       setSaveError(null);
       try {
         const saved = await api.saveDraft({
           draftId: draft.draftId,
-          recordDraft: prepared.recordDraft,
+          recordDraft: nextRecordDraft,
         });
-        const persistedFields = inspectDraft(saved).fields;
+        const persistedInspection = inspectDraft(saved);
+        const persistedTeamNews = inspectTeamNewsForm(saved.recordDraft);
+        const persistedInput: EditorInput = {
+          fields: persistedInspection.fields,
+          teamNews: persistedTeamNews.values,
+        };
         if (!mountedRef.current) {
           return;
         }
-        setSavedFields(persistedFields);
-        setFieldErrors({});
+        const unchangedDuringSave = sameEditorInput(
+          editorInputRef.current,
+          snapshot,
+        );
+        if (unchangedDuringSave) {
+          editorInputRef.current = persistedInput;
+          setEditorInput(persistedInput);
+        }
+        setSavedInput(persistedInput);
+        setFieldErrors(persistedInspection.errors);
+        setTeamNewsErrors(
+          persistedInput.fields.contentType === "team-news"
+            ? persistedTeamNews.errors
+            : {},
+        );
         recordDraftRef.current = saved.recordDraft;
         onSaved(saved);
-        setSaveStatus(
-          sameSaveInput(fieldsRef.current, persistedFields) ? "saved" : "pending",
-        );
+        setSaveStatus(unchangedDuringSave ? "saved" : "pending");
       } catch (caught) {
         if (mountedRef.current) {
           setSaveError(describeError(caught));
@@ -403,34 +457,61 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       return;
     }
 
-    const snapshot = fields;
+    const snapshot = editorInput;
     const timer = window.setTimeout(() => {
       void persist(snapshot);
     }, AUTOSAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [fields, pendingAction, persist, saveStatus]);
+  }, [editorInput, pendingAction, persist, saveStatus]);
 
   function updateField(field: keyof DraftFields, value: string) {
-    const next = { ...fields, [field]: value };
-    fieldsRef.current = next;
-    setFields(next);
+    const next: EditorInput = {
+      ...editorInput,
+      fields: { ...editorInput.fields, [field]: value },
+    };
+    editorInputRef.current = next;
+    setEditorInput(next);
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
+    if (field === "contentType") {
+      setTeamNewsErrors({});
+    }
     setSaveError(null);
     setSaveStatus((current) => {
       if (current === "saving") {
         return current;
       }
-      return sameSaveInput(next, savedFields) ? "saved" : "pending";
+      return sameEditorInput(next, savedInput) ? "saved" : "pending";
+    });
+  }
+
+  function updateTeamNewsField(fieldId: string, value: FormValue) {
+    const next: EditorInput = {
+      ...editorInput,
+      teamNews: { ...editorInput.teamNews, [fieldId]: value },
+    };
+    editorInputRef.current = next;
+    setEditorInput(next);
+    setTeamNewsErrors((current) => ({
+      ...current,
+      [fieldId]: undefined,
+      $form: undefined,
+    }));
+    setSaveError(null);
+    setSaveStatus((current) => {
+      if (current === "saving") {
+        return current;
+      }
+      return sameEditorInput(next, savedInput) ? "saved" : "pending";
     });
   }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await persist(fieldsRef.current);
+    await persist(editorInputRef.current);
   }
 
   async function handleDelete() {
-    const title = fields.titleZh.trim() || "未命名草稿";
+    const title = editorInput.fields.titleZh.trim() || "未命名草稿";
     if (!window.confirm(`确定删除“${title}”？`)) {
       return;
     }
@@ -448,6 +529,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   }
 
   const isBusy = pendingAction !== null || saveStatus === "saving";
+  const fields = editorInput.fields;
 
   return (
     <form className="draft-editor" onSubmit={(event) => void handleSave(event)}>
@@ -522,6 +604,16 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       </div>
 
       <FieldError id="draft-schema-version-error" message={fieldErrors.schemaVersion} />
+
+      {fields.contentType === "team-news" ? (
+        <SchemaForm
+          schema={teamNewsFormSchema}
+          values={editorInput.teamNews}
+          errors={teamNewsErrors}
+          disabled={isBusy}
+          onChange={updateTeamNewsField}
+        />
+      ) : null}
 
       <dl className="draft-metadata">
         <div>
@@ -644,6 +736,19 @@ function sameSaveInput(left: DraftFields, right: DraftFields) {
     left.stableId === right.stableId &&
     left.titleZh === right.titleZh
   );
+}
+
+function sameEditorInput(left: EditorInput, right: EditorInput) {
+  if (!sameSaveInput(left.fields, right.fields)) {
+    return false;
+  }
+  if (
+    left.fields.contentType !== "team-news" &&
+    right.fields.contentType !== "team-news"
+  ) {
+    return true;
+  }
+  return sameFormValues(teamNewsFormSchema, left.teamNews, right.teamNews);
 }
 
 function FieldError({ id, message }: { id: string; message?: string }) {
