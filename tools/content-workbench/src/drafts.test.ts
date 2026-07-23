@@ -31,7 +31,8 @@ describe("stored draft compatibility", () => {
   test("surfaces invalid record identity as field errors without throwing", () => {
     const current = normalizeStoredDraft({
       ...envelope,
-      formatVersion: 2,
+      formatVersion: 3,
+      bodyZh: "## 正文\n",
       recordDraft: {
         schemaVersion: 7,
         id: "Bad ID",
@@ -46,13 +47,24 @@ describe("stored draft compatibility", () => {
       titleZh: "中文标题不能为空。",
       schemaVersion: "仅支持 Schema v1。",
     });
+    expect(current.bodyZh).toBe("## 正文\n");
+  });
+
+  test("opens format-two drafts with an empty Chinese body", () => {
+    const previous = normalizeStoredDraft({
+      ...envelope,
+      formatVersion: 2,
+      recordDraft: {},
+    });
+
+    expect(previous.bodyZh).toBe("");
   });
 
   test("rejects unsupported envelope versions", () => {
     expect(() =>
       normalizeStoredDraft({
         ...envelope,
-        formatVersion: 3,
+        formatVersion: 4,
         recordDraft: {},
       }),
     ).toThrow("草稿格式版本不受支持。");

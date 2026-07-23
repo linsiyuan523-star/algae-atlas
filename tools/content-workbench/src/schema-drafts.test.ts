@@ -4,6 +4,7 @@ import {
   contentTypeOptions,
   createSharedRecordDraft,
   inspectRecordDraft,
+  updateChineseBodyReference,
   updateSharedRecordDraft,
   validateDraftFields,
 } from "./schema-drafts";
@@ -97,5 +98,36 @@ describe("shared schema draft adapter", () => {
       success: false,
       errors: { schemaVersion: "仅支持 Schema v1，不会覆盖其他版本。" },
     });
+  });
+
+  test("tracks the Chinese Markdown body file only when the body has content", () => {
+    const initial = createSharedRecordDraft(
+      {
+        contentType: "science-article",
+        stableId: "fictional-article",
+        titleZh: "虚构文章",
+      },
+      now,
+    );
+    if (!initial.success) {
+      throw new Error("test draft must be valid");
+    }
+
+    const withBody = updateChineseBodyReference(
+      initial.recordDraft,
+      "## 正文\n",
+    );
+    const withBodyLocales = withBody.locales as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(withBodyLocales.zh.bodyFile).toBe("zh.md");
+
+    const withoutBody = updateChineseBodyReference(withBody, "");
+    const withoutBodyLocales = withoutBody.locales as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(withoutBodyLocales.zh).not.toHaveProperty("bodyFile");
   });
 });

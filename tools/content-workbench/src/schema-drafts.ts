@@ -124,6 +124,25 @@ export function updateSharedRecordDraft(
   return { success: true, recordDraft, errors: {} };
 }
 
+export function updateChineseBodyReference(
+  existing: RecordDraft,
+  bodyZh: string,
+): RecordDraft {
+  const recordDraft = structuredClone(existing);
+  const locales = asRecord(recordDraft.locales);
+  const zh = asRecord(locales?.zh);
+  if (!zh) {
+    throw new Error("共享 Schema 默认草稿缺少中文字段。");
+  }
+
+  if (bodyZh.trim()) {
+    zh.bodyFile = "zh.md";
+  } else {
+    delete zh.bodyFile;
+  }
+  return recordDraft;
+}
+
 export function contentTypeLabel(value: string): string | null {
   return isContentType(value) ? contentTypeRegistry[value].label.zh : null;
 }

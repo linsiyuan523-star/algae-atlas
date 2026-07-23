@@ -27,12 +27,15 @@ import {
   contentTypeOptions,
   createSharedRecordDraft,
   SHARED_SCHEMA_VERSION,
+  updateChineseBodyReference,
   updateSharedRecordDraft,
 } from "../schema-drafts";
 import type {
   DraftFieldErrors,
   DraftFields,
 } from "../schema-drafts";
+import { prepareArticleMarkdown } from "../editor/article-markdown";
+import { ArticleEditor } from "./ArticleEditor";
 import { SchemaForm } from "./SchemaForm";
 
 type NewDraftPageProps = {
@@ -69,7 +72,9 @@ export function NewDraftPage({ api, onCreated }: NewDraftPageProps) {
     setIsCreating(true);
     setError(null);
     try {
-      onCreated(await api.createDraft({ recordDraft: prepared.recordDraft }));
+      onCreated(
+        await api.createDraft({ recordDraft: prepared.recordDraft, bodyZh: "" }),
+      );
     } catch (caught) {
       setError(describeError(caught));
     } finally {
@@ -330,6 +335,7 @@ type DraftEditorProps = {
 type EditorInput = {
   fields: DraftFields;
   contentForm: FormValues;
+  bodyZh: string;
 };
 
 function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
@@ -340,6 +346,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   const initialInput: EditorInput = {
     fields: initialInspection.fields,
     contentForm: initialFormInspection.values,
+    bodyZh: draft.bodyZh,
   };
   const [editorInput, setEditorInput] = useState<EditorInput>(initialInput);
   const [savedInput, setSavedInput] = useState<EditorInput>(initialInput);
@@ -348,6 +355,9 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   );
   const [contentFormErrors, setContentFormErrors] = useState<FormErrors>(
     initialFormInspection.errors,
+  );
+  const [bodyError, setBodyError] = useState<string | undefined>(
+    prepareArticleMarkdown(draft.bodyZh).issues[0]?.message,
   );
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -389,6 +399,14 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         return;
       }
 
+      const preparedBody = prepareArticleMarkdown(snapshot.bodyZh);
+      if (preparedBody.issues.length > 0) {
+        setBodyError(preparedBody.issues[0]?.message);
+        setSaveError("请修正中文正文后重试。");
+        setSaveStatus("failed");
+        return;
+      }
+
       let nextRecordDraft = prepared.recordDraft;
       const adapter = getContentFormAdapter(snapshot.fields.contentType);
       if (adapter) {
@@ -404,6 +422,10 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         }
         nextRecordDraft = contentFormPrepared.recordDraft;
       }
+      nextRecordDraft = updateChineseBodyReference(
+        nextRecordDraft,
+        preparedBody.markdown,
+      );
 
       saveInFlightRef.current = true;
       setSaveStatus("saving");
@@ -412,6 +434,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         const saved = await api.saveDraft({
           draftId: draft.draftId,
           recordDraft: nextRecordDraft,
+          bodyZh: preparedBody.markdown,
         });
         const persistedInspection = inspectDraft(saved);
         const persistedForm = getContentFormAdapter(
@@ -420,6 +443,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         const persistedInput: EditorInput = {
           fields: persistedInspection.fields,
           contentForm: persistedForm.values,
+          bodyZh: saved.bodyZh,
         };
         if (!mountedRef.current) {
           return;
@@ -435,6 +459,9 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         setSavedInput(persistedInput);
         setFieldErrors(persistedInspection.errors);
         setContentFormErrors(persistedForm.errors);
+        setBodyError(
+          prepareArticleMarkdown(saved.bodyZh).issues[0]?.message,
+        );
         recordDraftRef.current = saved.recordDraft;
         onSaved(saved);
         setSaveStatus(unchangedDuringSave ? "saved" : "pending");
@@ -507,6 +534,20 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       [fieldId]: undefined,
       $form: undefined,
     }));
+    setSaveError(null);
+    setSaveStatus((current) => {
+      if (current === "saving") {
+        return current;
+      }
+      return sameEditorInput(next, savedInput) ? "saved" : "pending";
+    });
+  }
+
+  function updateBody(bodyZh: string, error?: string) {
+    const next: EditorInput = { ...editorInputRef.current, bodyZh };
+    editorInputRef.current = next;
+    setEditorInput(next);
+    setBodyError(error);
     setSaveError(null);
     setSaveStatus((current) => {
       if (current === "saving") {
@@ -626,6 +667,13 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
           onChange={updateContentFormField}
         />
       ) : null}
+
+      <ArticleEditor
+        value={editorInput.bodyZh}
+        error={bodyError}
+        disabled={isBusy}
+        onChange={updateBody}
+      />
 
       <dl className="draft-metadata">
         <div>
@@ -751,6 +799,9 @@ function sameSaveInput(left: DraftFields, right: DraftFields) {
 }
 
 function sameEditorInput(left: EditorInput, right: EditorInput) {
+  if (left.bodyZh !== right.bodyZh) {
+    return false;
+  }
   if (!sameSaveInput(left.fields, right.fields)) {
     return false;
   }

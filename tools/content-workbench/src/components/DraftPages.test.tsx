@@ -37,9 +37,10 @@ function makeDraft(titleZh = "初始标题"): Draft {
     throw new Error("test team-news form must be valid");
   }
   return {
-    formatVersion: 2,
+    formatVersion: 3,
     draftId: "11111111-1111-4111-8111-111111111111",
     recordDraft: completed.recordDraft,
+    bodyZh: "",
     createdAt: "2026-07-23T08:00:00Z",
     updatedAt: "2026-07-23T08:00:00Z",
   };
@@ -78,12 +79,17 @@ function makeScienceArticleDraft(): Draft {
 
 function createApi(): DraftApi {
   return {
-    createDraft: vi.fn(async (input) => ({ ...draft, recordDraft: input.recordDraft })),
+    createDraft: vi.fn(async (input) => ({
+      ...draft,
+      recordDraft: input.recordDraft,
+      bodyZh: input.bodyZh,
+    })),
     listDrafts: vi.fn(async () => [draft]),
     openDraft: vi.fn(async () => draft),
     saveDraft: vi.fn(async (input) => ({
       ...draft,
       recordDraft: input.recordDraft,
+      bodyZh: input.bodyZh,
       updatedAt: "2026-07-23T09:00:00Z",
     })),
     deleteDraft: vi.fn(async () => undefined),
@@ -263,6 +269,26 @@ test("validates and serializes a batch-one content form before saving", async ()
     type: "science-article",
     shared: { readingTimeMinutes: 12 },
     locales: { zh: { summary: "更新后的虚构科普摘要。" } },
+  });
+});
+
+test("persists the safe Chinese body and its Markdown file reference", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const bodyDraft = { ...draft, bodyZh: "虚构正文\n" };
+  api.listDrafts = vi.fn(async () => [bodyDraft]);
+  render(<DraftsPage api={api} initialDraft={bodyDraft} />);
+
+  expect(
+    await screen.findByRole("textbox", { name: "中文正文编辑区" }),
+  ).toHaveTextContent("虚构正文");
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  const saved = vi.mocked(api.saveDraft).mock.calls[0]?.[0];
+  expect(saved?.bodyZh).toBe("虚构正文\n");
+  expect(saved?.recordDraft).toMatchObject({
+    locales: { zh: { bodyFile: "zh.md" } },
   });
 });
 
