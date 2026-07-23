@@ -1,5 +1,8 @@
 import { Activity, Archive, FilePlus2, Files, Inbox, Settings } from "lucide-react";
 import { useState } from "react";
+import { DraftsPage, NewDraftPage } from "./components/DraftPages";
+import { tauriDraftApi } from "./drafts";
+import type { Draft, DraftApi } from "./drafts";
 
 const APP_VERSION = "0.1.0";
 
@@ -7,13 +10,11 @@ const navigationItems = [
   {
     id: "new-content",
     label: "新建内容",
-    emptyState: "当前没有可创建的内容类型。",
     icon: FilePlus2,
   },
   {
     id: "drafts",
     label: "草稿箱",
-    emptyState: "目前没有草稿。",
     icon: Files,
   },
   {
@@ -38,10 +39,26 @@ const navigationItems = [
 
 type SectionId = (typeof navigationItems)[number]["id"];
 
-export default function App() {
+const staticEmptyStates: Partial<Record<SectionId, string>> = {
+  submitted: "目前没有已提交内容。",
+  settings: "当前没有可配置项。",
+  diagnostics: "当前没有诊断信息。",
+};
+
+type AppProps = {
+  draftApi?: DraftApi;
+};
+
+export default function App({ draftApi = tauriDraftApi }: AppProps) {
   const [activeSection, setActiveSection] = useState<SectionId>("new-content");
+  const [initialDraft, setInitialDraft] = useState<Draft | null>(null);
   const activeItem =
     navigationItems.find((item) => item.id === activeSection) ?? navigationItems[0];
+
+  function handleDraftCreated(draft: Draft) {
+    setInitialDraft(draft);
+    setActiveSection("drafts");
+  }
 
   return (
     <div className="workbench-shell">
@@ -75,10 +92,16 @@ export default function App() {
       <main className="workbench-main">
         <section className="workspace-page" aria-labelledby="workspace-title">
           <h2 id="workspace-title">{activeItem.label}</h2>
-          <div className="empty-state" role="status">
-            <Inbox aria-hidden="true" size={28} strokeWidth={1.6} />
-            <p>{activeItem.emptyState}</p>
-          </div>
+          {activeSection === "new-content" ? (
+            <NewDraftPage api={draftApi} onCreated={handleDraftCreated} />
+          ) : activeSection === "drafts" ? (
+            <DraftsPage api={draftApi} initialDraft={initialDraft} />
+          ) : (
+            <div className="empty-state" role="status">
+              <Inbox aria-hidden="true" size={28} strokeWidth={1.6} />
+              <p>{staticEmptyStates[activeSection]}</p>
+            </div>
+          )}
         </section>
       </main>
     </div>
