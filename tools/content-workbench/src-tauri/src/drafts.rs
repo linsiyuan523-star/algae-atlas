@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -62,6 +63,8 @@ enum DraftStoreError {
     Storage(#[from] std::io::Error),
     #[error("draft JSON operation failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("corrupt draft was moved to quarantine")]
+    CorruptDraftQuarantined,
 }
 
 type StoreResult<T> = Result<T, DraftStoreError>;
@@ -125,6 +128,10 @@ impl DraftStore {
         let _guard = self.lock()?;
         self.prepare_root()?;
 
+        self.list_unlocked()
+    }
+
+    fn list_unlocked(&self) -> StoreResult<Vec<Draft>> {
         let mut drafts = Vec::new();
         for entry in fs::read_dir(&self.root)? {
             let entry = entry?;
@@ -135,10 +142,20 @@ impl DraftStore {
             let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
                 continue;
             };
-            let Ok(id) = parse_draft_id(stem) else {
-                continue;
+            let id = match parse_draft_id(stem) {
+                Ok(id) => id,
+                Err(_) => {
+                    self.quarantine_unlocked(&path)?;
+                    continue;
+                }
             };
-            drafts.push(self.read_unlocked(id)?);
+            match self.read_unlocked(id) {
+                Ok(draft) => drafts.push(draft),
+                Err(error) if error.is_corrupt_data() => {
+                    self.quarantine_unlocked(&path)?;
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         drafts.sort_by(|left, right| {
@@ -153,7 +170,7 @@ impl DraftStore {
     fn open(&self, draft_id: &str) -> StoreResult<Draft> {
         let _guard = self.lock()?;
         self.prepare_root()?;
-        self.read_unlocked(parse_draft_id(draft_id)?)
+        self.read_or_quarantine_unlocked(parse_draft_id(draft_id)?)
     }
 
     fn save(&self, request: SaveDraftRequest) -> StoreResult<Draft> {
@@ -164,7 +181,7 @@ impl DraftStore {
         let _guard = self.lock()?;
         self.prepare_root()?;
         let id = parse_draft_id(&request.draft_id)?;
-        let current = self.read_unlocked(id)?;
+        let current = self.read_or_quarantine_unlocked(id)?;
         let replacement = Draft {
             format_version: DRAFT_FORMAT_VERSION,
             draft_id: current.draft_id,
@@ -186,6 +203,15 @@ impl DraftStore {
         fs::remove_file(target)?;
         sync_directory(&self.root)?;
         Ok(())
+    }
+
+    pub(crate) fn latest_for_recovery(&self) -> Result<Option<Draft>, String> {
+        let result = (|| -> StoreResult<Option<Draft>> {
+            let _guard = self.lock()?;
+            self.prepare_root()?;
+            Ok(self.list_unlocked()?.into_iter().next())
+        })();
+        result.map_err(command_error)
     }
 
     fn lock(&self) -> StoreResult<MutexGuard<'_, ()>> {
@@ -227,9 +253,47 @@ impl DraftStore {
         if bytes.len() as u64 > MAX_DRAFT_BYTES {
             return Err(DraftStoreError::InvalidData);
         }
-        let draft: Draft = serde_json::from_slice(&bytes)?;
+        let value: Value = serde_json::from_slice(&bytes)?;
+        let draft: Draft = serde_json::from_value(migrate_draft_value(value)?)?;
         validate_stored_draft(&draft, expected_id)?;
         Ok(draft)
+    }
+
+    fn read_or_quarantine_unlocked(&self, expected_id: Uuid) -> StoreResult<Draft> {
+        match self.read_unlocked(expected_id) {
+            Ok(draft) => Ok(draft),
+            Err(error) if error.is_corrupt_data() => {
+                self.quarantine_unlocked(&self.path_for_id(expected_id))?;
+                Err(DraftStoreError::CorruptDraftQuarantined)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn quarantine_unlocked(&self, source: &Path) -> StoreResult<()> {
+        ensure_safe_regular_file(&self.root, source)?;
+        let quarantine = self.prepare_quarantine()?;
+        let target = quarantine.join(format!("{}.corrupt.json", Uuid::new_v4()));
+        fs::rename(source, &target)?;
+        sync_directory(&self.root)?;
+        sync_directory(&quarantine)?;
+        Ok(())
+    }
+
+    fn prepare_quarantine(&self) -> StoreResult<PathBuf> {
+        let quarantine = self.root.join("quarantine");
+        fs::create_dir_all(&quarantine)?;
+        let metadata = fs::symlink_metadata(&quarantine)?;
+        if !metadata.is_dir() || is_link_or_reparse_point(&metadata) {
+            return Err(DraftStoreError::UnsafePath);
+        }
+
+        let canonical_root = fs::canonicalize(&self.root)?;
+        let canonical_quarantine = fs::canonicalize(&quarantine)?;
+        if canonical_quarantine.parent() != Some(canonical_root.as_path()) {
+            return Err(DraftStoreError::UnsafePath);
+        }
+        Ok(quarantine)
     }
 
     fn write_atomically(&self, draft: &Draft, create_new: bool) -> StoreResult<()> {
@@ -269,6 +333,32 @@ impl DraftStore {
             }
         }
         result
+    }
+}
+
+impl DraftStoreError {
+    fn is_corrupt_data(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidDraftId
+                | Self::InvalidField(_)
+                | Self::UnsupportedFormat
+                | Self::InvalidData
+                | Self::Json(_)
+        )
+    }
+}
+
+fn migrate_draft_value(value: Value) -> StoreResult<Value> {
+    let version = value
+        .get("formatVersion")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(DraftStoreError::InvalidData)?;
+
+    match version {
+        DRAFT_FORMAT_VERSION => Ok(value),
+        _ => Err(DraftStoreError::UnsupportedFormat),
     }
 }
 
@@ -436,8 +526,10 @@ pub fn delete_draft(
 #[cfg(test)]
 mod tests {
     use super::{
-        AtomicInstaller, DraftStore, DraftStoreError, SaveDraftRequest, DRAFT_FORMAT_VERSION,
+        migrate_draft_value, AtomicInstaller, DraftStore, DraftStoreError, SaveDraftRequest,
+        DRAFT_FORMAT_VERSION,
     };
+    use serde_json::json;
     use std::{fs, path::Path, sync::Arc};
     use tempfile::tempdir;
 
@@ -543,29 +635,66 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_format_versions_and_extra_fields() {
+    fn format_migration_hook_accepts_current_and_rejects_future_versions() {
+        assert_eq!(
+            migrate_draft_value(json!({ "formatVersion": DRAFT_FORMAT_VERSION }))
+                .expect("accepts current version"),
+            json!({ "formatVersion": DRAFT_FORMAT_VERSION })
+        );
+        assert!(matches!(
+            migrate_draft_value(json!({ "formatVersion": DRAFT_FORMAT_VERSION + 1 })),
+            Err(DraftStoreError::UnsupportedFormat)
+        ));
+    }
+
+    #[test]
+    fn quarantines_corrupt_json_without_touching_valid_drafts() {
+        let temporary = tempdir().expect("temporary directory");
+        let root = temporary.path().join("drafts").join("v1");
+        let store = DraftStore::new(root.clone());
+        let damaged = store.create().expect("creates damaged draft");
+        let valid = store.create().expect("creates valid draft");
+        let damaged_path = root.join(format!("{}.json", damaged.draft_id));
+        let valid_path = root.join(format!("{}.json", valid.draft_id));
+        let valid_bytes = fs::read(&valid_path).expect("reads valid draft");
+
+        fs::write(&damaged_path, b"{ not valid JSON").expect("damages draft JSON");
+        assert_eq!(store.list().expect("lists remaining drafts"), vec![valid]);
+        assert!(!damaged_path.exists());
+        assert_eq!(
+            fs::read(valid_path).expect("reads untouched valid draft"),
+            valid_bytes
+        );
+        assert_eq!(
+            fs::read_dir(root.join("quarantine"))
+                .expect("reads quarantine")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn opening_an_unsupported_draft_quarantines_it_instead_of_replacing_it() {
         let temporary = tempdir().expect("temporary directory");
         let root = temporary.path().join("drafts").join("v1");
         let store = DraftStore::new(root.clone());
         let created = store.create().expect("creates draft");
         let target = root.join(format!("{}.json", created.draft_id));
-        let original = fs::read_to_string(&target).expect("reads draft JSON");
+        let unsupported = fs::read_to_string(&target)
+            .expect("reads draft JSON")
+            .replace("\"formatVersion\": 1", "\"formatVersion\": 2");
+        fs::write(&target, unsupported).expect("writes unsupported draft");
 
-        fs::write(
-            &target,
-            original.replace("\"formatVersion\": 1", "\"formatVersion\": 2"),
-        )
-        .expect("writes unsupported draft");
         assert!(matches!(
             store.open(&created.draft_id),
-            Err(DraftStoreError::UnsupportedFormat)
+            Err(DraftStoreError::CorruptDraftQuarantined)
         ));
-
-        fs::write(&target, original.replace("\n}", ",\n  \"extra\": true\n}"))
-            .expect("writes draft with an extra field");
-        assert!(matches!(
-            store.open(&created.draft_id),
-            Err(DraftStoreError::Json(_))
-        ));
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_dir(root.join("quarantine"))
+                .expect("reads quarantine")
+                .count(),
+            1
+        );
     }
 }

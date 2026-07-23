@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
 import App from "./App";
 import type { Draft, DraftApi } from "./drafts";
@@ -21,6 +22,7 @@ function createApi(): DraftApi {
     openDraft: vi.fn(async () => draft),
     saveDraft: vi.fn(async (input) => ({ ...draft, ...input })),
     deleteDraft: vi.fn(async () => undefined),
+    takeRecoveryDraft: vi.fn(async () => null),
   };
 }
 
@@ -70,4 +72,27 @@ test("creates a basic draft and opens it in the drafts page", async () => {
   expect(await screen.findByRole("heading", { name: "草稿箱", level: 2 })).toBeVisible();
   expect(screen.getByRole("heading", { name: "编辑草稿" })).toBeVisible();
   expect(screen.getByText(draft.draftId)).toBeVisible();
+});
+
+test("offers the most recent draft once after an interrupted session", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const recovered = { ...draft, titleZh: "待恢复草稿" };
+  api.takeRecoveryDraft = vi.fn(async () => recovered);
+  api.listDrafts = vi.fn(async () => [recovered]);
+  render(
+    <StrictMode>
+      <App draftApi={api} />
+    </StrictMode>,
+  );
+
+  expect(
+    await screen.findByRole("status", { name: "异常恢复" }),
+  ).toHaveTextContent("最近草稿：待恢复草稿");
+  await user.click(screen.getByRole("button", { name: "恢复草稿" }));
+
+  expect(api.takeRecoveryDraft).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("status", { name: "异常恢复" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "草稿箱", level: 2 })).toBeVisible();
+  expect(screen.getByDisplayValue("待恢复草稿")).toBeVisible();
 });

@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
-import { DraftsPage, NewDraftPage } from "./DraftPages";
+import { AUTOSAVE_DELAY_MS, DraftsPage, NewDraftPage } from "./DraftPages";
 import type { Draft, DraftApi } from "../drafts";
 
 const draft: Draft = {
@@ -25,6 +26,7 @@ function createApi(): DraftApi {
       updatedAt: "2026-07-23T09:00:00Z",
     })),
     deleteDraft: vi.fn(async () => undefined),
+    takeRecoveryDraft: vi.fn(async () => null),
   };
 }
 
@@ -62,10 +64,65 @@ test("lists, opens, manually saves, and deletes a draft", async () => {
     stableId: "fictional-draft",
     titleZh: "虚构标题",
   });
-  expect(await screen.findByText("草稿已保存。")).toBeVisible();
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(screen.getByText("已保存")).toBeVisible();
 
   await user.click(screen.getByRole("button", { name: "删除" }));
   expect(window.confirm).toHaveBeenCalledWith("确定删除“虚构标题”？");
   expect(api.deleteDraft).toHaveBeenCalledWith(draft.draftId);
   expect(await screen.findByText("目前没有草稿。")).toBeVisible();
+});
+
+test("debounces autosave, reports progress and failure, and warns while dirty", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  let resolveSave: ((saved: Draft) => void) | undefined;
+  vi.mocked(api.saveDraft).mockImplementation(
+    (input) =>
+      new Promise((resolve) => {
+        resolveSave = resolve;
+        expect(input.titleZh).toBe("自动保存标题");
+      }),
+  );
+  render(
+    <StrictMode>
+      <DraftsPage api={api} initialDraft={draft} />
+    </StrictMode>,
+  );
+
+  await user.type(screen.getByLabelText("中文标题"), "自动保存标题");
+  expect(screen.getByText("等待自动保存")).toBeVisible();
+  expect(api.saveDraft).not.toHaveBeenCalled();
+
+  const dirtyClose = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(dirtyClose);
+  expect(dirtyClose.defaultPrevented).toBe(true);
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce(), {
+    timeout: AUTOSAVE_DELAY_MS + 1_000,
+  });
+  expect(screen.getByText("保存中...")).toBeVisible();
+
+  await act(async () => {
+    resolveSave?.({
+      ...draft,
+      titleZh: "自动保存标题",
+      updatedAt: "2026-07-23T09:00:00Z",
+    });
+    await Promise.resolve();
+  });
+  expect(screen.getByText("已保存")).toBeVisible();
+
+  const cleanClose = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(cleanClose);
+  expect(cleanClose.defaultPrevented).toBe(false);
+
+  vi.mocked(api.saveDraft).mockRejectedValueOnce(new Error("磁盘已满"));
+  await user.type(screen.getByLabelText("稳定 ID"), "retry-me");
+  expect(
+    await screen.findByText("保存失败：磁盘已满", undefined, {
+      timeout: AUTOSAVE_DELAY_MS + 1_000,
+    }),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "重试保存" })).toBeEnabled();
 });

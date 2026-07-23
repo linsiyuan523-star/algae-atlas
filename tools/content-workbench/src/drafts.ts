@@ -21,6 +21,7 @@ export type DraftApi = {
   openDraft: (draftId: string) => Promise<Draft>;
   saveDraft: (draft: SaveDraftInput) => Promise<Draft>;
   deleteDraft: (draftId: string) => Promise<void>;
+  takeRecoveryDraft: () => Promise<Draft | null>;
 };
 
 export const tauriDraftApi: DraftApi = {
@@ -31,4 +32,5 @@ export const tauriDraftApi: DraftApi = {
   saveDraft: (draft) => invoke<Draft>("save_draft", { draft }),
   deleteDraft: (draftId) =>
     invoke<void>("delete_draft", { request: { draftId } }),
+  takeRecoveryDraft: () => invoke<Draft | null>("take_recovery_draft"),
 };

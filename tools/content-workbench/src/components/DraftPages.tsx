@@ -1,5 +1,17 @@
-import { FilePlus2, Files, RefreshCw, Save, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  CheckCircle2,
+  CircleAlert,
+  Clock3,
+  FilePlus2,
+  Files,
+  LoaderCircle,
+  RefreshCw,
+  Save,
+  Trash2,
+} from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { Draft, DraftApi, SaveDraftInput } from "../drafts";
 
@@ -7,6 +19,8 @@ type NewDraftPageProps = {
   api: DraftApi;
   onCreated: (draft: Draft) => void;
 };
+
+export const AUTOSAVE_DELAY_MS = 700;
 
 export function NewDraftPage({ api, onCreated }: NewDraftPageProps) {
   const [isCreating, setIsCreating] = useState(false);
@@ -137,18 +151,18 @@ export function DraftsPage({ api, initialDraft = null }: DraftsPageProps) {
     }
   }
 
-  function handleSaved(saved: Draft) {
+  const handleSaved = useCallback((saved: Draft) => {
     setSelectedDraft(saved);
     setDrafts((current) => [
       saved,
       ...current.filter((draft) => draft.draftId !== saved.draftId),
     ]);
-  }
+  }, []);
 
-  function handleDeleted(draftId: string) {
+  const handleDeleted = useCallback((draftId: string) => {
     setSelectedDraft(null);
     setDrafts((current) => current.filter((draft) => draft.draftId !== draftId));
-  }
+  }, []);
 
   const isBusy = pendingAction !== null;
 
@@ -249,41 +263,86 @@ type DraftEditorProps = {
 };
 
 function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
-  const [fields, setFields] = useState<SaveDraftInput>({
-    draftId: draft.draftId,
-    contentType: draft.contentType,
-    stableId: draft.stableId,
-    titleZh: draft.titleZh,
-  });
-  const [pendingAction, setPendingAction] = useState<"save" | "delete" | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const initialFields = toSaveInput(draft);
+  const [fields, setFields] = useState<SaveDraftInput>(initialFields);
+  const [savedFields, setSavedFields] = useState<SaveDraftInput>(initialFields);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<"delete" | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const fieldsRef = useRef(fields);
+  const saveInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  const isDirty = !sameSaveInput(fields, savedFields);
+  useUnsavedCloseWarning(isDirty || saveStatus === "saving");
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const persist = useCallback(
+    async (snapshot: SaveDraftInput) => {
+      if (saveInFlightRef.current) {
+        return;
+      }
+
+      saveInFlightRef.current = true;
+      setSaveStatus("saving");
+      setSaveError(null);
+      try {
+        const saved = await api.saveDraft(snapshot);
+        const persistedFields = toSaveInput(saved);
+        if (!mountedRef.current) {
+          return;
+        }
+        setSavedFields(persistedFields);
+        onSaved(saved);
+        setSaveStatus(
+          sameSaveInput(fieldsRef.current, persistedFields) ? "saved" : "pending",
+        );
+      } catch (caught) {
+        if (mountedRef.current) {
+          setSaveError(describeError(caught));
+          setSaveStatus("failed");
+        }
+      } finally {
+        saveInFlightRef.current = false;
+      }
+    },
+    [api, onSaved],
+  );
+
+  useEffect(() => {
+    if (saveStatus !== "pending" || pendingAction === "delete") {
+      return;
+    }
+
+    const snapshot = fields;
+    const timer = window.setTimeout(() => {
+      void persist(snapshot);
+    }, AUTOSAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [fields, pendingAction, persist, saveStatus]);
 
   function updateField(field: keyof Omit<SaveDraftInput, "draftId">, value: string) {
-    setFields((current) => ({ ...current, [field]: value }));
-    setNotice(null);
+    const next = { ...fields, [field]: value };
+    fieldsRef.current = next;
+    setFields(next);
+    setSaveError(null);
+    setSaveStatus((current) => {
+      if (current === "saving") {
+        return current;
+      }
+      return sameSaveInput(next, savedFields) ? "saved" : "pending";
+    });
   }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setPendingAction("save");
-    setNotice(null);
-    setError(null);
-    try {
-      const saved = await api.saveDraft(fields);
-      setFields({
-        draftId: saved.draftId,
-        contentType: saved.contentType,
-        stableId: saved.stableId,
-        titleZh: saved.titleZh,
-      });
-      setNotice("草稿已保存。");
-      onSaved(saved);
-    } catch (caught) {
-      setError(describeError(caught));
-    } finally {
-      setPendingAction(null);
-    }
+    await persist(fieldsRef.current);
   }
 
   async function handleDelete() {
@@ -293,19 +352,18 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
     }
 
     setPendingAction("delete");
-    setNotice(null);
-    setError(null);
+    setDeleteError(null);
     try {
       await api.deleteDraft(draft.draftId);
       onDeleted(draft.draftId);
     } catch (caught) {
-      setError(describeError(caught));
+      setDeleteError(describeError(caught));
     } finally {
       setPendingAction(null);
     }
   }
 
-  const isBusy = pendingAction !== null;
+  const isBusy = pendingAction !== null || saveStatus === "saving";
 
   return (
     <form className="draft-editor" onSubmit={(event) => void handleSave(event)}>
@@ -373,20 +431,118 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       <div className="draft-editor-actions">
         <button className="primary-button" type="submit" disabled={isBusy}>
           <Save aria-hidden="true" size={18} />
-          {pendingAction === "save" ? "正在保存..." : "保存草稿"}
+          {saveStatus === "saving"
+            ? "正在保存..."
+            : saveStatus === "failed"
+              ? "重试保存"
+              : "保存草稿"}
         </button>
-        {notice ? (
-          <p className="operation-notice" role="status">
-            {notice}
-          </p>
-        ) : null}
-        {error ? (
+        <SaveStatusIndicator status={saveStatus} error={saveError} />
+        {deleteError ? (
           <p className="operation-error" role="alert">
-            {error}
+            {deleteError}
           </p>
         ) : null}
       </div>
     </form>
+  );
+}
+
+type SaveStatus = "pending" | "saving" | "saved" | "failed";
+
+function useUnsavedCloseWarning(shouldWarn: boolean) {
+  useEffect(() => {
+    if (!shouldWarn) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    if (isTauri()) {
+      let disposed = false;
+      let unlisten: (() => void) | undefined;
+      let removeFallback: (() => void) | undefined;
+      void getCurrentWindow()
+        .onCloseRequested((event) => {
+          if (!window.confirm("草稿仍有未保存更改，确定关闭工作台？")) {
+            event.preventDefault();
+          }
+        })
+        .then((stopListening) => {
+          if (disposed) {
+            stopListening();
+          } else {
+            unlisten = stopListening;
+          }
+        })
+        .catch(() => {
+          if (!disposed) {
+            window.addEventListener("beforeunload", handleBeforeUnload);
+            removeFallback = () =>
+              window.removeEventListener("beforeunload", handleBeforeUnload);
+          }
+        });
+      return () => {
+        disposed = true;
+        unlisten?.();
+        removeFallback?.();
+      };
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [shouldWarn]);
+}
+
+function SaveStatusIndicator({
+  status,
+  error,
+}: {
+  status: SaveStatus;
+  error: string | null;
+}) {
+  const states = {
+    pending: { Icon: Clock3, label: "等待自动保存" },
+    saving: { Icon: LoaderCircle, label: "保存中..." },
+    saved: { Icon: CheckCircle2, label: "已保存" },
+    failed: { Icon: CircleAlert, label: `保存失败：${error ?? "未知错误"}` },
+  } as const;
+  const { Icon, label } = states[status];
+
+  return (
+    <p
+      className={`save-status save-status-${status}`}
+      role={status === "failed" ? "alert" : "status"}
+      aria-live="polite"
+    >
+      <Icon
+        aria-hidden="true"
+        className={status === "saving" ? "save-status-spinner" : undefined}
+        size={17}
+      />
+      <span>{label}</span>
+    </p>
+  );
+}
+
+function toSaveInput(draft: Draft): SaveDraftInput {
+  return {
+    draftId: draft.draftId,
+    contentType: draft.contentType,
+    stableId: draft.stableId,
+    titleZh: draft.titleZh,
+  };
+}
+
+function sameSaveInput(left: SaveDraftInput, right: SaveDraftInput) {
+  return (
+    left.draftId === right.draftId &&
+    left.contentType === right.contentType &&
+    left.stableId === right.stableId &&
+    left.titleZh === right.titleZh
   );
 }
 

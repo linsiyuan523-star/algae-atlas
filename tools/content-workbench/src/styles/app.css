@@ -144,6 +144,49 @@ button:disabled {
   width: min(100%, 1040px);
 }
 
+.recovery-banner {
+  width: min(100%, 1040px);
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+  padding: 14px 16px;
+  border-top: 2px solid #c0841e;
+  border-bottom: 1px solid #dec38f;
+  color: #4f3a16;
+  background: #fff9ed;
+}
+
+.recovery-banner strong,
+.recovery-banner p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.recovery-banner strong {
+  font-size: 14px;
+}
+
+.recovery-banner p {
+  margin-top: 2px;
+  color: #715c34;
+  font-size: 13px;
+}
+
+.recovery-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.recovery-error {
+  width: min(100%, 1040px);
+  margin: 0 0 20px;
+}
+
 .workspace-page h2 {
   margin: 0 0 28px;
   color: #18382e;
@@ -477,6 +520,37 @@ button:disabled {
   margin: 0;
 }
 
+.save-status {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #5f6e67;
+}
+
+.save-status-saved {
+  color: #23604d;
+}
+
+.save-status-pending,
+.save-status-saving {
+  color: #76551d;
+}
+
+.save-status-failed {
+  color: #8b302b;
+}
+
+.save-status-spinner {
+  animation: save-status-spin 0.9s linear infinite;
+}
+
+@keyframes save-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .error-screen {
   min-height: 100vh;
   display: grid;
@@ -564,6 +638,11 @@ button:disabled {
 
   .workbench-main {
     padding: 32px 20px;
+  }
+
+  .recovery-banner {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .draft-layout {
