@@ -1,6 +1,7 @@
 import type { ContentType } from "@algae-atlas/content-schema";
 import type { RecordDraft } from "../schema-drafts";
 import { batchOneFormAdapters } from "./batch-one";
+import { batchTwoFormAdapters } from "./batch-two";
 import type {
   FormErrors,
   FormSchemaDefinition,
@@ -41,6 +42,7 @@ const teamNewsAdapter: ContentFormAdapter = {
 const adapters: Partial<Record<ContentType, ContentFormAdapter>> = {
   "team-news": teamNewsAdapter,
   ...batchOneFormAdapters,
+  ...batchTwoFormAdapters,
 };
 
 export function getContentFormAdapter(

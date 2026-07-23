@@ -144,7 +144,7 @@ function renderControl({
     "aria-describedby": error ? errorId : undefined,
   };
 
-  if (field.control === "textarea") {
+  if (field.control === "textarea" || field.control === "text-list") {
     return (
       <textarea
         id={inputId}
@@ -191,7 +191,11 @@ function renderControl({
             : "text"
       }
       autoComplete="off"
-      spellCheck={field.control !== "url" && field.control !== "author-reference"}
+      spellCheck={
+        field.control !== "url" &&
+        field.control !== "author-reference" &&
+        field.control !== "datetime"
+      }
       maxLength={field.maxLength}
       min={field.min}
       max={field.max}

@@ -242,7 +242,9 @@ export function validateTeamNewsRecordDraft(
       if (fieldId) {
         errors[fieldId] ??= issue.message;
       } else {
-        errors[FORM_ERROR_KEY] ??= "团队动态结构未通过共享 Schema 校验。";
+        const issuePath = issue.path.map(String).join(".") || "根结构";
+        errors[FORM_ERROR_KEY] ??=
+          `团队动态字段包含当前表单不支持或无法映射的字段：${issuePath}。`;
       }
     }
   }

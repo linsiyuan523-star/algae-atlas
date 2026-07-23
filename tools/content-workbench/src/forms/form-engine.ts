@@ -1,13 +1,16 @@
 import {
   isHttpsUrl,
   isIsoDate,
+  isIsoTimestamp,
   stableIdSchema,
 } from "@algae-atlas/content-schema";
 
 export type FormControl =
   | "text"
   | "textarea"
+  | "text-list"
   | "date"
+  | "datetime"
   | "number"
   | "enum"
   | "boolean"
@@ -63,8 +66,17 @@ export function validateFormValues(
   values: FormValues,
 ): FormErrors {
   const errors: FormErrors = {};
+  const fields = formFields(schema);
+  const supportedFieldIds = new Set(fields.map((field) => field.id));
+  const unsupportedFieldIds = Object.keys(values).filter(
+    (fieldId) => !supportedFieldIds.has(fieldId),
+  );
 
-  for (const field of formFields(schema)) {
+  if (unsupportedFieldIds.length > 0) {
+    errors[FORM_ERROR_KEY] = `当前表单不支持字段：${unsupportedFieldIds.join("、")}。`;
+  }
+
+  for (const field of fields) {
     const value = values[field.id];
     if (field.control === "boolean") {
       if (typeof value !== "boolean") {
@@ -88,6 +100,8 @@ export function validateFormValues(
 
     if (field.control === "date" && !isIsoDate(text)) {
       errors[field.id] = `${field.label}必须是有效日期。`;
+    } else if (field.control === "datetime" && !isIsoTimestamp(text)) {
+      errors[field.id] = `${field.label}必须是带时区的有效 ISO 8601 时间。`;
     } else if (field.control === "number") {
       const number = Number(text);
       if (!Number.isFinite(number)) {

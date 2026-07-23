@@ -511,7 +511,9 @@ function createAdapter(config: AdapterConfig): ContentFormAdapter {
         if (fieldId) {
           errors[fieldId] ??= issue.message;
         } else {
-          errors[FORM_ERROR_KEY] ??= `${config.label}未通过共享 Schema 校验。`;
+          const issuePath = issue.path.map(String).join(".") || "根结构";
+          errors[FORM_ERROR_KEY] ??=
+            `${config.label}包含当前表单不支持或无法映射的字段：${issuePath}。`;
         }
       }
     }

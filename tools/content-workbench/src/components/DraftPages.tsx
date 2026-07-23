@@ -463,6 +463,14 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   }, [editorInput, pendingAction, persist, saveStatus]);
 
   function updateField(field: keyof DraftFields, value: string) {
+    if (
+      field === "contentType" &&
+      value !== editorInput.fields.contentType &&
+      !window.confirm("切换内容类型会清空当前类型的专用字段，确定继续？")
+    ) {
+      return;
+    }
+
     const contentForm =
       field === "contentType" && value !== editorInput.fields.contentType
         ? getContentFormAdapter(value)?.emptyValues() ?? {}
