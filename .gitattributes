@@ -7,3 +7,6 @@
 /docs/superpowers/** text eol=lf
 /delivery/** text eol=lf
 /.gitattributes text eol=lf
+/tools/content-workbench/** text eol=lf
+/tools/content-workbench/**/*.png binary
+/tools/content-workbench/**/*.ico binary
