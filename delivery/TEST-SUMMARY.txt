@@ -1,42 +1,46 @@
-Stage: Stage-05A3
+Stage: Stage-05B1
 Status: PASS
 ValidatedAt: 2026-07-23
-Branch: local/stage-05a3-forms-batch2
-StartCommit: c5fdfdfcbd36b7dfa4984489c3db3ce637cdd538
-FeatureCommit: 01ba176018fdd4c4cea588ccfecf55762813d17e
-TestCommit: 62e262940af3413b5b6a1fb20d4d45cf54ef9f10
+Branch: local/stage-05b1-editor
+StartCommit: 6855f5dc29f4b461bb29a29c4eea2cda5689093c
+FeatureCommit: 4c795c418cc91109976deb4394f83c2ba0565fc2
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
-- Target: Windows x64
-- npm commands used npm.cmd because PowerShell blocks npm.ps1
+- Target: Windows x64 MSVC
+- Node.js: v22.23.1
+- npm: 10.9.8; commands used npm.cmd because PowerShell blocks npm.ps1
+- Cargo/Rust: 1.97.1
 
 Setup:
 - npm.cmd ci --offline --ignore-scripts: PASS
-  - 601 packages, 0 vulnerabilities
-  - Existing deprecated transitive @esbuild-kit warnings only
+  - 662 packages, 0 vulnerabilities
 
 Required checks:
 - npm.cmd run desktop:check: PASS
   - Desktop TypeScript and ESLint passed
   - Existing non-fatal missing Next.js pages notice printed
-- npm.cmd run desktop:test: PASS
-  - Scaffold: 1 test
-  - Vitest: 9 files, 70 tests
-- npm.cmd run check:schema: PASS
-- npm.cmd run test:schema: PASS; 58 tests
-- Five batch-two form round trips: PASS
-- All 11 registered content types create Schema-valid drafts: PASS
-- Type-switch confirmation and cancellation: PASS
-- Unsupported form-field rejection: PASS
-- Shared registry enum sourcing and field error mapping: PASS
+- Full desktop Vitest run: PASS; 11 files, 92 tests
+- Final editor/security focus: PASS; 2 files, 22 tests
+  - Paste cleanup, safe links, active HTML removal, supported structures, deterministic serialization, media placeholders, and toolbar behavior passed
+- Related editor/persistence focus: PASS; 5 files, 36 tests
+  - Chinese body save, body-file reference, draft compatibility, schema helper, and component behavior passed
+- npm.cmd run desktop:test:scaffold: PASS; 1 test
+- npm.cmd run desktop:rust:test: PASS; 9 tests
+  - CRUD, v1/v2 migration, v3 body persistence, body size/control-character limits, path validation, quarantine, recovery, and atomic replacement passed
+- npm.cmd run desktop:rust:fmt: PASS
+- npm.cmd run desktop:rust:clippy: PASS with warnings denied
 - git diff --check: PASS
+
+Visual check:
+- Vite desktop shell at a 1280 px viewport: PASS
+- Viewport and page widths matched; main content, form, and editor toolbar remained bounded
+- Browser-only mode could not open a Tauri-backed draft because invoke is unavailable, as expected
 
 Boundary:
 - Full website check/test/build: NOT RUN by instruction
-- Desktop production build: NOT RUN by instruction
-- Rust and native Tauri checks: NOT RUN; native sources were unchanged
+- Desktop production build and native Tauri smoke: NOT RUN by instruction
 - Git remote writes, PR, merge, tag, release, deployment: NONE
 
 Resolved attempt:
-- A component test selector matched both audience controls; role-based selection passed.
+- The scaffold contract initially expected the pre-editor dependency set; its exact dependency whitelist was updated for Tiptap and DOMPurify, then the test passed.

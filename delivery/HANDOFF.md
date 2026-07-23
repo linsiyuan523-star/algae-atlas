@@ -1,48 +1,47 @@
-# Stage 5A3 Delivery Handoff
+# Stage 5B1 Delivery Handoff
 
-- Stage: Stage-05A3 - Content-specific Forms, Batch Two and Checkpoint
-- Start commit: `c5fdfdfcbd36b7dfa4984489c3db3ce637cdd538`
+- Stage: Stage-05B1 - Chinese Article Editing and Text Cleanup
+- Start commit: `6855f5dc29f4b461bb29a29c4eea2cda5689093c`
+- Feature commit: `4c795c418cc91109976deb4394f83c2ba0565fc2`
 - End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified bundle head)
 
 ## Completed
 
-- Registry-backed forms for Learning Resource, Algae Profile, Live-feed Profile, Coastal Observation, and Research Profile.
-- Adapter coverage for all 11 registered content types, including Schema-valid draft creation.
-- Localized text-list editing, zoned ISO timestamp validation, and primary environment selection with preservation of additional stored values.
-- Type-switch confirmation before type-specific fields are cleared.
-- Explicit errors for form values not declared by the active form Schema.
-- Shared registry metadata and enum options required by the five forms.
+- Constrained Chinese article editor with headings 2-6, paragraphs, emphasis, lists, quotes, safe links, tables, subscript/superscript, scientific-name italics, and validated media placeholders.
+- Paste cleanup for indentation, half/full-width and nonbreaking spaces, tabs, BOM/line endings, excess blank lines, Word/web styles, active HTML, event attributes, unsafe URLs, and remote images.
+- Deterministic safe-Markdown parsing and serialization using the shared validator.
+- Chinese `bodyZh` persistence, conditional `locales.zh.bodyFile = "zh.md"`, draft format v3, transparent v2 migration, and retained v1 compatibility.
+- Exact Tiptap 3.28.0 and DOMPurify 3.4.12 dependencies plus editor, security, persistence, and migration tests.
 
 ## Not Completed
 
-- No body/English/media editing, author/content catalogs, structured source editor, website preview, export, Git publishing, installer, remote write, merge, or deployment.
-- Website, Rust, and native Tauri build surfaces were unchanged.
+- No optional English editor, real media ingestion/selection, preview, repository export, Git publishing, installer, remote write, merge, or deployment.
+- Full website and desktop production builds were not run by instruction.
 
 ## Test Summary
 
-- Offline npm install: PASS; 601 packages, 0 vulnerabilities.
+- Offline npm install: PASS; 662 packages, 0 vulnerabilities.
 - Desktop TypeScript/ESLint: PASS.
+- Desktop Vitest: PASS; 11 files, 92 tests, followed by final editor/security focus of 2 files and 22 tests.
+- Related editor/persistence focus: PASS; 5 files, 36 tests.
 - Desktop scaffold: PASS; 1 test.
-- Desktop tests: PASS; 9 files, 70 tests.
-- Shared Schema TypeScript/tests: PASS; 58 tests.
-- All registered adapters, type switching, unsupported-field errors, enum sourcing, rendering, validation, and round trips: PASS.
-- Git whitespace check: PASS.
+- Rust: PASS; 9 tests, format check, and Clippy with warnings denied.
+- Visual width check at 1280 px and Git whitespace check: PASS.
 - Full website production build: NOT RUN by instruction.
 
 ## Known Issues
 
 - ESLint retains the existing non-fatal missing Next.js `pages` informational message.
-- Environment selectors edit one primary value and preserve additional stored values.
-- Structured references, relationship IDs, approver roles, and media collections await later catalog controls.
+- Browser-only Vite mode has no Tauri `invoke`; desktop behavior is covered by tests and requires the desktop host.
 
 ## Next Stage Exact Start
 
-- Use the clean Stage-05A3 delivery tip or verified Stage-05A3 bundle.
-- Next instruction: `22_Stage5B1_正文编辑与文本清理.md`.
+- Use the clean Stage-05B1 delivery tip or verified Stage-05B1 bundle.
+- Next instruction: `23_Stage5B2_可选英文与Stage5检查点.md`.
 
 ## Do Not Repeat
 
-- Use `npm.cmd`; PowerShell blocks `npm.ps1` under the current execution policy.
-- Use role-based selectors where form labels share a prefix.
-- Extend the adapter registry rather than adding per-type rendering branches.
-- Do not expand Stage-05A3 into body, English, media, preview, export, or publishing stages.
+- Use `npm.cmd` under the current PowerShell execution policy.
+- Keep the scaffold dependency contract synchronized with the exact editor dependencies.
+- Do not test Tauri draft calls in browser-only Vite mode.
+- Do not weaken Markdown validation, link/media policy, or draft migration compatibility.

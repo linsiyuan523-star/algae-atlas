@@ -1,49 +1,50 @@
-# Stage 5A3 Handoff
+# Stage 5B1 Handoff
 
-- Stage: Stage-05A3 - Content-specific Forms, Batch Two and Checkpoint
-- Start commit: `c5fdfdfcbd36b7dfa4984489c3db3ce637cdd538`
+- Stage: Stage-05B1 - Chinese Article Editing and Text Cleanup
+- Start commit: `6855f5dc29f4b461bb29a29c4eea2cda5689093c`
+- Feature commit: `4c795c418cc91109976deb4394f83c2ba0565fc2`
 - End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified bundle head)
 
 ## Completed
 
-- Added registry-backed forms for Learning Resource, Algae Profile, Live-feed Profile, Coastal Observation, and Research Profile.
-- Completed adapter registration for all 11 content types and verified that each can create a Schema-valid draft.
-- Added editable localized text lists, zoned ISO timestamp validation, and primary environment selection while preserving additional stored values.
-- Added type-switch confirmation before type-specific fields are cleared.
-- Added explicit rejection for form values not declared by the active form Schema.
-- Expanded shared registry metadata and enum options used by the five forms.
+- Added a constrained Chinese article editor for headings 2-6, paragraphs, bold/italic text, lists, quotes, safe links, tables, subscript, superscript, scientific-name italics, and `media:<id>` image placeholders.
+- Normalized pasted plain text and Word/web HTML by removing paragraph indentation, tabs, BOM/CRLF noise, excess blank lines, inactive styling, active elements, event attributes, unsafe URLs, and remote images.
+- Added deterministic Markdown parsing and serialization under the shared safe Markdown validator, with HTTPS/internal/fragment link policy and validated media IDs.
+- Persisted Chinese Markdown as `bodyZh`, set `locales.zh.bodyFile` only for non-empty bodies, and advanced the local draft envelope to format v3.
+- Added transparent v2-to-v3 draft migration with an empty body while retaining v1 compatibility.
+- Added editor, cleanup, security, serialization, component, autosave, schema-reference, storage-boundary, and migration coverage.
 
 ## Not Completed
 
-- No Markdown body editor, optional-English workflow, media ingestion, author/content catalogs, structured source editor, website preview, export, or Git publishing.
-- Website, Rust, native Tauri, installer, remote, merge, and deployment surfaces were unchanged.
+- Optional English editing and the Stage 5 checkpoint remain for Stage-05B2.
+- Media ingestion, real media selection, preview, repository export, Git publishing, installer work, remote write, merge, and deployment were not implemented.
+- Full website and desktop production builds were not run by instruction.
 
 ## Test Summary
 
-- Offline locked npm install: PASS; 601 packages, 0 vulnerabilities.
-- Desktop TypeScript and ESLint: PASS.
-- Desktop scaffold: PASS; 1 test.
-- Desktop component/unit tests: PASS; 9 files, 70 tests.
-- Shared Schema TypeScript: PASS.
-- Shared Schema tests: PASS; 58 tests.
-- All 11 registered type adapters, type switching, unsupported fields, enum sourcing, rendering, validation, and round trips: PASS.
+- Offline locked npm install: PASS; 662 packages, 0 vulnerabilities.
+- Desktop TypeScript and ESLint: PASS; existing missing Next.js `pages` notice remains informational.
+- Desktop Vitest suite: PASS; 11 files, 92 tests before final focused refinements.
+- Final editor/security focus: PASS; 2 files, 22 tests.
+- Related editor/persistence focus: PASS; 5 files, 36 tests.
+- Desktop scaffold contract: PASS; 1 test.
+- Rust tests: PASS; 9 tests. Rust format check and Clippy with warnings denied: PASS.
+- Desktop visual check at 1280 px: PASS; no page-level horizontal overflow.
 - Git whitespace check: PASS.
-- Full website production build was not run by instruction.
 
 ## Known Issues
 
 - ESLint prints the existing non-fatal missing Next.js `pages` notice for the Vite workspace.
-- Environment selectors edit one primary value and preserve additional stored values.
-- Structured references, relationship IDs, approver roles, and media collections remain preserved/defaulted until their catalog controls are implemented.
+- Browser-only Vite mode cannot open drafts because Tauri `invoke` is unavailable; editor behavior is covered by component tests and runs in the desktop host.
 
 ## Next Stage Exact Start
 
-- Start from the clean Stage-05A3 delivery tip or verified Stage-05A3 bundle.
-- Execute `22_Stage5B1_正文编辑与文本清理.md` in a new Stage-05B1 session/worktree.
+- Start from the clean Stage-05B1 delivery tip or verified Stage-05B1 bundle.
+- Execute `23_Stage5B2_可选英文与Stage5检查点.md` in a new Stage-05B2 session/worktree.
 
 ## Do Not Repeat
 
 - Use `npm.cmd`; PowerShell blocks `npm.ps1` under the current execution policy.
-- Use role-based selectors when form labels share prefixes such as audience fields.
-- Extend the adapter registry; do not add per-type rendering branches in `DraftPages`.
-- Do not broaden Stage-05A3 into body, English, media, preview, export, or publishing work.
+- Do not restore the scaffold test's pre-editor dependency whitelist; it must include the exact Tiptap and DOMPurify versions.
+- Do not use browser-only Vite mode to diagnose Tauri draft calls.
+- Preserve the shared Markdown validator, safe-link policy, validated media IDs, and v2 migration behavior.
