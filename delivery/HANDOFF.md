@@ -1,46 +1,47 @@
-# Stage 4C Delivery Handoff
+# Stage 4D Delivery Handoff
 
-Stage: Stage-04C - Local Draft CRUD
-Branch: `local/stage-04c-draft-crud`
-Start commit: `2744cdc8d5ec7e121440e97b9bf9b94533846aeb`
-Feature commit: `d998722b4e0c0edc691d46b8aab69b32f9f09f04`
+Stage: Stage-04D - Autosave and Interrupted-session Recovery
+Branch: `local/stage-04d-autosave-recovery`
+Start commit: `f50819f0533e166ccc8b72b7153972a8ba981cdd`
+Feature commit: `83f1cb9539a5d9d5f2c043265575ac4e1744bdac`
 End commit: `BRANCH_TIP_AT_DELIVERY` (the commit containing this record)
 
 ## Completed
 
-- Version 1 JSON draft persistence in the Tauri application data directory.
-- Named create, list, open, manual-save, and delete commands.
-- Canonical UUID v4 path restriction and fixed `drafts/v1` storage scope.
-- Atomic new-file installation and safe existing-file replacement.
-- Basic React draft creation, list, editor, save, refresh, and confirmed-delete controls.
-- Rust and React coverage for the complete Stage-04C CRUD boundary.
+- 700 ms debounced autosave with manual save/retry and visible waiting, saving, saved, and failed states.
+- Dirty-draft close confirmation through Tauri close requests and a browser fallback.
+- Startup session marker, normal-exit cleanup, and one-time recovery of the latest valid draft after interruption.
+- StrictMode-safe recovery delivery.
+- Central format-version migration dispatch.
+- Corrupt JSON isolation under `drafts/v1/quarantine` while valid drafts and atomic replacement remain intact.
+- Rust and React coverage across the complete Stage-04D boundary.
 
 ## Not Completed
 
-- No autosave, recovery, history, search, shared Schema, dedicated type form, media, preview, repository export, Git, network, packaging, remote, or deployment behavior.
-- Complete website tests and native Tauri smoke were not run.
+- No multi-window sync, journal, history, cloud sync, encryption, search, shared Schema, typed forms, media, preview, repository export, Git, network, packaging, remote, merge, or deployment behavior.
+- Complete website tests, root production build, and native Tauri smoke were not run.
 
 ## Test Summary
 
 - Offline locked npm install: PASS; 601 packages, 0 vulnerabilities.
-- Rust tests: PASS; 4 tests.
-- Frontend tests: PASS; 2 files, 4 tests.
+- Frontend tests: PASS; 3 files, 7 tests.
+- Rust tests: PASS; 7 tests.
 - Desktop TypeScript/ESLint check: PASS.
-- Cargo check and clippy with warnings denied: PASS.
-- Desktop Vite build: PASS.
-- Responsive local render at 1280, 600, and 320 px widths: PASS.
+- Cargo check, format check, and Clippy with warnings denied: PASS.
+- Git whitespace check: PASS.
 
 ## Known Issues
 
-- The supplied USB root did not contain a Stage-04B bundle. The exact clean local Stage-04B delivery tip `2744cdc8d5ec7e121440e97b9bf9b94533846aeb` was used as the start.
+- ESLint emits a non-fatal missing Next.js `pages` directory notice for the Vite desktop workspace.
+- Native window smoke was outside this stage's test boundary.
 
 ## Next Stage Exact Start
 
-- Use the clean Stage-04C delivery tip or verified Stage-04C bundle.
-- Next instruction: `17_Stage4D_自动保存与异常恢复.md`.
+- Use the clean Stage-04D delivery tip or verified Stage-04D bundle.
+- Next instruction: `18_Stage4E_共享Schema接入与检查点.md`.
 
 ## Do Not Repeat
 
-- Keep initial draft-list effect updates asynchronous to satisfy React hook rules.
-- Keep UUID/path checks and atomic replacement intact.
-- Do not add Stage-04D behavior here.
+- Do not use Vitest fake timers for the current `user-event` autosave test; use the real debounce interval.
+- Preserve StrictMode-safe recovery caching and mounted-state reset.
+- Preserve UUID/path validation, corrupt-file quarantine, and atomic replacement.

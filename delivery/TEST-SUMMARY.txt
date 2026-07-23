@@ -1,9 +1,9 @@
-Stage: Stage-04C
+Stage: Stage-04D
 Status: PASS
 ValidatedAt: 2026-07-23
-Branch: local/stage-04c-draft-crud
-StartCommit: 2744cdc8d5ec7e121440e97b9bf9b94533846aeb
-FeatureCommit: d998722b4e0c0edc691d46b8aab69b32f9f09f04
+Branch: local/stage-04d-autosave-recovery
+StartCommit: f50819f0533e166ccc8b72b7153972a8ba981cdd
+FeatureCommit: 83f1cb9539a5d9d5f2c043265575ac4e1744bdac
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
@@ -17,38 +17,37 @@ Setup:
   - 601 packages installed, 0 vulnerabilities
   - Two existing deprecated transitive @esbuild-kit warnings
 
-Required Stage-04C checks:
+Required Stage-04D checks:
+- npm.cmd run test --workspace @algae-atlas/content-workbench: PASS
+  - 3 frontend test files, 7 tests passed
+  - Debounce, waiting/saving/saved/failed states, dirty close warning, recovery prompt, and StrictMode behavior covered
 - npm.cmd run desktop:rust:test: PASS
-  - 4 Rust tests passed
-  - CRUD round trip, format/extra-field rejection, invalid ID/traversal, and atomic failure preservation covered
-- npm.cmd run test --workspace @algae-atlas/content-workbench -- src/App.test.tsx src/components/DraftPages.test.tsx: PASS
-  - 2 test files, 4 tests passed
-- npm.cmd run typecheck --workspace @algae-atlas/content-workbench: PASS
+  - 7 Rust tests passed
+  - Session start/interruption/normal finish, one-time recovery state, migration dispatch, corrupt quarantine, CRUD, path validation, and atomic failure preservation covered
+- npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
+  - TypeScript and ESLint passed
+  - ESLint printed a non-fatal missing Next.js pages directory notice for the Vite workspace
 - npm.cmd run desktop:rust:check: PASS
 
 Additional focused checks:
-- npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
-  - Initial run failed on react-hooks/set-state-in-effect
-  - Initial loading was moved to asynchronous promise callbacks; final run passed
+- npm.cmd run test --workspace @algae-atlas/content-workbench -- src/App.test.tsx src/components/DraftPages.test.tsx: PASS
+  - 2 files, 6 tests passed
 - npm.cmd run desktop:rust:clippy: PASS with warnings denied
-- npm.cmd run build --workspace @algae-atlas/content-workbench: PASS
-- cargo fmt --all -- --check: PASS
+- npm.cmd run desktop:rust:fmt: PASS
 - git diff --check: PASS
 
-Local render verification:
-- 1280 x 800: PASS; fixed sidebar and full-width workspace with no overflow
-- 600 x 800: PASS; five-column top navigation with no overlap
-- 320 x 700: PASS; no horizontal overflow and all navigation labels fit
-- Browser console warnings/errors after verification: none
+Corrected test attempt:
+- The first focused frontend run had two test-harness failures: retained DOM between tests and a fake-timer/user-event timeout.
+- Explicit React cleanup and the real 700 ms debounce interval fixed both; all subsequent focused and full frontend runs passed.
 
 Not run by explicit boundary:
 - Complete website tests: NOT RUN
-- Root build:next: NOT RUN
+- Root production build: NOT RUN
 - Native Tauri smoke: NOT RUN
 
 Safety:
-- Draft files are confined to app-data/drafts/v1 and named only by canonical UUID v4
-- Stored JSON has formatVersion 1 and only the Stage-04C fields
-- Existing files use same-directory atomic replacement
-- No autosave, recovery, Schema, generic filesystem, network, Git, or remote command was added
+- Draft writes still use fixed app-data paths, canonical UUID v4 IDs, and same-directory atomic replacement
+- Corrupt files move to a generated-name quarantine path and valid draft bytes remain unchanged
+- Session state is local to application data and is removed only on a normal Tauri exit event
+- No multi-window sync, history, cloud, encryption, search, generic filesystem, network, Git, or remote command was added
 - Git remote writes: none
