@@ -1,47 +1,46 @@
-# Stage 4B Delivery Handoff
+# Stage 4C Delivery Handoff
 
-Stage: Stage-04B - Static Navigation Framework
-Status: PASS
-Branch: `local/stage-04b-navigation`
-Start commit: `78db99f901c72cb19426d9c3a5ec1715f65acb98`
-Navigation commit: `582e6dc27163ee5de39e10b244ff4c9cc6b36084`
-Test commit: `336daf82b42c32bc773d0763ddb3f4e31cf35fb7`
+Stage: Stage-04C - Local Draft CRUD
+Branch: `local/stage-04c-draft-crud`
+Start commit: `2744cdc8d5ec7e121440e97b9bf9b94533846aeb`
+Feature commit: `d998722b4e0c0edc691d46b8aab69b32f9f09f04`
 End commit: `BRANCH_TIP_AT_DELIVERY` (the commit containing this record)
 
 ## Completed
 
-- Five-item static React navigation with active-page semantics.
-- Static title and empty state for every navigation destination.
-- Responsive desktop sidebar and narrow-width top navigation.
-- Root-level React error boundary with static fallback content.
-- Focused navigation and error-boundary component coverage.
-- Empty Tauri permissions and no changes to the Rust backend.
+- Version 1 JSON draft persistence in the Tauri application data directory.
+- Named create, list, open, manual-save, and delete commands.
+- Canonical UUID v4 path restriction and fixed `drafts/v1` storage scope.
+- Atomic new-file installation and safe existing-file replacement.
+- Basic React draft creation, list, editor, save, refresh, and confirmed-delete controls.
+- Rust and React coverage for the complete Stage-04C CRUD boundary.
 
 ## Not Completed
 
-- No Stage-04C draft CRUD or any later content, persistence, Schema, filesystem, database, preview, media, network, Git, packaging, remote, or deployment feature.
+- No autosave, recovery, history, search, shared Schema, dedicated type form, media, preview, repository export, Git, network, packaging, remote, or deployment behavior.
+- Complete website tests and native Tauri smoke were not run.
 
 ## Test Summary
 
-- Locked offline npm install: PASS, 0 vulnerabilities.
-- Desktop TypeScript check: PASS.
-- Focused component tests: PASS (2 files, 2 tests).
-- Real Tauri development launch: PASS.
-- Responsive render and static navigation interaction: PASS at desktop, narrow, and minimum widths.
-- Browser console warnings/errors: none.
-- Complete website tests: NOT RUN by explicit Stage-04B boundary.
+- Offline locked npm install: PASS; 601 packages, 0 vulnerabilities.
+- Rust tests: PASS; 4 tests.
+- Frontend tests: PASS; 2 files, 4 tests.
+- Desktop TypeScript/ESLint check: PASS.
+- Cargo check and clippy with warnings denied: PASS.
+- Desktop Vite build: PASS.
+- Responsive local render at 1280, 600, and 320 px widths: PASS.
 
-## Known Issue
+## Known Issues
 
-- Native UI capture was not repeated due the known host `SetIsBorderRequired` error; process/window and local WebView evidence verified the smoke test.
+- The supplied USB root did not contain a Stage-04B bundle. The exact clean local Stage-04B delivery tip `2744cdc8d5ec7e121440e97b9bf9b94533846aeb` was used as the start.
 
-## Next Stage
+## Next Stage Exact Start
 
-- Start only from the clean final tip of `local/stage-04b-navigation`.
-- Execute `16_Stage4C_本地草稿CRUD.md` in a new Stage-04C session/worktree.
+- Use the clean Stage-04C delivery tip or verified Stage-04C bundle.
+- Next instruction: `17_Stage4D_自动保存与异常恢复.md`.
 
 ## Do Not Repeat
 
-- Keep the throwing test helper's explicit `null` return type to avoid TS2786.
-- Do not retry native capture until the host compatibility issue changes.
-- Do not add draft or backend behavior to Stage-04B.
+- Keep initial draft-list effect updates asynchronous to satisfy React hook rules.
+- Keep UUID/path checks and atomic replacement intact.
+- Do not add Stage-04D behavior here.
