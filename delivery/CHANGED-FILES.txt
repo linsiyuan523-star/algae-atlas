@@ -1,36 +1,26 @@
-.gitattributes
-.gitignore
-eslint.config.mjs
-package-lock.json
-package.json
-packages/content-schema/browser/contract.ts
-packages/content-schema/fixtures/example-science-article/record.json
-packages/content-schema/fixtures/example-science-article/zh.md
-packages/content-schema/fixtures/index.ts
-packages/content-schema/package.json
-packages/content-schema/src/constants.ts
-packages/content-schema/src/index.ts
-packages/content-schema/src/issues.ts
-packages/content-schema/src/markdown.ts
-packages/content-schema/src/migration.ts
-packages/content-schema/src/models.ts
-packages/content-schema/src/registry.ts
-packages/content-schema/src/repository.ts
-packages/content-schema/src/schemas.ts
-packages/content-schema/src/serialization.ts
-packages/content-schema/src/validation.ts
-packages/content-schema/src/workflow.ts
-packages/content-schema/tests/cli.test.ts
-packages/content-schema/tests/markdown.test.ts
-packages/content-schema/tests/repository.test.ts
-packages/content-schema/tests/schema.test.ts
-packages/content-schema/tests/workflow.test.ts
-packages/content-schema/tsconfig.json
-packages/content-schema/vite.browser-contract.config.ts
-scripts/validate-content.ts
-docs/content-workbench/SCHEMA-USAGE.md
-docs/content-workbench/HANDOFF.md
-delivery/HANDOFF.md
-delivery/MANIFEST.txt
-delivery/TEST-SUMMARY.txt
-delivery/CHANGED-FILES.txt
+D .superpowers/sdd/task-2-report.md
+M README.md
+M delivery/CHANGED-FILES.txt
+M delivery/HANDOFF.md
+M delivery/TEST-SUMMARY.txt
+M docs/content-workbench/HANDOFF.md
+M package-lock.json
+M tests/content-workbench-scaffold.test.mjs
+M tools/content-workbench/index.html
+M tools/content-workbench/package.json
+D tools/content-workbench/src-tauri/src/clock.rs
+D tools/content-workbench/src-tauri/src/drafts/migration.rs
+D tools/content-workbench/src-tauri/src/drafts/mod.rs
+D tools/content-workbench/src-tauri/src/drafts/model.rs
+D tools/content-workbench/src-tauri/src/drafts/store.rs
+D tools/content-workbench/src-tauri/src/error.rs
+M tools/content-workbench/src-tauri/src/lib.rs
+D tools/content-workbench/src-tauri/src/paths.rs
+D tools/content-workbench/src-tauri/src/storage/atomic_replace.rs
+D tools/content-workbench/src-tauri/src/storage/mod.rs
+D tools/content-workbench/src-tauri/src/storage/path_safety.rs
+M tools/content-workbench/src-tauri/tauri.conf.json
+D tools/content-workbench/src-tauri/tests/fixtures/draft-v1-golden.json
+M tools/content-workbench/src/App.test.tsx
+M tools/content-workbench/src/App.tsx
+M tools/content-workbench/src/styles/app.css

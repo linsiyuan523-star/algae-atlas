@@ -1,50 +1,45 @@
-Stage: Stage-01
-Status: PASS; ready for final documentation commit and post-commit bundle verification
-ValidatedAt: 2026-07-22
-Branch: local/stage-01-schema
-BaselineCommit: 6dc2e71f4eaf45fca22ef351b14535d7782583b4
-ImplementationCommit: ede1d861f853e12086fb275f0e15b8c5618e0953
-FinalCommit: BRANCH_TIP_AT_DELIVERY (exact SHA in external USB copy)
-PredecessorBundleSha256: 5E6F79AF71AD3DF029B87772DA4C6A74B88C083326472056B50616DBFAB1BC31
+Stage: Stage-04A
+Status: PASS
+ValidatedAt: 2026-07-23
+Branch: local/stage-04a-minimal-shell
+StartCommit: 7c592faca28ee713c5abdf06f04ef05106b32f7a
+ImplementationCommit: c52edf139e4325bf693820169c4165eac8edc4fa
+FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
-- Git: 2.55.0.windows.2
 - Node.js: v22.23.1
 - npm: 10.9.8
-- PowerShell: 5.1.19041.6456
-- TypeScript: 5.9.3
-- Zod: 4.4.3 exact
-- Vite browser-contract target: 8.0.13
+- Rust/Cargo: 1.97.1
+- Linker: Visual Studio 2022 MSVC 14.44.35207 x64
 
-Dependency installation:
-- npm.cmd ci --offline --ignore-scripts: PASS
-- Installed: 509 packages; audited: 511 packages; vulnerabilities: 0
-- Informational warnings: two known deprecated transitive @esbuild-kit packages; no unrelated upgrade performed
+Setup:
+- npm.cmd ci --offline --ignore-scripts: PASS (601 packages, 0 vulnerabilities)
+- Informational: two existing deprecated transitive @esbuild-kit warnings
 
-Stage-01 focused validation:
-- npm.cmd run check: PASS, no warnings
-- npm.cmd run test:schema: PASS (58 tests, 0 failures)
-- npm.cmd run test:schema:browser: PASS (94 modules transformed; browser-target ES module executed)
-- npm.cmd run content:validate -- packages/content-schema/fixtures/example-science-article/record.json: PASS
-- Every one of 11 content types: valid fixture PASS; invalid dedicated-field fixture rejected with field path
-- Chinese published + English missing: PASS
-- English published with incomplete body/review/time/human verification: rejected as expected
-- Workflow transition matrix: PASS
-- Duplicate stable ID, wrong-type/broken reference, reviewer resolution, URL collision, media rights/consent, and unexpected en.md tests: PASS
-- Markdown raw HTML/MDX/unsafe protocol/path tests: PASS
-- Deterministic serialization and schema migration harness: PASS
+Allowed Stage-04A checks:
+- npm.cmd run typecheck --workspace @algae-atlas/content-workbench: PASS
+- cargo +1.97.1 check --locked --manifest-path <Stage-04A Cargo.toml>: PASS
+- npm.cmd run desktop:dev in the x64 MSVC environment: PASS
+- Native executable observed: target/debug/content-workbench.exe
+- Native window observed: exactly one, title "藻类团队内容发布工作台"
+- Local WebView render at 1280 x 720: PASS
+- Required heading, description, version 0.1.0, and disabled button: PASS
+- Document overflow: none
+- Browser console warnings/errors: none
 
-Repository regression validation:
-- npm.cmd test: PASS
-- Stage-01 Node tests: 58 passed
-- Browser-compatible target: PASS
-- Existing rendered-site tests: 25 passed
-- Existing IndexNow tests: 1 passed
-- npm.cmd run build:next: PASS (97 static pages)
-- Protected app/components/lib/public/db/drizzle/worker/.openai/build/runtime diff: empty
-- Website read path changed: no
-- Public page output intentionally changed: no
-- Worker Git remote: empty
+Not run by explicit boundary:
+- Root npm test: NOT RUN
+- Root build:next: NOT RUN
+- Desktop Vitest/root scaffold tests: NOT RUN
 
-Post-final-commit delivery checks:
-- Final clean Git status, changed-file allowlist, strict UTF-8/LF, secret scan, git diff check, exact final SHA, bundle verify, bundle SHA-256, USB copy hash, and USB bundle verify are written into the external USB TEST-SUMMARY.txt/MANIFEST.txt after bundle creation.
+Known verification limit:
+- Native-window state capture was blocked by host automation error
+  SetIsBorderRequired: 0x80004002. Process/window observation and the same
+  local WebView render supplied launch and UI evidence.
+
+Safety:
+- Tauri capability permissions: empty
+- General filesystem, Shell, network, Git, and app commands: absent
+- Desktop Stage-01 Schema dependency: absent
+- Draft/storage implementation: absent
+- Git remote writes: none
