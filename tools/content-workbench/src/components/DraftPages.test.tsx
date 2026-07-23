@@ -137,6 +137,21 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
   expect(api.openDraft).toHaveBeenCalledWith(draft.draftId);
 
   await user.selectOptions(screen.getByLabelText("内容类型"), "learning-resource");
+  await user.type(screen.getByLabelText(/中文摘要/), "虚构学习资源摘要。");
+  await user.type(screen.getByLabelText(/仪器或主题/), "虚构主题");
+  await user.type(screen.getByLabelText(/适用对象说明/), "虚构读者");
+  await user.type(screen.getByLabelText(/资源目的/), "虚构资源目的。");
+  await user.type(screen.getByLabelText(/安全说明/), "不包含真实操作参数。");
+  await user.type(
+    screen.getByLabelText(/使用声明/),
+    "不替代仪器手册、安全培训、监督或批准的 SOP。",
+  );
+  await user.selectOptions(screen.getByLabelText(/资源类型/), "beginner-guide");
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: /^适用对象/ }),
+    "students",
+  );
+  await user.type(screen.getByLabelText(/资源版本/), "1.0");
   await user.clear(screen.getByLabelText("稳定 ID"));
   await user.type(screen.getByLabelText("稳定 ID"), "fictional-article");
   await user.clear(screen.getByLabelText("中文标题"));
@@ -160,6 +175,25 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
   expect(window.confirm).toHaveBeenCalledWith("确定删除“虚构文章”？");
   expect(api.deleteDraft).toHaveBeenCalledWith(draft.draftId);
   expect(await screen.findByText("目前没有草稿。")).toBeVisible();
+});
+
+test("warns before discarding type-specific fields during a type switch", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<DraftsPage api={api} initialDraft={draft} />);
+
+  await user.selectOptions(screen.getByLabelText("内容类型"), "learning-resource");
+  expect(confirm).toHaveBeenCalledWith(
+    "切换内容类型会清空当前类型的专用字段，确定继续？",
+  );
+  expect(screen.getByLabelText("内容类型")).toHaveValue("team-news");
+  expect(screen.getByRole("heading", { name: "团队动态字段" })).toBeVisible();
+
+  confirm.mockReturnValue(true);
+  await user.selectOptions(screen.getByLabelText("内容类型"), "learning-resource");
+  expect(screen.getByLabelText("内容类型")).toHaveValue("learning-resource");
+  expect(screen.getByRole("heading", { name: "实验学习资源字段" })).toBeVisible();
 });
 
 test("validates and serializes the team-news pilot before saving", async () => {
