@@ -6,7 +6,7 @@
 
 **Architecture:** Add `tools/content-workbench` as a root npm workspace. React owns the unprivileged shell and imports the Stage-01 registry/default helpers; a single typed bridge invokes exactly eleven named Tauri commands. Rust owns versioned JSON envelopes under Tauri-derived application directories, serializes mutations behind service locks, performs bounded/validated atomic replacement, and never accepts a filesystem path from the frontend.
 
-**Tech Stack:** Tauri CLI 2.11.4, Tauri JS API 2.11.1, Tauri Rust 2.11.5, Tauri Single Instance 2.4.3, React 19.2.6, Lucide React 1.25.0, TypeScript 5.9.3, Vite 8.0.13, Vitest 4.1.10, Rust 1.97.1 (`x86_64-pc-windows-msvc`), serde/serde_json, uuid, time, thiserror, windows-sys, Testing Library, and the existing `@algae-atlas/content-schema@1.0.0` workspace package.
+**Tech Stack:** Tauri CLI 2.11.4, Tauri JS API 2.11.1, Tauri Rust 2.11.5, Tauri Single Instance 2.4.3, React 19.2.6, Lucide React 1.25.0, TypeScript 5.9.3, desktop Vite 8.0.16 (root website Vite remains 8.0.13), Vitest 4.1.10, Rust 1.97.1 (`x86_64-pc-windows-msvc`), serde/serde_json, uuid, time, thiserror, windows-sys, Testing Library, and the existing `@algae-atlas/content-schema@1.0.0` workspace package.
 
 ---
 
@@ -265,11 +265,16 @@ Use package name `@algae-atlas/content-workbench`, version `0.1.0`, `private: tr
     "@vitejs/plugin-react": "6.0.2",
     "jsdom": "29.1.1",
     "typescript": "5.9.3",
-    "vite": "8.0.13",
+    "vite": "8.0.16",
     "vitest": "4.1.10"
   }
 }
 ```
+
+Operator-approved security override: the desktop workspace uses exact Vite
+`8.0.16` instead of the original `8.0.13` because `8.0.16` is the first
+registry-published version outside `GHSA-fx2h-pf6j-xcff`'s affected
+`>=8.0.0 <=8.0.15` range. The root website retains its existing Vite pin.
 
 Workspace scripts:
 

@@ -24,8 +24,18 @@ function normalizeToml(toml) {
     .join("\n");
 }
 
+function resolveWorkspacePackage(packageLock, packageName) {
+  const candidates = [
+    `tools/content-workbench/node_modules/${packageName}`,
+    `tools/node_modules/${packageName}`,
+    `node_modules/${packageName}`,
+  ];
+  return candidates.find((candidate) => packageLock.packages[candidate]);
+}
+
 test("content workbench scaffold has the local-only desktop contract", () => {
   const rootPackage = readJson(resolve(root, "package.json"));
+  const packageLock = readJson(resolve(root, "package-lock.json"));
   const workspacePackage = readJson(resolve(desktop, "package.json"));
   const tauriConfig = readJson(resolve(desktop, "src-tauri/tauri.conf.json"));
   const capability = readJson(resolve(desktop, "src-tauri/capabilities/main-local.json"));
@@ -34,6 +44,7 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   const toolchain = readText(resolve(desktop, "rust-toolchain.toml"));
   const viteConfig = readText(resolve(desktop, "vite.config.ts"));
   const indexHtml = readText(resolve(desktop, "index.html"));
+  const gitignore = readText(resolve(root, ".gitignore"));
 
   assert.deepEqual(rootPackage.workspaces, ["packages/*", "tools/content-workbench"]);
   assert.equal(workspacePackage.name, "@algae-atlas/content-workbench");
@@ -58,11 +69,15 @@ test("content workbench scaffold has the local-only desktop contract", () => {
     "@vitejs/plugin-react": "6.0.2",
     jsdom: "29.1.1",
     typescript: "5.9.3",
-    vite: "8.0.13",
+    vite: "8.0.16",
     vitest: "4.1.10",
   };
   assert.deepEqual(workspacePackage.dependencies, expectedDependencies);
   assert.deepEqual(workspacePackage.devDependencies, expectedDevDependencies);
+  const workspaceVitePath = resolveWorkspacePackage(packageLock, "vite");
+  assert.equal(workspaceVitePath, "tools/content-workbench/node_modules/vite");
+  assert.equal(packageLock.packages[workspaceVitePath].version, "8.0.16");
+  assert.equal(packageLock.packages["node_modules/vite"].version, "8.0.13");
 
   assert.equal(tauriConfig.bundle.active, false);
   assert.equal(tauriConfig.build.frontendDist, "../dist");
@@ -164,4 +179,12 @@ test("content workbench scaffold has the local-only desktop contract", () => {
     { cwd: root, encoding: "utf8" },
   ).trim();
   assert.equal(tsbuildInfoPaths, "", ".tsbuildinfo files must be ignored or absent");
+
+  assert.match(gitignore, /^node_modules\/$/m, "node_modules must be ignored at every workspace depth");
+  const generatedDependencyPaths = execFileSync(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard", "--", "tools/content-workbench/node_modules/**"],
+    { cwd: root, encoding: "utf8" },
+  ).trim();
+  assert.equal(generatedDependencyPaths, "", "workspace node_modules must be ignored or absent");
 });
