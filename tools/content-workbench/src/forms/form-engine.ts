@@ -8,6 +8,7 @@ export type FormControl =
   | "text"
   | "textarea"
   | "date"
+  | "number"
   | "enum"
   | "boolean"
   | "url"
@@ -27,6 +28,9 @@ export type FormFieldDefinition = {
   options?: readonly FormOption[];
   placeholder?: string;
   maxLength?: number;
+  min?: number;
+  max?: number;
+  step?: number;
   rows?: number;
 };
 
@@ -84,6 +88,17 @@ export function validateFormValues(
 
     if (field.control === "date" && !isIsoDate(text)) {
       errors[field.id] = `${field.label}必须是有效日期。`;
+    } else if (field.control === "number") {
+      const number = Number(text);
+      if (!Number.isFinite(number)) {
+        errors[field.id] = `${field.label}必须是有效数字。`;
+      } else if (field.step === 1 && !Number.isInteger(number)) {
+        errors[field.id] = `${field.label}必须是整数。`;
+      } else if (field.min !== undefined && number < field.min) {
+        errors[field.id] = `${field.label}不能小于 ${field.min}。`;
+      } else if (field.max !== undefined && number > field.max) {
+        errors[field.id] = `${field.label}不能大于 ${field.max}。`;
+      }
     } else if (field.control === "url" && !isHttpsUrl(text)) {
       errors[field.id] = `${field.label}必须使用有效的 HTTPS URL。`;
     } else if (

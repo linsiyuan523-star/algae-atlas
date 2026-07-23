@@ -184,6 +184,8 @@ function renderControl({
       type={
         field.control === "date"
           ? "date"
+          : field.control === "number"
+            ? "number"
           : field.control === "url"
             ? "url"
             : "text"
@@ -191,6 +193,9 @@ function renderControl({
       autoComplete="off"
       spellCheck={field.control !== "url" && field.control !== "author-reference"}
       maxLength={field.maxLength}
+      min={field.min}
+      max={field.max}
+      step={field.step}
       value={value}
       disabled={disabled}
       placeholder={field.placeholder}

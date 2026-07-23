@@ -210,16 +210,40 @@ const teamNewsFields = {
 
 const outputFields = {
   shared: [
-    field("outputKind", "shared.outputKind", "成果类型", "Output kind", "enum", "always"),
+    field("outputKind", "shared.outputKind", "成果类型", "Output kind", "enum", "always", {
+      options: ["publication", "patent", "dataset", "software", "student-research"],
+    }),
     field("contributorIds", "shared.contributorIds", "作者", "Contributors", "id-list", "always"),
     field("year", "shared.year", "年份", "Year", "integer", "always"),
-    field("venueKind", "shared.venueKind", "期刊/会议/专利类型", "Venue kind", "enum", "always"),
+    field("publicationDate", "shared.publicationDate", "公开日期", "Publication date", "date", "optional"),
+    field("venueKind", "shared.venueKind", "期刊/会议/专利类型", "Venue kind", "enum", "always", {
+      options: ["journal", "conference", "patent-office", "repository", "other"],
+    }),
     field("venueName", "shared.venueName", "期刊/会议/专利", "Venue", "text", "always"),
     field("identifier", "shared.identifier", "DOI 或其他标识符", "DOI or identifier", "group", "always"),
+    field("identifierKind", "shared.identifier.kind", "标识符类型", "Identifier kind", "enum", "always", {
+      options: ["doi", "isbn", "patent", "accession", "url", "other"],
+    }),
+    field("identifierValue", "shared.identifier.value", "标识符", "Identifier", "text", "always"),
     field("canonicalUrl", "shared.canonicalUrl", "公开链接", "Public URL", "url", "optional"),
+    field("outputStatus", "shared.outputStatus", "成果状态", "Output status", "enum", "always", {
+      options: ["published", "accepted", "granted", "released", "pending"],
+    }),
   ],
   localized: [
     field("citationNote", "locales.{locale}.fields.citationNote", "引用说明", "Citation note", "text", "always", {
+      localized: true,
+    }),
+    field(
+      "contributionNote",
+      "locales.{locale}.fields.contributionNote",
+      "贡献说明",
+      "Contribution note",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field("description", "locales.{locale}.fields.description", "成果简介", "Description", "text", "optional", {
       localized: true,
     }),
   ],
@@ -227,15 +251,53 @@ const outputFields = {
 
 const projectFields = {
   shared: [
-    field("projectStatus", "shared.projectStatus", "项目状态", "Project status", "enum", "always"),
+    field("projectKind", "shared.projectKind", "项目类型", "Project kind", "enum", "always", {
+      options: ["funded", "internal", "student", "collaborative", "field-observation"],
+    }),
+    field("projectStatus", "shared.projectStatus", "项目状态", "Project status", "enum", "always", {
+      options: ["planned", "active", "completed", "suspended", "cancelled"],
+    }),
+    field("publicProjectCode", "shared.publicProjectCode", "公开项目编号", "Public project code", "text", "optional"),
     field("leadAuthorId", "shared.leadAuthorId", "负责人", "Lead", "id", "always"),
     field("startDate", "shared.startDate", "开始日期", "Start date", "date", "always"),
     field("endDate", "shared.endDate", "结束日期", "End date", "date", "optional"),
     field("fundingSources", "shared.fundingSources", "资助来源", "Funding sources", "reference-list", "optional"),
-    field("publicScope", "shared.publicScope", "公开范围", "Public scope", "enum", "always"),
+    field("publicScope", "shared.publicScope", "公开范围", "Public scope", "enum", "always", {
+      options: ["public", "summary-only", "internal"],
+    }),
+    field(
+      "disclosureStatus",
+      "shared.disclosureStatus",
+      "公开确认",
+      "Disclosure status",
+      "enum",
+      "always",
+      { options: ["pending", "approved"] },
+    ),
   ],
   localized: [
     field("objectives", "locales.{locale}.fields.objectives", "项目目标", "Objectives", "text", "always", {
+      localized: true,
+    }),
+    field(
+      "methodsOverview",
+      "locales.{locale}.fields.methodsOverview",
+      "方法概述",
+      "Methods overview",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "publicProgress",
+      "locales.{locale}.fields.publicProgress",
+      "公开进展",
+      "Public progress",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field("outcomes", "locales.{locale}.fields.outcomes", "项目成果", "Outcomes", "text", "optional", {
       localized: true,
     }),
   ],
@@ -369,19 +431,70 @@ const observationFields = {
 
 const articleFields = {
   shared: [
-    field("articleKind", "shared.articleKind", "文章类型", "Article kind", "enum", "always"),
-    field("targetAudience", "shared.targetAudience", "目标读者", "Target audience", "enum", "always"),
+    field("articleKind", "shared.articleKind", "文章类型", "Article kind", "enum", "always", {
+      options: ["foundation", "observation-guide", "method-explainer", "research-context"],
+    }),
+    field("publicationDate", "shared.publicationDate", "发布日期", "Publication date", "date", "always"),
+    field("targetAudience", "shared.targetAudience", "目标读者", "Target audience", "enum", "always", {
+      options: ["general", "students", "educators", "researchers"],
+    }),
+    field(
+      "readingTimeMinutes",
+      "shared.readingTimeMinutes",
+      "阅读时长（分钟）",
+      "Reading time (minutes)",
+      "integer",
+      "optional",
+    ),
     field("references", "shared.references", "参考资料", "References", "reference-list", "optional"),
   ],
   localized: [
     field("topic", "locales.{locale}.fields.topic", "主题", "Topic", "text", "always", { localized: true }),
+    field(
+      "targetAudienceLabel",
+      "locales.{locale}.fields.targetAudienceLabel",
+      "目标读者说明",
+      "Target audience label",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field(
+      "categoryLabel",
+      "locales.{locale}.fields.categoryLabel",
+      "分类标签",
+      "Category label",
+      "text",
+      "optional",
+      { localized: true },
+    ),
   ],
 };
 
 const memberFields = {
   shared: [
-    field("roleCategory", "shared.roleCategory", "角色", "Role category", "enum", "always"),
-    field("portraitConsent", "shared.portraitConsent", "照片授权", "Portrait consent", "enum", "always"),
+    field("authorId", "shared.authorId", "作者档案 ID", "Author profile ID", "id", "always"),
+    field("membershipStatus", "shared.membershipStatus", "成员状态", "Membership status", "enum", "always", {
+      options: ["active", "alumni", "guest", "inactive"],
+    }),
+    field("roleCategory", "shared.roleCategory", "角色", "Role category", "enum", "always", {
+      options: ["faculty", "researcher", "student", "technician", "collaborator", "other"],
+    }),
+    field("displayOrder", "shared.displayOrder", "显示顺序", "Display order", "integer", "always"),
+    field("publicStartYear", "shared.publicStartYear", "公开起始年份", "Public start year", "integer", "optional"),
+    field("publicEndYear", "shared.publicEndYear", "公开结束年份", "Public end year", "integer", "optional"),
+    field(
+      "profileDisclosure",
+      "shared.profileDisclosure",
+      "资料公开确认",
+      "Profile disclosure",
+      "enum",
+      "always",
+      { options: ["pending", "approved"] },
+    ),
+    field("portraitConsent", "shared.portraitConsent", "照片授权", "Portrait consent", "enum", "always", {
+      options: ["not-applicable", "pending", "confirmed"],
+    }),
     field(
       "publicContactEnabled",
       "shared.publicContactEnabled",
@@ -417,8 +530,19 @@ const collaborationFields = {
       "Collaboration kind",
       "enum",
       "always",
+      { options: ["area", "exchange", "case-study"] },
+    ),
+    field(
+      "collaborationStatus",
+      "shared.collaborationStatus",
+      "合作状态",
+      "Collaboration status",
+      "enum",
+      "always",
+      { options: ["open-for-discussion", "case-by-case", "internal-only"] },
     ),
     field("startedAt", "shared.startedAt", "开始时间", "Start date", "date", "optional"),
+    field("endedAt", "shared.endedAt", "结束时间", "End date", "date", "optional"),
     field(
       "publicAuthorization",
       "shared.publicAuthorization",
@@ -426,6 +550,7 @@ const collaborationFields = {
       "Public authorization",
       "enum",
       "always",
+      { options: ["pending", "bilateral-approved", "not-required"] },
     ),
     field(
       "collaborationBoundary",
@@ -434,6 +559,16 @@ const collaborationFields = {
       "Collaboration boundary",
       "enum",
       "always",
+      { options: ["public-summary", "approved-details", "internal-only"] },
+    ),
+    field(
+      "disclosureStatus",
+      "shared.disclosureStatus",
+      "公开确认",
+      "Disclosure status",
+      "enum",
+      "always",
+      { options: ["pending", "approved"] },
     ),
   ],
   localized: [
@@ -442,6 +577,63 @@ const collaborationFields = {
       "locales.{locale}.fields.organizationName",
       "单位",
       "Organization",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "suitablePartners",
+      "locales.{locale}.fields.suitablePartners",
+      "适合合作对象",
+      "Suitable partners",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field(
+      "possibleTopics",
+      "locales.{locale}.fields.possibleTopics",
+      "可合作主题",
+      "Possible topics",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field(
+      "partnerPreparation",
+      "locales.{locale}.fields.partnerPreparation",
+      "合作方准备",
+      "Partner preparation",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "teamMayContribute",
+      "locales.{locale}.fields.teamMayContribute",
+      "团队可提供内容",
+      "Team contribution",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field("caveat", "locales.{locale}.fields.caveat", "合作边界说明", "Caveat", "text", "always", {
+      localized: true,
+    }),
+    field(
+      "processSummary",
+      "locales.{locale}.fields.processSummary",
+      "过程摘要",
+      "Process summary",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "outcomeSummary",
+      "locales.{locale}.fields.outcomeSummary",
+      "成果摘要",
+      "Outcome summary",
       "text",
       "optional",
       { localized: true },
