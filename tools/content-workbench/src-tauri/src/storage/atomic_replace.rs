@@ -1,10 +1,12 @@
-use super::{deterministic_json, read_bounded};
+#[cfg(test)]
+use super::path_safety::NoopPathSafetyHook;
+use super::{deterministic_json, path_safety::SafeDirectory, read_bounded_file};
 use crate::error::{AppError, AppResult};
 use serde::Serialize;
 use std::{
     ffi::OsString,
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
+    io::{Seek, SeekFrom, Write},
     path::Path,
 };
 use uuid::Uuid;
@@ -31,8 +33,42 @@ impl AtomicReplacer for PlatformAtomicReplacer {
     }
 }
 
+#[cfg(test)]
 pub fn write_json_atomically<T, R, F>(
     target: &Path,
+    value: &T,
+    limit: usize,
+    mode: ReplaceMode,
+    replacer: &R,
+    validate: F,
+) -> AppResult<Vec<u8>>
+where
+    T: Serialize,
+    R: AtomicReplacer + ?Sized,
+    F: Fn(&[u8]) -> AppResult<()>,
+{
+    let parent = target
+        .parent()
+        .ok_or_else(AppError::draft_envelope_invalid)?;
+    let target_name = target
+        .file_name()
+        .ok_or_else(AppError::draft_envelope_invalid)?;
+    let directory =
+        SafeDirectory::open_or_create(parent, &[], std::sync::Arc::new(NoopPathSafetyHook))?;
+    write_json_atomically_in(
+        &directory,
+        target_name,
+        value,
+        limit,
+        mode,
+        replacer,
+        validate,
+    )
+}
+
+pub fn write_json_atomically_in<T, R, F>(
+    directory: &SafeDirectory,
+    target_name: &std::ffi::OsStr,
     value: &T,
     limit: usize,
     mode: ReplaceMode,
@@ -47,22 +83,28 @@ where
     let bytes = deterministic_json(value, limit)?;
     validate(&bytes)?;
 
-    let temporary = operation_temp_path(target)?;
+    let target = directory.path().join(target_name);
+    let temporary_name = operation_temp_name(target_name)?;
+    let temporary = directory.path().join(&temporary_name);
     let mut temporary_created = false;
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| AppError::storage_write(&temporary, error))?;
+        let mut safe_file = directory.create_new_file(&temporary_name)?;
         temporary_created = true;
-        file.write_all(&bytes)
+        safe_file
+            .file_mut()
+            .write_all(&bytes)
             .map_err(|error| AppError::storage_write(&temporary, error))?;
-        file.sync_all()
+        safe_file
+            .file_mut()
+            .sync_all()
             .map_err(|error| AppError::storage_write(&temporary, error))?;
-        drop(file);
+        safe_file
+            .file_mut()
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| AppError::storage_read(&temporary, error))?;
 
-        let reread = read_bounded(&temporary, limit)?;
+        let safe_path = safe_file.path().to_path_buf();
+        let reread = read_bounded_file(safe_file.file_mut(), &safe_path, limit)?;
         validate(&reread)?;
         if reread != bytes {
             return Err(AppError::atomic_replace(
@@ -73,7 +115,12 @@ where
                 ),
             ));
         }
-        replacer.install(&temporary, target, mode)?;
+        if mode == ReplaceMode::Existing {
+            drop(directory.open_existing_file(target_name)?);
+        }
+        directory.before_mutation(&temporary, &target)?;
+        drop(safe_file);
+        replacer.install(&temporary, &target, mode)?;
         Ok(bytes.clone())
     })();
 
@@ -87,17 +134,14 @@ where
     result
 }
 
-fn operation_temp_path(target: &Path) -> AppResult<std::path::PathBuf> {
-    let parent = target
-        .parent()
-        .ok_or_else(AppError::draft_envelope_invalid)?;
-    let name = target
-        .file_name()
-        .ok_or_else(AppError::draft_envelope_invalid)?;
+fn operation_temp_name(name: &std::ffi::OsStr) -> AppResult<OsString> {
+    if name.is_empty() {
+        return Err(AppError::draft_envelope_invalid());
+    }
     let mut temporary_name = OsString::from(".");
     temporary_name.push(name);
     temporary_name.push(format!(".{}.tmp", Uuid::new_v4()));
-    Ok(parent.join(temporary_name))
+    Ok(temporary_name)
 }
 
 fn install_new(temporary: &Path, target: &Path) -> AppResult<()> {

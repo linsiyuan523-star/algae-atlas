@@ -1,8 +1,8 @@
 use super::{
     migration::{decode_draft, parse_canonical_v4, parse_utc_timestamp},
     model::{
-        CreateDraftRequest, DeleteDraftRequest, DeleteDraftResponse, DraftEnvelopeV1, DraftSummary,
-        ListDraftsResponse, LoadDraftRequest, SaveDraftRequest,
+        CreateDraftRequest, DeleteDraftRequest, DeletedDraft, ListDraftsResponse, LoadDraftRequest,
+        SaveDraftRequest, StoredDraftV1,
     },
 };
 use crate::{
@@ -11,16 +11,18 @@ use crate::{
     paths::AppPaths,
     storage::{
         atomic_replace::{
-            move_file_no_replace, write_json_atomically, AtomicReplacer, PlatformAtomicReplacer,
+            move_file_no_replace, write_json_atomically_in, AtomicReplacer, PlatformAtomicReplacer,
             ReplaceMode,
         },
-        read_bounded,
+        path_safety::{NoopPathSafetyHook, PathSafetyHook, SafeDirectory},
+        read_bounded_file,
     },
     DRAFT_STORAGE_VERSION, MAX_DRAFT_BYTES, MAX_SAFE_REVISION,
 };
 use std::{
+    ffi::OsStr,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex, MutexGuard},
 };
 use time::OffsetDateTime;
@@ -30,12 +32,18 @@ pub struct DraftStore {
     paths: AppPaths,
     clock: Arc<dyn Clock>,
     replacer: Arc<dyn AtomicReplacer>,
+    safety_hook: Arc<dyn PathSafetyHook>,
     operation_lock: Mutex<()>,
 }
 
 impl DraftStore {
     pub fn new(paths: AppPaths, clock: Arc<dyn Clock>) -> Self {
-        Self::with_replacer(paths, clock, Arc::new(PlatformAtomicReplacer))
+        Self::with_components(
+            paths,
+            clock,
+            Arc::new(PlatformAtomicReplacer),
+            Arc::new(NoopPathSafetyHook),
+        )
     }
 
     pub fn with_replacer(
@@ -43,24 +51,41 @@ impl DraftStore {
         clock: Arc<dyn Clock>,
         replacer: Arc<dyn AtomicReplacer>,
     ) -> Self {
+        Self::with_components(paths, clock, replacer, Arc::new(NoopPathSafetyHook))
+    }
+
+    pub fn with_safety_hook(
+        paths: AppPaths,
+        clock: Arc<dyn Clock>,
+        safety_hook: Arc<dyn PathSafetyHook>,
+    ) -> Self {
+        Self::with_components(paths, clock, Arc::new(PlatformAtomicReplacer), safety_hook)
+    }
+
+    fn with_components(
+        paths: AppPaths,
+        clock: Arc<dyn Clock>,
+        replacer: Arc<dyn AtomicReplacer>,
+        safety_hook: Arc<dyn PathSafetyHook>,
+    ) -> Self {
         Self {
             paths,
             clock,
             replacer,
+            safety_hook,
             operation_lock: Mutex::new(()),
         }
     }
 
-    pub fn create(&self, request: CreateDraftRequest) -> AppResult<DraftEnvelopeV1> {
+    pub fn create(&self, request: CreateDraftRequest) -> AppResult<StoredDraftV1> {
         let _guard = self.lock()?;
-        fs::create_dir_all(self.paths.drafts_dir())
-            .map_err(|error| AppError::storage_write(self.paths.drafts_dir(), error))?;
+        let directory = self.drafts_directory()?;
 
         let id = Uuid::new_v4();
         let now = self.formatted_now()?;
-        let draft = DraftEnvelopeV1 {
+        let draft = StoredDraftV1 {
             storage_version: DRAFT_STORAGE_VERSION,
-            id: id.to_string(),
+            draft_id: id.to_string(),
             revision: 1,
             created_at: now.clone(),
             updated_at: now,
@@ -68,31 +93,26 @@ impl DraftStore {
             local_notes: request.local_notes,
             record_draft: request.record_draft,
         };
-        let path = self.draft_path(id);
-        self.write(&path, &draft, id, ReplaceMode::New)?;
+        let name = draft_file_name(id);
+        self.write(&directory, &name, &draft, id, ReplaceMode::New)?;
         Ok(draft)
     }
 
     pub fn list(&self) -> AppResult<ListDraftsResponse> {
         let _guard = self.lock()?;
-        let directory = self.paths.drafts_dir();
-        if !directory.exists() {
-            return Ok(ListDraftsResponse {
-                drafts: Vec::new(),
-                issues: Vec::new(),
-            });
-        }
+        let directory = self.drafts_directory()?;
 
-        let entries =
-            fs::read_dir(&directory).map_err(|error| AppError::storage_read(&directory, error))?;
-        let mut valid: Vec<(OffsetDateTime, DraftSummary)> = Vec::new();
+        let entries = fs::read_dir(directory.path())
+            .map_err(|error| AppError::storage_read(directory.path(), error))?;
+        let mut valid: Vec<(OffsetDateTime, StoredDraftV1)> = Vec::new();
         let mut issues = Vec::new();
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
                     issues.push(DesktopIssue::from(AppError::storage_read(
-                        &directory, error,
+                        directory.path(),
+                        error,
                     )));
                     continue;
                 }
@@ -114,7 +134,7 @@ impl DraftStore {
                     continue;
                 }
             };
-            let draft = match self.read(&path, id) {
+            let draft = match self.read(&directory, &entry.file_name(), id) {
                 Ok(draft) => draft,
                 Err(error) => {
                     issues.push(DesktopIssue::from(error));
@@ -122,21 +142,12 @@ impl DraftStore {
                 }
             };
             let updated = parse_utc_timestamp(&draft.updated_at)?;
-            valid.push((
-                updated,
-                DraftSummary {
-                    id: draft.id,
-                    revision: draft.revision,
-                    created_at: draft.created_at,
-                    updated_at: draft.updated_at,
-                    local_label: draft.local_label,
-                },
-            ));
+            valid.push((updated, draft));
         }
         valid.sort_by(|(left_time, left), (right_time, right)| {
             right_time
                 .cmp(left_time)
-                .then_with(|| left.id.cmp(&right.id))
+                .then_with(|| left.draft_id.cmp(&right.draft_id))
         });
         Ok(ListDraftsResponse {
             drafts: valid.into_iter().map(|(_, draft)| draft).collect(),
@@ -144,18 +155,20 @@ impl DraftStore {
         })
     }
 
-    pub fn load(&self, request: LoadDraftRequest) -> AppResult<DraftEnvelopeV1> {
+    pub fn load(&self, request: LoadDraftRequest) -> AppResult<StoredDraftV1> {
         let _guard = self.lock()?;
-        let id = parse_canonical_v4(&request.id)?;
-        self.read(&self.draft_path(id), id)
+        let id = parse_canonical_v4(&request.draft_id)?;
+        let directory = self.drafts_directory()?;
+        self.read(&directory, &draft_file_name(id), id)
     }
 
-    pub fn save(&self, request: SaveDraftRequest) -> AppResult<DraftEnvelopeV1> {
+    pub fn save(&self, request: SaveDraftRequest) -> AppResult<StoredDraftV1> {
         let _guard = self.lock()?;
-        let id = parse_canonical_v4(&request.id)?;
+        let id = parse_canonical_v4(&request.draft_id)?;
         validate_expected_revision(request.expected_revision)?;
-        let path = self.draft_path(id);
-        let current = self.read(&path, id)?;
+        let directory = self.drafts_directory()?;
+        let name = draft_file_name(id);
+        let current = self.read(&directory, &name, id)?;
         if current.revision != request.expected_revision {
             return Err(AppError::draft_revision_conflict());
         }
@@ -165,9 +178,9 @@ impl DraftStore {
             .filter(|revision| *revision <= MAX_SAFE_REVISION)
             .ok_or_else(AppError::draft_revision_invalid)?;
         let updated = self.formatted_now()?;
-        let replacement = DraftEnvelopeV1 {
+        let replacement = StoredDraftV1 {
             storage_version: DRAFT_STORAGE_VERSION,
-            id: current.id,
+            draft_id: current.draft_id,
             revision,
             created_at: current.created_at,
             updated_at: updated,
@@ -175,16 +188,18 @@ impl DraftStore {
             local_notes: request.local_notes,
             record_draft: request.record_draft,
         };
-        self.write(&path, &replacement, id, ReplaceMode::Existing)?;
+        self.write(&directory, &name, &replacement, id, ReplaceMode::Existing)?;
         Ok(replacement)
     }
 
-    pub fn delete(&self, request: DeleteDraftRequest) -> AppResult<DeleteDraftResponse> {
+    pub fn delete(&self, request: DeleteDraftRequest) -> AppResult<DeletedDraft> {
         let _guard = self.lock()?;
-        let id = parse_canonical_v4(&request.id)?;
+        let id = parse_canonical_v4(&request.draft_id)?;
         validate_expected_revision(request.expected_revision)?;
-        let active = self.draft_path(id);
-        let current = self.read(&active, id)?;
+        let drafts_directory = self.drafts_directory()?;
+        let active_name = draft_file_name(id);
+        let active = drafts_directory.path().join(&active_name);
+        let current = self.read(&drafts_directory, &active_name, id)?;
         if current.revision != request.expected_revision {
             return Err(AppError::draft_revision_conflict());
         }
@@ -196,14 +211,16 @@ impl DraftStore {
         }
         let deleted_at =
             format_utc_rfc3339(deleted_time).map_err(|_| AppError::draft_envelope_invalid())?;
-        let trash_directory = self.paths.trash_dir();
-        fs::create_dir_all(&trash_directory)
-            .map_err(|error| AppError::storage_write(&trash_directory, error))?;
-        let trash = trash_directory.join(format!("{}.{unix_nanos}.json", current.id));
+        let trash_directory = self.trash_directory()?;
+        let trash = trash_directory
+            .path()
+            .join(format!("{}-{unix_nanos}.json", current.draft_id));
+        drafts_directory.before_mutation(&active, &trash)?;
         rename_no_replace(&active, &trash)?;
 
-        Ok(DeleteDraftResponse {
-            id: current.id,
+        Ok(DeletedDraft {
+            draft_id: current.draft_id,
+            revision: current.revision,
             deleted_at,
             recoverable: true,
         })
@@ -219,37 +236,45 @@ impl DraftStore {
         format_utc_rfc3339(self.clock.now_utc()).map_err(|_| AppError::draft_envelope_invalid())
     }
 
-    fn draft_path(&self, id: Uuid) -> PathBuf {
-        self.paths.drafts_dir().join(format!("{id}.json"))
+    fn drafts_directory(&self) -> AppResult<SafeDirectory> {
+        SafeDirectory::open_or_create(
+            &self.paths.app_data_dir,
+            &["drafts", "v1"],
+            Arc::clone(&self.safety_hook),
+        )
     }
 
-    fn read(&self, path: &Path, expected_id: Uuid) -> AppResult<DraftEnvelopeV1> {
-        match fs::symlink_metadata(path) {
-            Ok(metadata) if metadata.file_type().is_file() => {}
-            Ok(_) => {
-                return Err(AppError::storage_read(
-                    path,
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "not a regular file"),
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(AppError::draft_not_found());
-            }
-            Err(error) => return Err(AppError::storage_read(path, error)),
-        }
-        let bytes = read_bounded(path, MAX_DRAFT_BYTES)?;
+    fn trash_directory(&self) -> AppResult<SafeDirectory> {
+        SafeDirectory::open_or_create(
+            &self.paths.app_data_dir,
+            &["draft-trash", "v1"],
+            Arc::clone(&self.safety_hook),
+        )
+    }
+
+    fn read(
+        &self,
+        directory: &SafeDirectory,
+        name: &OsStr,
+        expected_id: Uuid,
+    ) -> AppResult<StoredDraftV1> {
+        let mut safe_file = directory.open_existing_file(name)?;
+        let safe_path = safe_file.path().to_path_buf();
+        let bytes = read_bounded_file(safe_file.file_mut(), &safe_path, MAX_DRAFT_BYTES)?;
         decode_draft(Some(expected_id), &bytes)
     }
 
     fn write(
         &self,
-        path: &Path,
-        draft: &DraftEnvelopeV1,
+        directory: &SafeDirectory,
+        name: &OsStr,
+        draft: &StoredDraftV1,
         expected_id: Uuid,
         mode: ReplaceMode,
     ) -> AppResult<()> {
-        write_json_atomically(
-            path,
+        write_json_atomically_in(
+            directory,
+            name,
             draft,
             MAX_DRAFT_BYTES,
             mode,
@@ -258,6 +283,10 @@ impl DraftStore {
         )?;
         Ok(())
     }
+}
+
+fn draft_file_name(id: Uuid) -> std::ffi::OsString {
+    format!("{id}.json").into()
 }
 
 fn validate_expected_revision(revision: u64) -> AppResult<()> {
@@ -281,13 +310,19 @@ mod tests {
             model::{CreateDraftRequest, DeleteDraftRequest, LoadDraftRequest, SaveDraftRequest},
         },
         paths::AppPaths,
+        storage::path_safety::PathSafetyHook,
         DRAFT_STORAGE_VERSION, MAX_SAFE_REVISION,
     };
     use serde_json::{json, Value};
     use std::{
         collections::VecDeque,
-        fs,
-        sync::{Arc, Mutex},
+        fs, io,
+        path::{Path, PathBuf},
+        process::Command,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        },
         thread,
     };
     use tempfile::TempDir;
@@ -298,6 +333,25 @@ mod tests {
     const SECOND_ID: &str = "22222222-2222-4222-8222-222222222222";
     const THIRD_ID: &str = "33333333-3333-4333-8333-333333333333";
     const CORRUPT_ID: &str = "44444444-4444-4444-8444-444444444444";
+
+    #[cfg(windows)]
+    fn create_junction(link: &Path, target: &Path) -> io::Result<()> {
+        let output = Command::new("cmd.exe")
+            .arg("/c")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "mklink /J failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )))
+        }
+    }
 
     fn timestamp(value: &str) -> OffsetDateTime {
         OffsetDateTime::parse(value, &Rfc3339).expect("test timestamp")
@@ -325,7 +379,7 @@ mod tests {
 
     fn save_request(id: &str, revision: u64, label: &str) -> SaveDraftRequest {
         SaveDraftRequest {
-            id: id.to_owned(),
+            draft_id: id.to_owned(),
             expected_revision: revision,
             local_label: label.to_owned(),
             local_notes: format!("saved notes for {label}"),
@@ -366,9 +420,9 @@ mod tests {
         created_at: &str,
         updated_at: &str,
     ) -> Vec<u8> {
-        let draft = crate::drafts::model::DraftEnvelopeV1 {
+        let draft = crate::drafts::model::StoredDraftV1 {
             storage_version: DRAFT_STORAGE_VERSION,
-            id: id.to_owned(),
+            draft_id: id.to_owned(),
             revision,
             created_at: created_at.to_owned(),
             updated_at: updated_at.to_owned(),
@@ -392,12 +446,12 @@ mod tests {
         }))
         .is_err());
         assert!(serde_json::from_value::<LoadDraftRequest>(json!({
-            "id": FIRST_ID,
+            "draftId": FIRST_ID,
             "path": "C:/outside.json"
         }))
         .is_err());
         assert!(serde_json::from_value::<SaveDraftRequest>(json!({
-            "id": FIRST_ID,
+            "draftId": FIRST_ID,
             "expectedRevision": 1,
             "localLabel": "label",
             "localNotes": "notes",
@@ -406,7 +460,7 @@ mod tests {
         }))
         .is_err());
         assert!(serde_json::from_value::<DeleteDraftRequest>(json!({
-            "id": FIRST_ID,
+            "draftId": FIRST_ID,
             "expectedRevision": 1,
             "path": "C:/outside.json"
         }))
@@ -425,24 +479,24 @@ mod tests {
         let store = DraftStore::new(paths.clone(), clock);
 
         let created = store.create(create_request("initial")).expect("creates");
-        let parsed = Uuid::parse_str(&created.id).expect("canonical uuid");
+        let parsed = Uuid::parse_str(&created.draft_id).expect("canonical uuid");
         assert_eq!(parsed.get_version(), Some(Version::Random));
-        assert_eq!(parsed.to_string(), created.id);
+        assert_eq!(parsed.to_string(), created.draft_id);
         assert_eq!(created.revision, 1);
         assert_eq!(created.created_at, "2026-07-23T01:02:03.000000004Z");
         assert_eq!(created.updated_at, created.created_at);
 
         let loaded = store
             .load(LoadDraftRequest {
-                id: created.id.clone(),
+                draft_id: created.draft_id.clone(),
             })
             .expect("loads");
         assert_eq!(loaded, created);
 
         let saved = store
-            .save(save_request(&created.id, 1, "saved"))
+            .save(save_request(&created.draft_id, 1, "saved"))
             .expect("saves");
-        assert_eq!(saved.id, created.id);
+        assert_eq!(saved.draft_id, created.draft_id);
         assert_eq!(saved.created_at, created.created_at);
         assert_eq!(saved.updated_at, "2026-07-23T02:03:04.000000005Z");
         assert_eq!(saved.revision, 2);
@@ -451,10 +505,17 @@ mod tests {
         let listed = store.list().expect("lists");
         assert!(listed.issues.is_empty());
         assert_eq!(listed.drafts.len(), 1);
-        assert_eq!(listed.drafts[0].id, created.id);
+        assert_eq!(listed.drafts[0].draft_id, created.draft_id);
+        assert_eq!(listed.drafts[0].local_notes, "saved notes for saved");
+        assert_eq!(
+            listed.drafts[0].record_draft,
+            json!({"savedOpaque": "saved"})
+        );
         assert_eq!(listed.drafts[0].revision, 2);
 
-        let active_path = paths.drafts_dir().join(format!("{}.json", created.id));
+        let active_path = paths
+            .drafts_dir()
+            .join(format!("{}.json", created.draft_id));
         let active_bytes = fs::read(&active_path).expect("reads active bytes");
         fs::create_dir_all(paths.trash_dir()).expect("creates trash");
         let preexisting_trash = paths.trash_dir().join("keep.forever");
@@ -462,11 +523,12 @@ mod tests {
 
         let deleted = store
             .delete(DeleteDraftRequest {
-                id: created.id.clone(),
+                draft_id: created.draft_id.clone(),
                 expected_revision: 2,
             })
             .expect("deletes recoverably");
-        assert_eq!(deleted.id, created.id);
+        assert_eq!(deleted.draft_id, created.draft_id);
+        assert_eq!(deleted.revision, 2);
         assert_eq!(deleted.deleted_at, "2026-07-23T03:04:05.000000006Z");
         assert!(deleted.recoverable);
         assert!(!active_path.exists());
@@ -489,11 +551,12 @@ mod tests {
             .file_name()
             .expect("name")
             .to_string_lossy();
-        let stamp = name
-            .strip_prefix(&format!("{}.", created.id))
-            .and_then(|rest| rest.strip_suffix(".json"))
-            .expect("trash naming contract");
-        assert!(stamp.chars().all(|character| character.is_ascii_digit()));
+        let expected_stamp = timestamp("2026-07-23T03:04:05.000000006Z").unix_timestamp_nanos();
+        assert_eq!(
+            name,
+            format!("{}-{expected_stamp}.json", created.draft_id),
+            "trash filename must use the exact UUID-dash-digits contract"
+        );
     }
 
     #[test]
@@ -548,7 +611,7 @@ mod tests {
         let ids: Vec<_> = result
             .drafts
             .iter()
-            .map(|draft| draft.id.as_str())
+            .map(|draft| draft.draft_id.as_str())
             .collect();
         assert_eq!(ids, [THIRD_ID, FIRST_ID, SECOND_ID]);
         let mut codes: Vec<_> = result
@@ -587,7 +650,7 @@ mod tests {
         assert_eq!(
             store
                 .load(LoadDraftRequest {
-                    id: SECOND_ID.to_owned(),
+                    draft_id: SECOND_ID.to_owned(),
                 })
                 .expect_err("mismatch rejects")
                 .code(),
@@ -608,23 +671,25 @@ mod tests {
             ])),
         );
         let created = store.create(create_request("initial")).expect("creates");
-        let path = paths.drafts_dir().join(format!("{}.json", created.id));
+        let path = paths
+            .drafts_dir()
+            .join(format!("{}.json", created.draft_id));
         assert_eq!(
             store
-                .save(save_request(&created.id, 0, "invalid"))
+                .save(save_request(&created.draft_id, 0, "invalid"))
                 .expect_err("zero revision rejects")
                 .code(),
             "DRAFT_REVISION_INVALID"
         );
         let saved = store
-            .save(save_request(&created.id, 1, "current"))
+            .save(save_request(&created.draft_id, 1, "current"))
             .expect("advances current revision");
         assert_eq!(saved.revision, 2);
         let original = fs::read(&path).expect("current bytes");
 
         for expected in [1, 3] {
             let error = store
-                .save(save_request(&created.id, expected, "conflict"))
+                .save(save_request(&created.draft_id, expected, "conflict"))
                 .expect_err("revision rejects");
             assert_eq!(error.code(), "DRAFT_REVISION_CONFLICT");
             assert_eq!(fs::read(&path).expect("unchanged bytes"), original);
@@ -669,7 +734,7 @@ mod tests {
             .into_iter()
             .map(|label| {
                 let store = Arc::clone(&store);
-                let id = created.id.clone();
+                let id = created.draft_id.clone();
                 thread::spawn(move || store.save(save_request(&id, 1, label)))
             })
             .collect();
@@ -690,7 +755,7 @@ mod tests {
         assert_eq!(
             store
                 .load(LoadDraftRequest {
-                    id: created.id.clone(),
+                    draft_id: created.draft_id.clone(),
                 })
                 .expect("loads winner")
                 .revision,
@@ -704,13 +769,15 @@ mod tests {
         let paths = paths(&directory);
         let store = DraftStore::new(paths.clone(), fixed("2026-01-01T00:00:00Z"));
         let created = store.create(create_request("initial")).expect("creates");
-        let active = paths.drafts_dir().join(format!("{}.json", created.id));
+        let active = paths
+            .drafts_dir()
+            .join(format!("{}.json", created.draft_id));
         let bytes = fs::read(&active).expect("active bytes");
 
         assert_eq!(
             store
                 .delete(DeleteDraftRequest {
-                    id: created.id,
+                    draft_id: created.draft_id,
                     expected_revision: 2,
                 })
                 .expect_err("future revision conflicts")
@@ -729,7 +796,7 @@ mod tests {
         let mut unsupported: Value = serde_json::from_slice(golden).expect("golden json");
         unsupported["storageVersion"] = json!(2);
         let unsupported_bytes = serde_json::to_vec_pretty(&unsupported).expect("json");
-        let unsupported_id = unsupported["id"].as_str().expect("id");
+        let unsupported_id = unsupported["draftId"].as_str().expect("draftId");
         let unsupported_path = paths.drafts_dir().join(format!("{unsupported_id}.json"));
         fs::write(&unsupported_path, &unsupported_bytes).expect("writes unsupported");
         let corrupt_path = paths.drafts_dir().join(format!("{CORRUPT_ID}.json"));
@@ -753,7 +820,9 @@ mod tests {
         ] {
             assert_eq!(
                 store
-                    .load(LoadDraftRequest { id: id.to_owned() })
+                    .load(LoadDraftRequest {
+                        draft_id: id.to_owned(),
+                    })
                     .expect_err("load rejects")
                     .code(),
                 code
@@ -773,7 +842,7 @@ mod tests {
             assert_eq!(
                 store
                     .delete(DeleteDraftRequest {
-                        id: id.to_owned(),
+                        draft_id: id.to_owned(),
                         expected_revision: 7,
                     })
                     .expect_err("delete rejects")
@@ -783,5 +852,101 @@ mod tests {
             assert_eq!(fs::read(path).expect("unchanged after delete"), bytes);
         }
         assert!(!paths.trash_dir().exists());
+    }
+
+    struct AbortBeforeMutation {
+        protected_directory: PathBuf,
+        parked_directory: PathBuf,
+        outside_directory: PathBuf,
+        fired: AtomicBool,
+        rename_was_blocked: AtomicBool,
+    }
+
+    impl PathSafetyHook for AbortBeforeMutation {
+        fn before_mutation(&self, _source: &Path, _target: &Path) -> io::Result<()> {
+            if !self.fired.swap(true, Ordering::SeqCst) {
+                match fs::rename(&self.protected_directory, &self.parked_directory) {
+                    Ok(()) => {
+                        #[cfg(windows)]
+                        create_junction(&self.protected_directory, &self.outside_directory)?;
+                    }
+                    Err(_) => {
+                        self.rename_was_blocked.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+            Err(io::Error::other("injected immediately before mutation"))
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn deterministic_pre_use_swap_fails_closed_for_save_and_delete() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let paths = paths(&directory);
+        let initial = DraftStore::new(paths.clone(), fixed("2026-01-01T00:00:00Z"));
+        let created = initial.create(create_request("initial")).expect("creates");
+        let active = paths
+            .drafts_dir()
+            .join(format!("{}.json", created.draft_id));
+        let original = fs::read(&active).expect("reads original");
+        let unrelated_temp = paths.drafts_dir().join(".unrelated-operation.tmp");
+        fs::write(&unrelated_temp, b"unrelated bytes").expect("writes unrelated temp");
+        let outside = directory.path().join("outside");
+        fs::create_dir_all(&outside).expect("creates outside");
+        let sentinel = outside.join("sentinel.txt");
+        fs::write(&sentinel, b"outside bytes").expect("writes sentinel");
+
+        for operation in ["save", "delete"] {
+            let hook = Arc::new(AbortBeforeMutation {
+                protected_directory: paths.drafts_dir(),
+                parked_directory: paths
+                    .app_data_dir
+                    .join("drafts")
+                    .join(format!("v1-parked-{operation}")),
+                outside_directory: outside.clone(),
+                fired: AtomicBool::new(false),
+                rename_was_blocked: AtomicBool::new(false),
+            });
+            let store = DraftStore::with_safety_hook(
+                paths.clone(),
+                fixed("2026-01-02T00:00:00Z"),
+                hook.clone(),
+            );
+
+            let result = if operation == "save" {
+                store
+                    .save(save_request(&created.draft_id, 1, "must fail"))
+                    .map(|_| ())
+            } else {
+                store
+                    .delete(DeleteDraftRequest {
+                        draft_id: created.draft_id.clone(),
+                        expected_revision: 1,
+                    })
+                    .map(|_| ())
+            };
+
+            result.expect_err("injected mutation race must fail closed");
+            assert!(hook.fired.load(Ordering::SeqCst));
+            assert!(
+                hook.rename_was_blocked.load(Ordering::SeqCst),
+                "opened directory handle must block the swap"
+            );
+            assert_eq!(fs::read(&active).expect("active survives"), original);
+            assert_eq!(
+                fs::read(&unrelated_temp).expect("unrelated temp survives"),
+                b"unrelated bytes"
+            );
+            assert_eq!(
+                fs::read(&sentinel).expect("outside survives"),
+                b"outside bytes"
+            );
+            assert_eq!(
+                fs::read_dir(&outside).expect("outside listing").count(),
+                1,
+                "no draft or trash file may escape"
+            );
+        }
     }
 }

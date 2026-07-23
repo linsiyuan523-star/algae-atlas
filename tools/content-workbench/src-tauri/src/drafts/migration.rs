@@ -1,4 +1,4 @@
-use super::model::DraftEnvelopeV1;
+use super::model::StoredDraftV1;
 use crate::{
     error::{AppError, AppResult},
     storage::deterministic_json,
@@ -15,12 +15,12 @@ struct VersionProbe {
     storage_version: u32,
 }
 
-pub fn encode_draft(draft: &DraftEnvelopeV1) -> AppResult<Vec<u8>> {
+pub fn encode_draft(draft: &StoredDraftV1) -> AppResult<Vec<u8>> {
     validate_v1(draft, None)?;
     deterministic_json(draft, MAX_DRAFT_BYTES)
 }
 
-pub fn decode_draft(expected_id: Option<Uuid>, bytes: &[u8]) -> AppResult<DraftEnvelopeV1> {
+pub fn decode_draft(expected_id: Option<Uuid>, bytes: &[u8]) -> AppResult<StoredDraftV1> {
     if bytes.len() > MAX_DRAFT_BYTES {
         return Err(AppError::draft_payload_too_large());
     }
@@ -37,8 +37,8 @@ pub fn decode_draft(expected_id: Option<Uuid>, bytes: &[u8]) -> AppResult<DraftE
     }
 }
 
-fn decode_v1(json: &str, expected_id: Option<Uuid>) -> AppResult<DraftEnvelopeV1> {
-    let draft: DraftEnvelopeV1 = serde_json::from_str(json).map_err(|error| {
+fn decode_v1(json: &str, expected_id: Option<Uuid>) -> AppResult<StoredDraftV1> {
+    let draft: StoredDraftV1 = serde_json::from_str(json).map_err(|error| {
         if error.to_string().starts_with("unknown field") {
             AppError::draft_envelope_unknown_key()
         } else {
@@ -50,16 +50,16 @@ fn decode_v1(json: &str, expected_id: Option<Uuid>) -> AppResult<DraftEnvelopeV1
     Ok(migrated)
 }
 
-fn migrate_v1(draft: DraftEnvelopeV1) -> DraftEnvelopeV1 {
+fn migrate_v1(draft: StoredDraftV1) -> StoredDraftV1 {
     draft
 }
 
-pub(crate) fn validate_v1(draft: &DraftEnvelopeV1, expected_id: Option<Uuid>) -> AppResult<()> {
+pub(crate) fn validate_v1(draft: &StoredDraftV1, expected_id: Option<Uuid>) -> AppResult<()> {
     if draft.storage_version != DRAFT_STORAGE_VERSION {
         return Err(AppError::draft_storage_version_unsupported());
     }
 
-    let id = parse_canonical_v4(&draft.id)?;
+    let id = parse_canonical_v4(&draft.draft_id)?;
     if expected_id.is_some_and(|expected| expected != id) {
         return Err(AppError::draft_id_invalid());
     }
@@ -101,7 +101,7 @@ pub(crate) fn parse_utc_timestamp(value: &str) -> AppResult<OffsetDateTime> {
 mod tests {
     use super::{decode_draft, encode_draft};
     use crate::{
-        drafts::model::DraftEnvelopeV1, DRAFT_STORAGE_VERSION, MAX_DRAFT_BYTES,
+        drafts::model::StoredDraftV1, DRAFT_STORAGE_VERSION, MAX_DRAFT_BYTES,
         MAX_LOCAL_LABEL_CHARS, MAX_LOCAL_NOTES_BYTES,
     };
     use serde_json::{json, Value};
@@ -109,10 +109,10 @@ mod tests {
 
     const ID: &str = "7d444840-9dc0-4f31-a42c-9f4b01e7abda";
 
-    fn envelope() -> DraftEnvelopeV1 {
-        DraftEnvelopeV1 {
+    fn envelope() -> StoredDraftV1 {
+        StoredDraftV1 {
             storage_version: DRAFT_STORAGE_VERSION,
-            id: ID.to_owned(),
+            draft_id: ID.to_owned(),
             revision: 7,
             created_at: "2025-06-01T10:00:00Z".to_owned(),
             updated_at: "2025-06-02T12:30:45.123456789Z".to_owned(),
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn older_writer_golden_fixture_decodes_and_reencodes_byte_for_byte() {
+    fn hand_authored_v1_compatibility_fixture_reencodes_byte_for_byte() {
         let golden = include_bytes!("../../tests/fixtures/draft-v1-golden.json");
         let decoded = decode_draft(None, golden).expect("golden fixture decodes");
 
@@ -195,7 +195,7 @@ mod tests {
             "7d444840-9dc0-1f31-a42c-9f4b01e7abda",
         ] {
             let mut changed = canonical.clone();
-            changed.id = invalid.to_owned();
+            changed.draft_id = invalid.to_owned();
             let bytes = serde_json::to_vec_pretty(&changed).expect("json");
             assert_eq!(
                 issue_code(decode_draft(None, &bytes).expect_err("id rejects")),

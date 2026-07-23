@@ -1,10 +1,6 @@
 use crate::error::{AppError, AppResult};
 use serde::Serialize;
-use std::{
-    fs::File,
-    io::{Read, Take},
-    path::Path,
-};
+use std::{fs::File, io::Read, path::Path};
 
 pub fn deterministic_json<T: Serialize>(value: &T, limit: usize) -> AppResult<Vec<u8>> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(AppError::storage_encode)?;
@@ -16,9 +12,13 @@ pub fn deterministic_json<T: Serialize>(value: &T, limit: usize) -> AppResult<Ve
 }
 
 pub fn read_bounded(path: &Path, limit: usize) -> AppResult<Vec<u8>> {
-    let file = File::open(path).map_err(|error| AppError::storage_read(path, error))?;
+    let mut file = File::open(path).map_err(|error| AppError::storage_read(path, error))?;
+    read_bounded_file(&mut file, path, limit)
+}
+
+pub fn read_bounded_file(file: &mut File, path: &Path, limit: usize) -> AppResult<Vec<u8>> {
     let mut bytes = Vec::with_capacity(limit.min(64 * 1024));
-    let mut bounded: Take<File> = file.take(limit.saturating_add(1) as u64);
+    let mut bounded = file.take(limit.saturating_add(1) as u64);
     bounded
         .read_to_end(&mut bytes)
         .map_err(|error| AppError::storage_read(path, error))?;
@@ -103,3 +103,4 @@ mod tests {
 }
 
 pub mod atomic_replace;
+pub mod path_safety;
