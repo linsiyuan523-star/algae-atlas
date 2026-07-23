@@ -15,30 +15,13 @@ function readText(path) {
   return readFileSync(path, "utf8");
 }
 
-function parseTomlDependencies(toml) {
-  const sections = Object.create(null);
-  let section = "";
-
-  for (const line of toml.split(/\r?\n/)) {
-    const table = line.match(/^\[([^\]]+)\]$/);
-    if (table) {
-      section = table[1];
-      sections[section] ??= {};
-      continue;
-    }
-
-    const dependency = line.match(/^([\w-]+)\s*=\s*(.+)$/);
-    if (dependency && section) {
-      sections[section][dependency[1]] = dependency[2];
-    }
-  }
-
-  return sections;
-}
-
-function assertExactVersion(value, version, label) {
-  assert.match(value, new RegExp(`(?:version\\s*=\\s*)?"=${version.replaceAll(".", "\\.")}"`), label);
-  assert.doesNotMatch(value, /git\s*=|path\s*=/, `${label} must not use a Git or path source`);
+function normalizeToml(toml) {
+  return toml
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
 }
 
 test("content workbench scaffold has the local-only desktop contract", () => {
@@ -47,7 +30,6 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   const tauriConfig = readJson(resolve(desktop, "src-tauri/tauri.conf.json"));
   const capability = readJson(resolve(desktop, "src-tauri/capabilities/main-local.json"));
   const cargoToml = readText(resolve(desktop, "src-tauri/Cargo.toml"));
-  const cargo = parseTomlDependencies(cargoToml);
   const toolchain = readText(resolve(desktop, "rust-toolchain.toml"));
   const viteConfig = readText(resolve(desktop, "vite.config.ts"));
   const indexHtml = readText(resolve(desktop, "index.html"));
@@ -57,12 +39,14 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   assert.equal(workspacePackage.version, "0.1.0");
   assert.equal(workspacePackage.private, true);
 
-  const npmVersions = {
+  const expectedDependencies = {
     "@algae-atlas/content-schema": "1.0.0",
     "@tauri-apps/api": "2.11.1",
     "lucide-react": "1.25.0",
     react: "19.2.6",
     "react-dom": "19.2.6",
+  };
+  const expectedDevDependencies = {
     "@tauri-apps/cli": "2.11.4",
     "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
@@ -76,10 +60,8 @@ test("content workbench scaffold has the local-only desktop contract", () => {
     vite: "8.0.13",
     vitest: "4.1.10",
   };
-  for (const [name, version] of Object.entries(npmVersions)) {
-    const actual = workspacePackage.dependencies?.[name] ?? workspacePackage.devDependencies?.[name];
-    assert.equal(actual, version, `${name} must be pinned exactly`);
-  }
+  assert.deepEqual(workspacePackage.dependencies, expectedDependencies);
+  assert.deepEqual(workspacePackage.devDependencies, expectedDevDependencies);
 
   assert.equal(tauriConfig.bundle.active, false);
   assert.equal(tauriConfig.build.frontendDist, "../dist");
@@ -102,32 +84,35 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   assert.deepEqual(capability.platforms, ["windows"]);
   assert.deepEqual(capability.permissions, []);
 
-  const directCargoVersions = {
-    "build-dependencies": { "tauri-build": "2.6.3" },
-    dependencies: {
-      tauri: "2.11.5",
-      "tauri-plugin-single-instance": "2.4.3",
-      serde: "1.0.229",
-      serde_json: "1.0.151",
-      uuid: "1.24.0",
-      time: "0.3.54",
-      thiserror: "2.0.19",
-    },
-    "target.'cfg(windows)'.dependencies": { "windows-sys": "0.61.2" },
-    "dev-dependencies": { tempfile: "3.27.0" },
-  };
-  for (const [section, dependencies] of Object.entries(directCargoVersions)) {
-    for (const [name, version] of Object.entries(dependencies)) {
-      assertExactVersion(cargo[section]?.[name] ?? "", version, `${section}.${name}`);
-    }
-    assert.deepEqual(
-      Object.keys(cargo[section] ?? {}).sort(),
-      Object.keys(dependencies).sort(),
-      `${section} must not add direct dependencies`,
-    );
-  }
+  const expectedCargoToml = [
+    "[package]",
+    'name = "content-workbench"',
+    'version = "0.1.0"',
+    'description = "Local content workbench for Algae Atlas"',
+    'edition = "2021"',
+    'rust-version = "1.97.1"',
+    "[lib]",
+    'name = "content_workbench_lib"',
+    'crate-type = ["staticlib", "cdylib", "rlib"]',
+    "[build-dependencies]",
+    'tauri-build = { version = "=2.6.3", features = [] }',
+    "[dependencies]",
+    'tauri = { version = "=2.11.5", features = [] }',
+    'tauri-plugin-single-instance = "=2.4.3"',
+    'serde = { version = "=1.0.229", features = ["derive"] }',
+    'serde_json = "=1.0.151"',
+    'uuid = { version = "=1.24.0", features = ["v4"] }',
+    'time = { version = "=0.3.54", features = ["formatting", "parsing"] }',
+    'thiserror = "=2.0.19"',
+    "[target.'cfg(windows)'.dependencies]",
+    'windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }',
+    "[dev-dependencies]",
+    'tempfile = "=3.27.0"',
+  ].join("\n");
+  assert.equal(normalizeToml(cargoToml), expectedCargoToml);
+  assert.doesNotMatch(cargoToml, /\b(?:git|path)\s*=/);
+  assert.doesNotMatch(cargoToml, /\bcustom-protocol\b/);
   assert.doesNotMatch(cargoToml, /(?:tauri-plugin-(?:fs|shell|http|opener|dialog|store|updater|localhost)|tauri-plugin-url|tauri-plugin-git|tauri-plugin-process)\b/);
-  assert.match(cargo.dependencies["tauri-plugin-single-instance"], /^"=2\.4\.3"$/);
   assert.doesNotMatch(readText(resolve(desktop, "src-tauri/Cargo.lock")), /source = "git\+/);
   assert.doesNotMatch(readText(resolve(root, "package-lock.json")), /"resolved": "git\+/);
 
@@ -137,9 +122,28 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   assert.match(toolchain, /"x86_64-pc-windows-msvc"/);
   assert.equal(workspacePackage.scripts["tauri:build"], "tauri build --debug --no-bundle");
 
-  const forbiddenPlugin = /(?:fs|shell|http|opener|dialog|store|updater|localhost|url|git|process)/;
-  for (const dependency of Object.keys(workspacePackage.dependencies ?? {})) {
-    assert.ok(!forbiddenPlugin.test(dependency), `forbidden frontend dependency: ${dependency}`);
+  const forbiddenDependencyNames = new Set([
+    "fs",
+    "shell",
+    "http",
+    "opener",
+    "dialog",
+    "store",
+    "updater",
+    "localhost",
+    "url",
+    "git",
+    "process",
+    ...["fs", "shell", "http", "opener", "dialog", "store", "updater", "localhost", "url", "git", "process"].flatMap((name) => [
+      `@tauri-apps/plugin-${name}`,
+      `tauri-plugin-${name}`,
+    ]),
+  ]);
+  for (const dependency of new Set([
+    ...Object.keys(workspacePackage.dependencies),
+    ...Object.keys(workspacePackage.devDependencies),
+  ])) {
+    assert.ok(!forbiddenDependencyNames.has(dependency), `forbidden desktop dependency: ${dependency}`);
   }
   assert.doesNotMatch(JSON.stringify(capability), /tauri-plugin-single-instance/);
 
