@@ -30,6 +30,7 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   const tauriConfig = readJson(resolve(desktop, "src-tauri/tauri.conf.json"));
   const capability = readJson(resolve(desktop, "src-tauri/capabilities/main-local.json"));
   const cargoToml = readText(resolve(desktop, "src-tauri/Cargo.toml"));
+  const rustLib = readText(resolve(desktop, "src-tauri/src/lib.rs"));
   const toolchain = readText(resolve(desktop, "rust-toolchain.toml"));
   const viteConfig = readText(resolve(desktop, "vite.config.ts"));
   const indexHtml = readText(resolve(desktop, "index.html"));
@@ -77,7 +78,12 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   assert.equal(developmentCsp, "default-src 'self'; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 ws://localhost:1421; font-src 'self'; img-src 'self' data:; script-src 'self' 'nonce-content-workbench-dev'; style-src 'self' 'nonce-content-workbench-dev'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
   assert.doesNotMatch(productionCsp, /https?:\/\/(?!ipc\.localhost\b)|wss?:\/\/|\*|nonce-|unsafe-(?:inline|eval)/);
   assert.doesNotMatch(developmentCsp, /https?:\/\/(?!(?:ipc\.localhost|localhost:1420)\b)|wss?:\/\/(?!localhost:142[01]\b)|\*|unsafe-(?:inline|eval)/);
-  assert.match(viteConfig, /cspNonce:\s*"content-workbench-dev"/);
+  assert.match(
+    viteConfig,
+    /const htmlConfig = command === "serve"\s*\? \{ cspNonce: "content-workbench-dev" \} : undefined;/,
+  );
+  assert.match(viteConfig, /html:\s*htmlConfig/);
+  assert.doesNotMatch(viteConfig, /html:\s*\{\s*cspNonce:/);
 
   assert.equal(capability.local, true);
   assert.deepEqual(capability.windows, ["main"]);
@@ -146,6 +152,11 @@ test("content workbench scaffold has the local-only desktop contract", () => {
     assert.ok(!forbiddenDependencyNames.has(dependency), `forbidden desktop dependency: ${dependency}`);
   }
   assert.doesNotMatch(JSON.stringify(capability), /tauri-plugin-single-instance/);
+  assert.match(
+    rustLib,
+    /if let Err\(error\) = window\.set_focus\(\) \{\s*eprintln!\("failed to focus existing main window: \{error\}"\);\s*\}/,
+  );
+  assert.doesNotMatch(rustLib, /let _ = window\.set_focus\(\);/);
 
   const tsbuildInfoPaths = execFileSync(
     "git",
