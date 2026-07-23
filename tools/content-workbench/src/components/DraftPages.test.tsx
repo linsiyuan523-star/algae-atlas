@@ -12,6 +12,7 @@ import {
   emptyTeamNewsFormValues,
   validateTeamNewsRecordDraft,
 } from "../forms/team-news";
+import { batchOneFormAdapters } from "../forms/batch-one";
 
 function makeDraft(titleZh = "初始标题"): Draft {
   const prepared = createSharedRecordDraft(
@@ -45,6 +46,35 @@ function makeDraft(titleZh = "初始标题"): Draft {
 }
 
 const draft = makeDraft();
+
+function makeScienceArticleDraft(): Draft {
+  const prepared = createSharedRecordDraft(
+    {
+      contentType: "science-article",
+      stableId: "fictional-science-article",
+      titleZh: "虚构科普文章",
+    },
+    "2026-07-23T08:00:00Z",
+  );
+  if (!prepared.success) {
+    throw new Error("test draft must be valid");
+  }
+  const adapter = batchOneFormAdapters["science-article"];
+  const completed = adapter.validate(prepared.recordDraft, {
+    ...adapter.emptyValues(),
+    summaryZh: "仅用于组件测试的虚构科普摘要。",
+    topic: "虚构藻类主题",
+    targetAudienceLabel: "公众",
+    articleKind: "foundation",
+    publicationDate: "2026-07-23",
+    targetAudience: "general",
+    readingTimeMinutes: "8",
+  });
+  if (!completed.success) {
+    throw new Error("test science-article form must be valid");
+  }
+  return { ...draft, recordDraft: completed.recordDraft };
+}
 
 function createApi(): DraftApi {
   return {
@@ -106,7 +136,7 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
   await user.click(openButton);
   expect(api.openDraft).toHaveBeenCalledWith(draft.draftId);
 
-  await user.selectOptions(screen.getByLabelText("内容类型"), "science-article");
+  await user.selectOptions(screen.getByLabelText("内容类型"), "learning-resource");
   await user.clear(screen.getByLabelText("稳定 ID"));
   await user.type(screen.getByLabelText("稳定 ID"), "fictional-article");
   await user.clear(screen.getByLabelText("中文标题"));
@@ -120,7 +150,7 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
     recordDraft: {
       schemaVersion: 1,
       id: "fictional-article",
-      type: "science-article",
+      type: "learning-resource",
       locales: { zh: { title: "虚构文章" } },
     },
   });
@@ -168,6 +198,37 @@ test("validates and serializes the team-news pilot before saving", async () => {
       sources: [{ href: "https://example.invalid/news" }],
     },
     locales: { zh: { summary: "更新后的虚构摘要。" } },
+  });
+});
+
+test("validates and serializes a batch-one content form before saving", async () => {
+  const user = userEvent.setup();
+  const articleDraft = makeScienceArticleDraft();
+  const api = createApi();
+  api.listDrafts = vi.fn(async () => [articleDraft]);
+  render(<DraftsPage api={api} initialDraft={articleDraft} />);
+
+  expect(screen.getByRole("heading", { name: "科普文章字段" })).toBeVisible();
+  expect(screen.getByLabelText(/阅读时长（分钟）/)).toHaveAttribute(
+    "type",
+    "number",
+  );
+
+  await user.clear(screen.getByLabelText(/中文摘要/));
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+  expect(api.saveDraft).not.toHaveBeenCalled();
+  expect(screen.getByText("中文摘要不能为空。")).toBeVisible();
+
+  await user.type(screen.getByLabelText(/中文摘要/), "更新后的虚构科普摘要。");
+  await user.clear(screen.getByLabelText(/阅读时长（分钟）/));
+  await user.type(screen.getByLabelText(/阅读时长（分钟）/), "12");
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0].recordDraft).toMatchObject({
+    type: "science-article",
+    shared: { readingTimeMinutes: 12 },
+    locales: { zh: { summary: "更新后的虚构科普摘要。" } },
   });
 });
 

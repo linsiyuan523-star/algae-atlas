@@ -20,6 +20,7 @@ const schema: FormSchemaDefinition = {
         { id: "text", path: "text", label: "短文本", control: "text", required: true },
         { id: "notes", path: "notes", label: "多行文本", control: "textarea" },
         { id: "date", path: "date", label: "日期", control: "date" },
+        { id: "number", path: "number", label: "整数", control: "number", min: 0, max: 10, step: 1 },
         {
           id: "kind",
           path: "kind",
@@ -44,6 +45,7 @@ const initialValues: FormValues = {
   text: "",
   notes: "",
   date: "",
+  number: "",
   kind: "",
   enabled: false,
   url: "",
@@ -72,6 +74,7 @@ test("renders and updates every common form control with a read-only structure p
   const text = screen.getByLabelText(/短文本/);
   const notes = screen.getByLabelText("多行文本");
   const date = screen.getByLabelText("日期");
+  const number = screen.getByLabelText("整数");
   const enumControl = screen.getByLabelText("枚举");
   const booleanControl = screen.getByLabelText("布尔");
   const url = screen.getByLabelText("链接");
@@ -80,6 +83,9 @@ test("renders and updates every common form control with a read-only structure p
   expect(text).toHaveAttribute("type", "text");
   expect(notes.tagName).toBe("TEXTAREA");
   expect(date).toHaveAttribute("type", "date");
+  expect(number).toHaveAttribute("type", "number");
+  expect(number).toHaveAttribute("min", "0");
+  expect(number).toHaveAttribute("max", "10");
   expect(within(enumControl).getByRole("option", { name: "第一项" })).toBeVisible();
   expect(booleanControl).toHaveAttribute("type", "checkbox");
   expect(url).toHaveAttribute("type", "url");
