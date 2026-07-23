@@ -1,48 +1,42 @@
-Stage: Stage-04E
+Stage: Stage-05A1
 Status: PASS
 ValidatedAt: 2026-07-23
-Branch: local/stage-04e-schema-integration
-StartCommit: fe980a1adba3be255a6ebc540986c22224d08c82
-FeatureCommit: ed275aeada2c3b8e140ff108c217f2850b5cd832
+Branch: local/stage-05a1-form-engine
+StartCommit: 106a33ddbf8a8451b3fd9cc90948210a9ccf7875
+FeatureCommit: 157c1ea750e87ce03c1670e7ef40dc20ff3fa1f1
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
 - Node.js: v22.23.1
 - npm: 10.9.8
-- Rust/Cargo: 1.97.1
-- Target: Windows x64 MSVC
+- Target: Windows x64
 
 Setup:
-- npm.cmd install --package-lock-only --ignore-scripts --offline: PASS
-- npm.cmd ci --offline: PASS
+- npm.cmd ci --offline --ignore-scripts: PASS
   - 601 packages, 0 vulnerabilities
   - Existing deprecated transitive @esbuild-kit warnings only
 
-Required desktop checks:
-- npm.cmd run test --workspace @algae-atlas/content-workbench: PASS
-  - 5 files, 15 tests
-  - Registry/defaults, field errors, v1 compatibility, CRUD, autosave, close warning, and recovery covered
+Required checks:
 - npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
   - TypeScript and ESLint passed
   - Existing non-fatal missing Next.js pages notice printed
-- npm.cmd run desktop:test:scaffold: PASS; 1 test
-- npm.cmd run desktop:frontend:build: PASS; 1,876 modules transformed
-- cargo +1.97.1 test --locked --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all-targets: PASS
-  - 8 tests
-  - v1 read/save migration, future version rejection, CRUD, atomic safety, quarantine, paths, and sessions covered
-- cargo +1.97.1 check --locked --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all-targets: PASS
-- cargo +1.97.1 fmt --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all -- --check: PASS
-- cargo +1.97.1 clippy --locked --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all-targets -- -D warnings: PASS
+- npm.cmd run test --workspace @algae-atlas/content-workbench: PASS
+  - 7 files, 21 tests
+  - All seven generic controls, field errors, save blocking, autosave, and CRUD covered
+- npm.cmd run check:schema: PASS
+- npm.cmd run test:schema: PASS; 58 tests
+  - Team News registry enum metadata and shared schema contract covered
+- Team News pilot form-to-record round trip: PASS
+  - Required fields, HTTPS URL, author ID, date range, source identifier compatibility, and serialization covered
 
-Runtime and layout:
-- Native Tauri development launch: PASS
-  - Isolated APPDATA/LOCALAPPDATA used
-  - Debug executable started, expected Chinese window title observed, process responsive
-  - Window closed cleanly, development port released, session marker removed
-- Browser layout at 1280x800 and 600x800: PASS
-  - No horizontal overflow or form-control overlap
-- git diff --check: PASS
+Layout verification:
+- Local browser UI with in-memory DraftApi: PASS
+- 1280x800, 600x800, and 390x800: PASS
+- No horizontal page/control overflow, clipped schema labels, or console errors
 
 Boundary:
-- Shared package source unchanged; full website check/test/build: NOT RUN by instruction
+- Full website check/test/build: NOT RUN by instruction
+- Desktop production build: NOT RUN by the specified TypeScript/component/schema test boundary
+- Rust and native Tauri smoke: NOT RUN; privileged/native sources were unchanged
 - Git remote writes, PR, merge, tag, release, deployment: NONE
+- git diff --check: PASS
