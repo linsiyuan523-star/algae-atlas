@@ -1,15 +1,15 @@
-Stage: Stage-05A1
+Stage: Stage-05A2
 Status: PASS
 ValidatedAt: 2026-07-23
-Branch: local/stage-05a1-form-engine
-StartCommit: 106a33ddbf8a8451b3fd9cc90948210a9ccf7875
-FeatureCommit: 157c1ea750e87ce03c1670e7ef40dc20ff3fa1f1
+Branch: local/stage-05a2-forms-batch1
+StartCommit: f0ac4a59e7ed0370f9b91f388048f603c5584909
+FeatureCommit: 4285c4237548a43ff9a1fcf4fcb7a963214806eb
+TestCommit: c832e47a5926eb1f8654cea2c6fd1db51bb9c937
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
-- Node.js: v22.23.1
-- npm: 10.9.8
 - Target: Windows x64
+- npm commands used npm.cmd because PowerShell blocks npm.ps1
 
 Setup:
 - npm.cmd ci --offline --ignore-scripts: PASS
@@ -17,26 +17,27 @@ Setup:
   - Existing deprecated transitive @esbuild-kit warnings only
 
 Required checks:
-- npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
-  - TypeScript and ESLint passed
+- npm.cmd run desktop:check: PASS
+  - Desktop TypeScript and ESLint passed
   - Existing non-fatal missing Next.js pages notice printed
-- npm.cmd run test --workspace @algae-atlas/content-workbench: PASS
-  - 7 files, 21 tests
-  - All seven generic controls, field errors, save blocking, autosave, and CRUD covered
+- npm.cmd run desktop:test: PASS
+  - Scaffold: 1 test
+  - Vitest: 8 files, 39 tests
 - npm.cmd run check:schema: PASS
 - npm.cmd run test:schema: PASS; 58 tests
-  - Team News registry enum metadata and shared schema contract covered
-- Team News pilot form-to-record round trip: PASS
-  - Required fields, HTTPS URL, author ID, date range, source identifier compatibility, and serialization covered
-
-Layout verification:
-- Local browser UI with in-memory DraftApi: PASS
-- 1280x800, 600x800, and 390x800: PASS
-- No horizontal page/control overflow, clipped schema labels, or console errors
+- Batch-one form round trips: PASS; all 5 content types
+- Shared-Schema field error mapping: PASS
+- Shared registry enum sourcing: PASS
+- Batch-one component rendering and DraftPages save integration: PASS
+- git diff --check: PASS
 
 Boundary:
 - Full website check/test/build: NOT RUN by instruction
-- Desktop production build: NOT RUN by the specified TypeScript/component/schema test boundary
-- Rust and native Tauri smoke: NOT RUN; privileged/native sources were unchanged
+- Desktop production build: NOT RUN by the specified component/schema test boundary
+- Rust and native Tauri smoke: NOT RUN; native sources were unchanged
+- Browser layout pass: NOT RUN; no generic form layout or CSS change beyond native number inputs
 - Git remote writes, PR, merge, tag, release, deployment: NONE
-- git diff --check: PASS
+
+Resolved attempts:
+- npm via PowerShell npm.ps1: BLOCKED by local execution policy; npm.cmd succeeded
+- Initial adapter fixture omitted the required Chinese title; tests now use createSharedRecordDraft

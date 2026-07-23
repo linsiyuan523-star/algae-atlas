@@ -1,51 +1,50 @@
-# Stage 5A1 Handoff
+# Stage 5A2 Handoff
 
-- Stage: Stage-05A1 - Schema-driven Form Engine Pilot
-- Start commit: `106a33ddbf8a8451b3fd9cc90948210a9ccf7875`
+- Stage: Stage-05A2 - Content-specific Forms, Batch One
+- Start commit: `f0ac4a59e7ed0370f9b91f388048f603c5584909`
 - End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified bundle head)
 
 ## Completed
 
-- Added a reusable schema-form renderer for text, multiline text, date, enum, boolean, HTTPS URL, and author stable-ID reference controls.
-- Added generic required, length, date, enum, URL, and author-reference field validation.
-- Added a registry-backed Team News pilot without enabling dedicated forms for other content types.
-- Added Chinese summary, location, participant description, event dates, category, featured state, accountable author placeholder, primary source, and disclosure fields.
-- Serialized the pilot into the existing shared `recordDraft` and used `teamNewsRecordSchema` as the final save authority.
-- Mapped shared-schema failures to individual controls and blocked invalid manual or automatic saves.
-- Added a read-only canonical-path structure preview.
-- Preserved draft CRUD, normalized autosave, close warning, recovery, and future-version refusal.
+- Added registry-backed forms for Research Output, Research Project, Science Article, Collaboration, and Team Member.
+- Added a content-form adapter registry so the draft editor selects schemas, values, validation, and serialization without per-type rendering branches.
+- Added the required number control for years, display order, and reading time, including integer and range validation.
+- Added missing field-registry metadata and enum options consumed by the five forms.
+- Serialized all five forms through their existing shared record schemas while preserving unedited arrays, references, and related IDs.
+- Retained Team News behavior, draft CRUD, autosave/recovery, future-version refusal, and read-only structure previews.
 
 ## Not Completed
 
-- No dedicated form for the other ten content types.
-- No Markdown body editor, optional-English workflow, media ingestion, author catalog administration, website preview, repository export, or Git publishing.
-- No route, navigation, website content, Rust command, installer, remote, merge, or deployment change.
+- No dedicated forms for Learning Resource, Algae Profile, Live-feed Profile, Coastal Observation, or Research Profile.
+- No Markdown body editor, optional-English workflow, media ingestion, author catalog, structured reference-list editor, website preview, export, or Git publishing.
+- No website route, website content, Rust command, installer, remote, merge, or deployment change.
 
 ## Test Summary
 
 - Offline locked npm install: PASS; 601 packages, 0 vulnerabilities.
 - Desktop TypeScript and ESLint: PASS.
-- Desktop component/unit tests: PASS; 7 files, 21 tests.
-- Shared schema TypeScript and tests: PASS; 58 tests.
-- Team News controls, field errors, date range, source compatibility, save blocking, and form-to-record round trips: PASS.
-- Browser layout: PASS at 1280x800, 600x800, and 390x800; no horizontal overflow, clipped labels, control overflow, or console errors.
+- Desktop scaffold test: PASS; 1 test.
+- Desktop component/unit tests: PASS; 8 files, 39 tests.
+- Shared schema TypeScript: PASS.
+- Shared schema tests: PASS; 58 tests.
+- Five form-to-record shared-Schema round trips, enum registry sourcing, field error mapping, component rendering, and draft-save integration: PASS.
 - Git whitespace check: PASS.
 - Full website build was not run by instruction.
 
 ## Known Issues
 
 - ESLint prints the existing non-fatal missing Next.js `pages` notice for the Vite workspace.
-- Standalone Vite has no Tauri IPC; the visual check used the same UI with an in-memory `DraftApi`.
-- The pilot edits one accountable author and one primary source while preserving additional stored entries for later catalog work.
+- Research Output edits one primary contributor while preserving additional stored contributor IDs.
+- Structured source lists and related-ID arrays remain preserved/defaulted until their catalog controls are implemented.
 
 ## Next Stage Exact Start
 
-- Start from the clean Stage-05A1 delivery tip or verified Stage-05A1 bundle.
-- Execute `20_Stage5A2_内容类型表单批次一.md` in a new Stage-05A2 session/worktree.
+- Start from the clean Stage-05A2 delivery tip or verified Stage-05A2 bundle.
+- Execute `21_Stage5A3_内容类型表单批次二.md` in a new Stage-05A3 session/worktree.
 
 ## Do Not Repeat
 
-- Do not add per-type rendering branches to the generic `SchemaForm`; extend form schemas and record adapters.
-- Do not duplicate enum values or final validation rules in desktop code; consume the shared registry and shared schemas.
-- Do not require a URL when an existing structured source is valid through an identifier.
-- Do not broaden this pilot to body, English, media, author-catalog, preview, or publishing work.
+- Do not invoke `npm` through blocked PowerShell `npm.ps1`; use `npm.cmd` without changing system execution policy.
+- Do not build adapter tests directly from raw defaults without setting the required Chinese title; use `createSharedRecordDraft` first.
+- Do not add per-type branches to `DraftPages`; register adapters and consume shared field metadata and shared record schemas.
+- Do not broaden this batch into body, English, media, preview, export, or publishing work.

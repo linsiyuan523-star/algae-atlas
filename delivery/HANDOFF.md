@@ -1,47 +1,49 @@
-# Stage 5A1 Delivery Handoff
+# Stage 5A2 Delivery Handoff
 
-- Stage: Stage-05A1 - Schema-driven Form Engine Pilot
-- Start commit: `106a33ddbf8a8451b3fd9cc90948210a9ccf7875`
+- Stage: Stage-05A2 - Content-specific Forms, Batch One
+- Start commit: `f0ac4a59e7ed0370f9b91f388048f603c5584909`
 - End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified bundle head)
 
 ## Completed
 
-- Reusable schema-form renderer for text, textarea, date, enum, boolean, HTTPS URL, and author stable-ID reference controls.
-- Generic field validation, accessible field errors, save-time validation, and read-only canonical-path structure preview.
-- Registry-backed Team News pilot serialized through the existing shared `recordDraft` envelope.
-- Shared Team News schema remains the final save authority; enum metadata now covers category and disclosure status.
-- Existing draft CRUD, autosave/recovery, and future-version refusal behavior retained.
+- Registry-backed forms for Research Output, Research Project, Science Article, Collaboration, and Team Member.
+- Unified content-form adapter registry used by the existing draft editor.
+- Number input with integer/range validation for year, order, and reading-time fields.
+- Shared registry metadata and enum options for all batch-one fields.
+- Shared-Schema serialization, field error mapping, autosave/manual-save integration, and round-trip inspection for all five types.
+- Existing Team News form, CRUD, recovery, and future-version safety retained.
 
 ## Not Completed
 
-- No dedicated form for the other ten content types.
-- No body/English/media editing, author catalog, website preview, export, Git publishing, remote write, installer, merge, or deployment.
+- No dedicated form for the five Stage-05A3 content types.
+- No body/English/media editing, catalog UI, structured reference-list editing, website preview, export, Git publishing, installer, remote write, merge, or deployment.
 - Website, Rust, and native Tauri build surfaces were unchanged.
 
 ## Test Summary
 
 - Offline npm install: PASS; 601 packages, 0 vulnerabilities.
 - Desktop TypeScript/ESLint: PASS.
-- Desktop tests: PASS; 7 files, 21 tests.
+- Desktop scaffold: PASS; 1 test.
+- Desktop tests: PASS; 8 files, 39 tests.
 - Shared schema TypeScript/tests: PASS; 58 tests.
-- Responsive visual checks: PASS at 1280x800, 600x800, and 390x800 with no overflow, clipping, or console errors.
+- Batch-one round trips, errors, registry enums, component rendering, and save integration: PASS.
 - Git whitespace check: PASS.
 - Full website build: NOT RUN by instruction.
 
 ## Known Issues
 
 - ESLint retains the existing non-fatal missing Next.js `pages` informational message.
-- Standalone Vite lacks Tauri IPC; visual verification used an in-memory `DraftApi`.
-- The pilot exposes one accountable author and one primary source while preserving additional stored entries.
+- The Research Output form exposes one primary contributor and preserves additional stored contributor IDs.
+- Structured source and related-ID collection controls remain outside this batch.
 
 ## Next Stage Exact Start
 
-- Use the clean Stage-05A1 delivery tip or verified bundle.
-- Next instruction: `20_Stage5A2_内容类型表单批次一.md`.
+- Use the clean Stage-05A2 delivery tip or verified bundle.
+- Next instruction: `21_Stage5A3_内容类型表单批次二.md`.
 
 ## Do Not Repeat
 
-- Do not change the generic form core for ordinary new content types; add schemas and adapters.
-- Do not duplicate shared enum or final validation rules in the desktop.
-- Do not force URL completion for an otherwise valid identifier-backed source.
-- Do not expand Stage-05A1 into later editor, preview, media, or publishing stages.
+- Use `npm.cmd`; PowerShell blocks `npm.ps1` under the current execution policy.
+- Use `createSharedRecordDraft` before type-specific adapters in tests so the required Chinese title exists.
+- Extend the adapter registry; do not add per-type rendering branches or duplicate shared enum/schema rules.
+- Do not expand Stage-05A2 into later editor, media, preview, export, or publishing stages.
