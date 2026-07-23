@@ -1,47 +1,48 @@
-# Stage 4A Handoff
+# Stage 4B Handoff
 
-- Stage: Stage-04A - Minimal Tauri Shell
+- Stage: Stage-04B - Static Navigation Framework
 - Status: COMPLETE
-- Branch: `local/stage-04a-minimal-shell`
-- Start commit: `7c592faca28ee713c5abdf06f04ef05106b32f7a`
-- Implementation commit: `c52edf139e4325bf693820169c4165eac8edc4fa`
+- Branch: `local/stage-04b-navigation`
+- Start commit: `78db99f901c72cb19426d9c3a5ec1715f65acb98`
+- Navigation commit: `582e6dc27163ee5de39e10b244ff4c9cc6b36084`
+- Test commit: `336daf82b42c32bc773d0763ddb3f4e31cf35fb7`
 - End commit: `BRANCH_TIP_AT_DELIVERY` (resolve with `git rev-parse HEAD` after the delivery commit)
 
 ## Completed
 
-- Created the dedicated Stage-04A worktree from the Stage-04R handoff commit.
-- Reduced the inherited interrupted Stage-04 implementation to a minimal Tauri 2, React, and TypeScript shell.
-- Added the required Chinese title, one-line description, application version, and disabled `新建内容` button.
-- Kept the Tauri capability permission list empty.
-- Exposed no filesystem, Shell, network, Git, or application command API.
-- Removed draft/storage implementation modules and the desktop package's direct Stage-01 Schema dependency.
-- Added the minimal Windows desktop development command to the repository README.
+- Added a five-item frontend navigation for New Content, Drafts, Submitted, Settings, and Diagnostics.
+- Added one static title and empty state for each page with no persistence or backend calls.
+- Added active-page semantics, keyboard focus styling, and icon-plus-text navigation controls.
+- Added a desktop sidebar that becomes a top navigation bar at narrow widths.
+- Added a root React error boundary with a static restart message.
+- Kept the Tauri capability permission list empty and left the Rust backend unchanged.
 
 ## Not Completed
 
-- No navigation framework, content-type selection, forms, Schema consumption, drafts, persistence, preview, media handling, or Git workflow.
-- No installer, updater, signing, release, remote write, pull request, merge, or deployment.
+- No content types, forms, Schema integration, draft CRUD, autosave, database, filesystem, preview, media, network, or Git operations.
+- No installer, updater, release, remote write, merge, or deployment.
 
 ## Validation
 
-- Desktop TypeScript check: PASS.
-- `cargo check --locked` with the pinned Rust toolchain and Visual Studio MSVC linker: PASS.
-- Minimal `tauri dev` launch: PASS; the native executable and uniquely titled window were observed.
-- Local WebView render at 1280 x 720: PASS; required content visible, button disabled, no overflow, no console warning/error.
-- Root `npm test` and `build:next`: NOT RUN, as required by the Stage-04A test boundary.
+- Desktop TypeScript check: PASS after one test-helper return-type correction.
+- Focused component tests: PASS (2 files, 2 tests).
+- Tauri development smoke: PASS; native executable, port, and uniquely titled window observed.
+- Responsive render: PASS at 1280 x 800, 600 x 800, and 320 x 700; no overflow or clipped navigation labels.
+- Navigation interaction and browser console check: PASS; no warnings/errors.
+- Complete website tests: NOT RUN by the Stage-04B boundary.
 
 ## Known Issues
 
-- Native-window screenshot/accessibility capture was blocked by the host automation interface error `SetIsBorderRequired ... 0x80004002`. Process/window observation plus the same local WebView render verified the launch and UI; this does not block Stage-04A.
+- Native-window state capture was not retried because Stage-04A recorded the host `SetIsBorderRequired ... 0x80004002` compatibility issue. Native process/window observation and local WebView checks supplied the required smoke evidence.
 
 ## Next Stage
 
-- Exact starting point: the clean `BRANCH_TIP_AT_DELIVERY` of `local/stage-04a-minimal-shell`.
-- Next instruction: `15_Stage4B_静态导航框架.md`.
+- Exact starting point: the clean `BRANCH_TIP_AT_DELIVERY` of `local/stage-04b-navigation`.
+- Next instruction: `16_Stage4C_本地草稿CRUD.md`.
 
 ## Do Not Repeat
 
-- Do not continue in the old `Stage-04` worktree or modify its uncommitted Rust files.
-- Do not restore the removed draft/storage implementation during Stage-04A.
-- On this host, enter the Visual Studio developer shell with process-scoped execution-policy bypass and use absolute Cargo paths because the shell changes the current directory.
-- Do not retry native-window capture until the `SetIsBorderRequired` compatibility issue changes.
+- Do not remove the explicit `null` return type from the intentionally throwing test component; doing so restores TypeScript error TS2786.
+- Do not retry native-window capture until its recorded host compatibility issue changes.
+- Do not add draft persistence or Schema integration to Stage-04B.
+- Do not continue in the old Stage-04 or Stage-04A worktrees.

@@ -1,45 +1,48 @@
-Stage: Stage-04A
+Stage: Stage-04B
 Status: PASS
 ValidatedAt: 2026-07-23
-Branch: local/stage-04a-minimal-shell
-StartCommit: 7c592faca28ee713c5abdf06f04ef05106b32f7a
-ImplementationCommit: c52edf139e4325bf693820169c4165eac8edc4fa
+Branch: local/stage-04b-navigation
+StartCommit: 78db99f901c72cb19426d9c3a5ec1715f65acb98
+NavigationCommit: 582e6dc27163ee5de39e10b244ff4c9cc6b36084
+TestCommit: 336daf82b42c32bc773d0763ddb3f4e31cf35fb7
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
 - Node.js: v22.23.1
 - npm: 10.9.8
 - Rust/Cargo: 1.97.1
-- Linker: Visual Studio 2022 MSVC 14.44.35207 x64
+- Native linker environment: Visual Studio 2022 x64 MSVC
 
 Setup:
 - npm.cmd ci --offline --ignore-scripts: PASS (601 packages, 0 vulnerabilities)
 - Informational: two existing deprecated transitive @esbuild-kit warnings
 
-Allowed Stage-04A checks:
-- npm.cmd run typecheck --workspace @algae-atlas/content-workbench: PASS
-- cargo +1.97.1 check --locked --manifest-path <Stage-04A Cargo.toml>: PASS
+Allowed Stage-04B checks:
+- npm.cmd run typecheck --workspace @algae-atlas/content-workbench
+  - Initial result: FAIL (TS2786 in intentionally throwing test helper)
+  - Fix: explicit `null` component return type
+  - Final result: PASS
+- npm.cmd run test --workspace @algae-atlas/content-workbench --
+  src/App.test.tsx src/components/ErrorBoundary.test.tsx: PASS
+  - Test files: 2 passed
+  - Tests: 2 passed
 - npm.cmd run desktop:dev in the x64 MSVC environment: PASS
-- Native executable observed: target/debug/content-workbench.exe
-- Native window observed: exactly one, title "藻类团队内容发布工作台"
-- Local WebView render at 1280 x 720: PASS
-- Required heading, description, version 0.1.0, and disabled button: PASS
-- Document overflow: none
+  - Native executable observed: target/debug/content-workbench.exe
+  - Native window observed: exactly one, title "藻类团队内容发布工作台"
+
+Local render verification:
+- 1280 x 800: PASS, 240px desktop sidebar
+- 600 x 800: PASS, five-column top navigation
+- 320 x 700: PASS, no horizontal overflow or clipped labels
+- Navigation switch to Diagnostics: PASS
 - Browser console warnings/errors: none
 
 Not run by explicit boundary:
-- Root npm test: NOT RUN
+- Complete website tests: NOT RUN
 - Root build:next: NOT RUN
-- Desktop Vitest/root scaffold tests: NOT RUN
-
-Known verification limit:
-- Native-window state capture was blocked by host automation error
-  SetIsBorderRequired: 0x80004002. Process/window observation and the same
-  local WebView render supplied launch and UI evidence.
 
 Safety:
 - Tauri capability permissions: empty
-- General filesystem, Shell, network, Git, and app commands: absent
-- Desktop Stage-01 Schema dependency: absent
-- Draft/storage implementation: absent
+- Rust backend changes: none
+- Database, filesystem, autosave, network, Git, and app commands: absent
 - Git remote writes: none
