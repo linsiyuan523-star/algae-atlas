@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -50,6 +50,7 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   const cargo = parseTomlDependencies(cargoToml);
   const toolchain = readText(resolve(desktop, "rust-toolchain.toml"));
   const viteConfig = readText(resolve(desktop, "vite.config.ts"));
+  const indexHtml = readText(resolve(desktop, "index.html"));
 
   assert.deepEqual(rootPackage.workspaces, ["packages/*", "tools/content-workbench"]);
   assert.equal(workspacePackage.name, "@algae-atlas/content-workbench");
@@ -85,6 +86,8 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   assert.equal(tauriConfig.build.devUrl, "http://localhost:1420");
   assert.match(viteConfig, /port:\s*1420/);
   assert.match(viteConfig, /strictPort:\s*true/);
+  assert.match(indexHtml, /<link rel="icon" href="\/favicon\.ico" \/>/);
+  assert.ok(existsSync(resolve(desktop, "public/favicon.ico")), "local favicon must exist");
 
   const productionCsp = tauriConfig.app.security.csp;
   const developmentCsp = tauriConfig.app.security.devCsp;
