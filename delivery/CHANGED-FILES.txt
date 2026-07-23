@@ -5,9 +5,10 @@ M delivery/TEST-SUMMARY.txt
 M packages/content-schema/src/registry.ts
 M tools/content-workbench/src/components/DraftPages.test.tsx
 M tools/content-workbench/src/components/DraftPages.tsx
-M tools/content-workbench/src/components/SchemaForm.test.tsx
 M tools/content-workbench/src/components/SchemaForm.tsx
-A tools/content-workbench/src/forms/batch-one.test.tsx
-A tools/content-workbench/src/forms/batch-one.ts
-A tools/content-workbench/src/forms/content-forms.ts
+M tools/content-workbench/src/forms/batch-one.ts
+A tools/content-workbench/src/forms/batch-two.test.tsx
+A tools/content-workbench/src/forms/batch-two.ts
+M tools/content-workbench/src/forms/content-forms.ts
 M tools/content-workbench/src/forms/form-engine.ts
+M tools/content-workbench/src/forms/team-news.ts

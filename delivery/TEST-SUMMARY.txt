@@ -1,10 +1,10 @@
-Stage: Stage-05A2
+Stage: Stage-05A3
 Status: PASS
 ValidatedAt: 2026-07-23
-Branch: local/stage-05a2-forms-batch1
-StartCommit: f0ac4a59e7ed0370f9b91f388048f603c5584909
-FeatureCommit: 4285c4237548a43ff9a1fcf4fcb7a963214806eb
-TestCommit: c832e47a5926eb1f8654cea2c6fd1db51bb9c937
+Branch: local/stage-05a3-forms-batch2
+StartCommit: c5fdfdfcbd36b7dfa4984489c3db3ce637cdd538
+FeatureCommit: 01ba176018fdd4c4cea588ccfecf55762813d17e
+TestCommit: 62e262940af3413b5b6a1fb20d4d45cf54ef9f10
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
@@ -22,22 +22,21 @@ Required checks:
   - Existing non-fatal missing Next.js pages notice printed
 - npm.cmd run desktop:test: PASS
   - Scaffold: 1 test
-  - Vitest: 8 files, 39 tests
+  - Vitest: 9 files, 70 tests
 - npm.cmd run check:schema: PASS
 - npm.cmd run test:schema: PASS; 58 tests
-- Batch-one form round trips: PASS; all 5 content types
-- Shared-Schema field error mapping: PASS
-- Shared registry enum sourcing: PASS
-- Batch-one component rendering and DraftPages save integration: PASS
+- Five batch-two form round trips: PASS
+- All 11 registered content types create Schema-valid drafts: PASS
+- Type-switch confirmation and cancellation: PASS
+- Unsupported form-field rejection: PASS
+- Shared registry enum sourcing and field error mapping: PASS
 - git diff --check: PASS
 
 Boundary:
 - Full website check/test/build: NOT RUN by instruction
-- Desktop production build: NOT RUN by the specified component/schema test boundary
-- Rust and native Tauri smoke: NOT RUN; native sources were unchanged
-- Browser layout pass: NOT RUN; no generic form layout or CSS change beyond native number inputs
+- Desktop production build: NOT RUN by instruction
+- Rust and native Tauri checks: NOT RUN; native sources were unchanged
 - Git remote writes, PR, merge, tag, release, deployment: NONE
 
-Resolved attempts:
-- npm via PowerShell npm.ps1: BLOCKED by local execution policy; npm.cmd succeeded
-- Initial adapter fixture omitted the required Chinese title; tests now use createSharedRecordDraft
+Resolved attempt:
+- A component test selector matched both audience controls; role-based selection passed.

@@ -1,22 +1,21 @@
-# Stage 5A2 Delivery Handoff
+# Stage 5A3 Delivery Handoff
 
-- Stage: Stage-05A2 - Content-specific Forms, Batch One
-- Start commit: `f0ac4a59e7ed0370f9b91f388048f603c5584909`
+- Stage: Stage-05A3 - Content-specific Forms, Batch Two and Checkpoint
+- Start commit: `c5fdfdfcbd36b7dfa4984489c3db3ce637cdd538`
 - End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified bundle head)
 
 ## Completed
 
-- Registry-backed forms for Research Output, Research Project, Science Article, Collaboration, and Team Member.
-- Unified content-form adapter registry used by the existing draft editor.
-- Number input with integer/range validation for year, order, and reading-time fields.
-- Shared registry metadata and enum options for all batch-one fields.
-- Shared-Schema serialization, field error mapping, autosave/manual-save integration, and round-trip inspection for all five types.
-- Existing Team News form, CRUD, recovery, and future-version safety retained.
+- Registry-backed forms for Learning Resource, Algae Profile, Live-feed Profile, Coastal Observation, and Research Profile.
+- Adapter coverage for all 11 registered content types, including Schema-valid draft creation.
+- Localized text-list editing, zoned ISO timestamp validation, and primary environment selection with preservation of additional stored values.
+- Type-switch confirmation before type-specific fields are cleared.
+- Explicit errors for form values not declared by the active form Schema.
+- Shared registry metadata and enum options required by the five forms.
 
 ## Not Completed
 
-- No dedicated form for the five Stage-05A3 content types.
-- No body/English/media editing, catalog UI, structured reference-list editing, website preview, export, Git publishing, installer, remote write, merge, or deployment.
+- No body/English/media editing, author/content catalogs, structured source editor, website preview, export, Git publishing, installer, remote write, merge, or deployment.
 - Website, Rust, and native Tauri build surfaces were unchanged.
 
 ## Test Summary
@@ -24,26 +23,26 @@
 - Offline npm install: PASS; 601 packages, 0 vulnerabilities.
 - Desktop TypeScript/ESLint: PASS.
 - Desktop scaffold: PASS; 1 test.
-- Desktop tests: PASS; 8 files, 39 tests.
-- Shared schema TypeScript/tests: PASS; 58 tests.
-- Batch-one round trips, errors, registry enums, component rendering, and save integration: PASS.
+- Desktop tests: PASS; 9 files, 70 tests.
+- Shared Schema TypeScript/tests: PASS; 58 tests.
+- All registered adapters, type switching, unsupported-field errors, enum sourcing, rendering, validation, and round trips: PASS.
 - Git whitespace check: PASS.
-- Full website build: NOT RUN by instruction.
+- Full website production build: NOT RUN by instruction.
 
 ## Known Issues
 
 - ESLint retains the existing non-fatal missing Next.js `pages` informational message.
-- The Research Output form exposes one primary contributor and preserves additional stored contributor IDs.
-- Structured source and related-ID collection controls remain outside this batch.
+- Environment selectors edit one primary value and preserve additional stored values.
+- Structured references, relationship IDs, approver roles, and media collections await later catalog controls.
 
 ## Next Stage Exact Start
 
-- Use the clean Stage-05A2 delivery tip or verified bundle.
-- Next instruction: `21_Stage5A3_内容类型表单批次二.md`.
+- Use the clean Stage-05A3 delivery tip or verified Stage-05A3 bundle.
+- Next instruction: `22_Stage5B1_正文编辑与文本清理.md`.
 
 ## Do Not Repeat
 
 - Use `npm.cmd`; PowerShell blocks `npm.ps1` under the current execution policy.
-- Use `createSharedRecordDraft` before type-specific adapters in tests so the required Chinese title exists.
-- Extend the adapter registry; do not add per-type rendering branches or duplicate shared enum/schema rules.
-- Do not expand Stage-05A2 into later editor, media, preview, export, or publishing stages.
+- Use role-based selectors where form labels share a prefix.
+- Extend the adapter registry rather than adding per-type rendering branches.
+- Do not expand Stage-05A3 into body, English, media, preview, export, or publishing stages.
