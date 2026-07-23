@@ -10,7 +10,8 @@ use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::{Uuid, Version};
 
-pub const DRAFT_FORMAT_VERSION: u32 = 1;
+pub const DRAFT_FORMAT_VERSION: u32 = 2;
+const LEGACY_DRAFT_FORMAT_VERSION: u32 = 1;
 const MAX_DRAFT_BYTES: u64 = 64 * 1024;
 const MAX_CONTENT_TYPE_CHARS: usize = 100;
 const MAX_STABLE_ID_CHARS: usize = 200;
@@ -21,6 +22,16 @@ const MAX_TITLE_CHARS: usize = 500;
 pub struct Draft {
     pub format_version: u32,
     pub draft_id: String,
+    pub record_draft: Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegacyDraftV1 {
+    pub format_version: u32,
+    pub draft_id: String,
     pub content_type: String,
     pub stable_id: String,
     pub title_zh: String,
@@ -28,13 +39,47 @@ pub struct Draft {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum StoredDraft {
+    Current(Draft),
+    Legacy(LegacyDraftV1),
+}
+
+impl StoredDraft {
+    fn draft_id(&self) -> &str {
+        match self {
+            Self::Current(draft) => &draft.draft_id,
+            Self::Legacy(draft) => &draft.draft_id,
+        }
+    }
+
+    fn created_at(&self) -> &str {
+        match self {
+            Self::Current(draft) => &draft.created_at,
+            Self::Legacy(draft) => &draft.created_at,
+        }
+    }
+
+    fn updated_at(&self) -> &str {
+        match self {
+            Self::Current(draft) => &draft.updated_at,
+            Self::Legacy(draft) => &draft.updated_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateDraftRequest {
+    pub record_draft: Value,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SaveDraftRequest {
     pub draft_id: String,
-    pub content_type: String,
-    pub stable_id: String,
-    pub title_zh: String,
+    pub record_draft: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -106,7 +151,8 @@ impl DraftStore {
         }
     }
 
-    fn create(&self) -> StoreResult<Draft> {
+    fn create(&self, request: CreateDraftRequest) -> StoreResult<Draft> {
+        validate_record_draft(&request.record_draft)?;
         let _guard = self.lock()?;
         self.prepare_root()?;
 
@@ -114,9 +160,7 @@ impl DraftStore {
         let draft = Draft {
             format_version: DRAFT_FORMAT_VERSION,
             draft_id: Uuid::new_v4().to_string(),
-            content_type: String::new(),
-            stable_id: String::new(),
-            title_zh: String::new(),
+            record_draft: request.record_draft,
             created_at: now.clone(),
             updated_at: now,
         };
@@ -124,14 +168,14 @@ impl DraftStore {
         Ok(draft)
     }
 
-    fn list(&self) -> StoreResult<Vec<Draft>> {
+    fn list(&self) -> StoreResult<Vec<StoredDraft>> {
         let _guard = self.lock()?;
         self.prepare_root()?;
 
         self.list_unlocked()
     }
 
-    fn list_unlocked(&self) -> StoreResult<Vec<Draft>> {
+    fn list_unlocked(&self) -> StoreResult<Vec<StoredDraft>> {
         let mut drafts = Vec::new();
         for entry in fs::read_dir(&self.root)? {
             let entry = entry?;
@@ -160,23 +204,21 @@ impl DraftStore {
 
         drafts.sort_by(|left, right| {
             right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| left.draft_id.cmp(&right.draft_id))
+                .updated_at()
+                .cmp(left.updated_at())
+                .then_with(|| left.draft_id().cmp(right.draft_id()))
         });
         Ok(drafts)
     }
 
-    fn open(&self, draft_id: &str) -> StoreResult<Draft> {
+    fn open(&self, draft_id: &str) -> StoreResult<StoredDraft> {
         let _guard = self.lock()?;
         self.prepare_root()?;
         self.read_or_quarantine_unlocked(parse_draft_id(draft_id)?)
     }
 
     fn save(&self, request: SaveDraftRequest) -> StoreResult<Draft> {
-        validate_field(&request.content_type, MAX_CONTENT_TYPE_CHARS, "contentType")?;
-        validate_field(&request.stable_id, MAX_STABLE_ID_CHARS, "stableId")?;
-        validate_field(&request.title_zh, MAX_TITLE_CHARS, "titleZh")?;
+        validate_record_draft(&request.record_draft)?;
 
         let _guard = self.lock()?;
         self.prepare_root()?;
@@ -184,11 +226,9 @@ impl DraftStore {
         let current = self.read_or_quarantine_unlocked(id)?;
         let replacement = Draft {
             format_version: DRAFT_FORMAT_VERSION,
-            draft_id: current.draft_id,
-            content_type: request.content_type,
-            stable_id: request.stable_id,
-            title_zh: request.title_zh,
-            created_at: current.created_at,
+            draft_id: current.draft_id().to_owned(),
+            record_draft: request.record_draft,
+            created_at: current.created_at().to_owned(),
             updated_at: current_timestamp()?,
         };
         self.write_atomically(&replacement, false)?;
@@ -205,8 +245,8 @@ impl DraftStore {
         Ok(())
     }
 
-    pub(crate) fn latest_for_recovery(&self) -> Result<Option<Draft>, String> {
-        let result = (|| -> StoreResult<Option<Draft>> {
+    pub(crate) fn latest_for_recovery(&self) -> Result<Option<StoredDraft>, String> {
+        let result = (|| -> StoreResult<Option<StoredDraft>> {
             let _guard = self.lock()?;
             self.prepare_root()?;
             Ok(self.list_unlocked()?.into_iter().next())
@@ -233,7 +273,7 @@ impl DraftStore {
         self.root.join(format!("{id}.json"))
     }
 
-    fn read_unlocked(&self, expected_id: Uuid) -> StoreResult<Draft> {
+    fn read_unlocked(&self, expected_id: Uuid) -> StoreResult<StoredDraft> {
         let target = self.path_for_id(expected_id);
         let metadata = match fs::symlink_metadata(&target) {
             Ok(metadata) => metadata,
@@ -254,12 +294,12 @@ impl DraftStore {
             return Err(DraftStoreError::InvalidData);
         }
         let value: Value = serde_json::from_slice(&bytes)?;
-        let draft: Draft = serde_json::from_value(migrate_draft_value(value)?)?;
+        let draft = migrate_draft_value(value)?;
         validate_stored_draft(&draft, expected_id)?;
         Ok(draft)
     }
 
-    fn read_or_quarantine_unlocked(&self, expected_id: Uuid) -> StoreResult<Draft> {
+    fn read_or_quarantine_unlocked(&self, expected_id: Uuid) -> StoreResult<StoredDraft> {
         match self.read_unlocked(expected_id) {
             Ok(draft) => Ok(draft),
             Err(error) if error.is_corrupt_data() => {
@@ -297,7 +337,7 @@ impl DraftStore {
     }
 
     fn write_atomically(&self, draft: &Draft, create_new: bool) -> StoreResult<()> {
-        validate_stored_draft(draft, parse_draft_id(&draft.draft_id)?)?;
+        validate_current_draft(draft, parse_draft_id(&draft.draft_id)?)?;
         let mut bytes = serde_json::to_vec_pretty(draft)?;
         bytes.push(b'\n');
         if bytes.len() as u64 > MAX_DRAFT_BYTES {
@@ -349,7 +389,7 @@ impl DraftStoreError {
     }
 }
 
-fn migrate_draft_value(value: Value) -> StoreResult<Value> {
+fn migrate_draft_value(value: Value) -> StoreResult<StoredDraft> {
     let version = value
         .get("formatVersion")
         .and_then(Value::as_u64)
@@ -357,7 +397,8 @@ fn migrate_draft_value(value: Value) -> StoreResult<Value> {
         .ok_or(DraftStoreError::InvalidData)?;
 
     match version {
-        DRAFT_FORMAT_VERSION => Ok(value),
+        LEGACY_DRAFT_FORMAT_VERSION => Ok(StoredDraft::Legacy(serde_json::from_value(value)?)),
+        DRAFT_FORMAT_VERSION => Ok(StoredDraft::Current(serde_json::from_value(value)?)),
         _ => Err(DraftStoreError::UnsupportedFormat),
     }
 }
@@ -377,8 +418,27 @@ fn validate_field(value: &str, max_chars: usize, field: &'static str) -> StoreRe
     Ok(())
 }
 
-fn validate_stored_draft(draft: &Draft, expected_id: Uuid) -> StoreResult<()> {
+fn validate_stored_draft(draft: &StoredDraft, expected_id: Uuid) -> StoreResult<()> {
+    match draft {
+        StoredDraft::Current(draft) => validate_current_draft(draft, expected_id),
+        StoredDraft::Legacy(draft) => validate_legacy_draft(draft, expected_id),
+    }
+}
+
+fn validate_current_draft(draft: &Draft, expected_id: Uuid) -> StoreResult<()> {
     if draft.format_version != DRAFT_FORMAT_VERSION {
+        return Err(DraftStoreError::UnsupportedFormat);
+    }
+    if parse_draft_id(&draft.draft_id)? != expected_id {
+        return Err(DraftStoreError::InvalidData);
+    }
+    validate_record_draft(&draft.record_draft)?;
+
+    validate_timestamps(&draft.created_at, &draft.updated_at)
+}
+
+fn validate_legacy_draft(draft: &LegacyDraftV1, expected_id: Uuid) -> StoreResult<()> {
+    if draft.format_version != LEGACY_DRAFT_FORMAT_VERSION {
         return Err(DraftStoreError::UnsupportedFormat);
     }
     if parse_draft_id(&draft.draft_id)? != expected_id {
@@ -388,10 +448,21 @@ fn validate_stored_draft(draft: &Draft, expected_id: Uuid) -> StoreResult<()> {
     validate_field(&draft.stable_id, MAX_STABLE_ID_CHARS, "stableId")?;
     validate_field(&draft.title_zh, MAX_TITLE_CHARS, "titleZh")?;
 
-    let created = OffsetDateTime::parse(&draft.created_at, &Rfc3339)
-        .map_err(|_| DraftStoreError::InvalidData)?;
-    let updated = OffsetDateTime::parse(&draft.updated_at, &Rfc3339)
-        .map_err(|_| DraftStoreError::InvalidData)?;
+    validate_timestamps(&draft.created_at, &draft.updated_at)
+}
+
+fn validate_record_draft(record_draft: &Value) -> StoreResult<()> {
+    if !record_draft.is_object() {
+        return Err(DraftStoreError::InvalidField("recordDraft"));
+    }
+    Ok(())
+}
+
+fn validate_timestamps(created_at: &str, updated_at: &str) -> StoreResult<()> {
+    let created =
+        OffsetDateTime::parse(created_at, &Rfc3339).map_err(|_| DraftStoreError::InvalidData)?;
+    let updated =
+        OffsetDateTime::parse(updated_at, &Rfc3339).map_err(|_| DraftStoreError::InvalidData)?;
     if updated < created {
         return Err(DraftStoreError::InvalidData);
     }
@@ -490,12 +561,15 @@ fn command_error(error: DraftStoreError) -> String {
 }
 
 #[tauri::command]
-pub fn create_draft(store: tauri::State<'_, DraftStore>) -> Result<Draft, String> {
-    store.create().map_err(command_error)
+pub fn create_draft(
+    store: tauri::State<'_, DraftStore>,
+    draft: CreateDraftRequest,
+) -> Result<Draft, String> {
+    store.create(draft).map_err(command_error)
 }
 
 #[tauri::command]
-pub fn list_drafts(store: tauri::State<'_, DraftStore>) -> Result<Vec<Draft>, String> {
+pub fn list_drafts(store: tauri::State<'_, DraftStore>) -> Result<Vec<StoredDraft>, String> {
     store.list().map_err(command_error)
 }
 
@@ -503,7 +577,7 @@ pub fn list_drafts(store: tauri::State<'_, DraftStore>) -> Result<Vec<Draft>, St
 pub fn open_draft(
     store: tauri::State<'_, DraftStore>,
     request: DraftIdRequest,
-) -> Result<Draft, String> {
+) -> Result<StoredDraft, String> {
     store.open(&request.draft_id).map_err(command_error)
 }
 
@@ -526,19 +600,32 @@ pub fn delete_draft(
 #[cfg(test)]
 mod tests {
     use super::{
-        migrate_draft_value, AtomicInstaller, DraftStore, DraftStoreError, SaveDraftRequest,
-        DRAFT_FORMAT_VERSION,
+        migrate_draft_value, AtomicInstaller, CreateDraftRequest, DraftStore, DraftStoreError,
+        SaveDraftRequest, StoredDraft, DRAFT_FORMAT_VERSION, LEGACY_DRAFT_FORMAT_VERSION,
     };
     use serde_json::json;
     use std::{fs, path::Path, sync::Arc};
     use tempfile::tempdir;
 
-    fn saved_fields(draft_id: String) -> SaveDraftRequest {
+    fn record_draft(title: &str) -> serde_json::Value {
+        json!({
+            "schemaVersion": 1,
+            "id": "fictional-draft",
+            "type": "team-news",
+            "locales": { "zh": { "title": title } }
+        })
+    }
+
+    fn create_request() -> CreateDraftRequest {
+        CreateDraftRequest {
+            record_draft: record_draft("Fictional title"),
+        }
+    }
+
+    fn saved_fields(draft_id: String, title: &str) -> SaveDraftRequest {
         SaveDraftRequest {
             draft_id,
-            content_type: "placeholder-news".to_owned(),
-            stable_id: "fictional-draft".to_owned(),
-            title_zh: "Fictional title".to_owned(),
+            record_draft: record_draft(title),
         }
     }
 
@@ -547,20 +634,26 @@ mod tests {
         let temporary = tempdir().expect("temporary directory");
         let store = DraftStore::new(temporary.path().join("drafts").join("v1"));
 
-        let created = store.create().expect("creates draft");
+        let created = store.create(create_request()).expect("creates draft");
         assert_eq!(created.format_version, DRAFT_FORMAT_VERSION);
-        assert!(created.content_type.is_empty());
-        assert_eq!(store.list().expect("lists drafts"), vec![created.clone()]);
-        assert_eq!(store.open(&created.draft_id).expect("opens draft"), created);
+        assert_eq!(created.record_draft, record_draft("Fictional title"));
+        assert_eq!(
+            store.list().expect("lists drafts"),
+            vec![StoredDraft::Current(created.clone())]
+        );
+        assert_eq!(
+            store.open(&created.draft_id).expect("opens draft"),
+            StoredDraft::Current(created.clone())
+        );
 
         let saved = store
-            .save(saved_fields(created.draft_id.clone()))
+            .save(saved_fields(created.draft_id.clone(), "Updated title"))
             .expect("saves draft");
         assert_eq!(saved.created_at, created.created_at);
-        assert_eq!(saved.content_type, "placeholder-news");
+        assert_eq!(saved.record_draft, record_draft("Updated title"));
         assert_eq!(
             store.open(&created.draft_id).expect("opens saved draft"),
-            saved
+            StoredDraft::Current(saved)
         );
 
         store.delete(&created.draft_id).expect("deletes draft");
@@ -618,13 +711,13 @@ mod tests {
         let temporary = tempdir().expect("temporary directory");
         let root = temporary.path().join("drafts").join("v1");
         let store = DraftStore::new(root.clone());
-        let created = store.create().expect("creates draft");
+        let created = store.create(create_request()).expect("creates draft");
         let target = root.join(format!("{}.json", created.draft_id));
         let original = fs::read(&target).expect("reads original");
 
         let failing = DraftStore::with_installer(root.clone(), Arc::new(FailingInstaller));
         assert!(failing
-            .save(saved_fields(created.draft_id.clone()))
+            .save(saved_fields(created.draft_id.clone(), "Updated title"))
             .is_err());
         assert_eq!(fs::read(target).expect("reads preserved draft"), original);
         assert_eq!(
@@ -635,15 +728,76 @@ mod tests {
     }
 
     #[test]
-    fn format_migration_hook_accepts_current_and_rejects_future_versions() {
-        assert_eq!(
-            migrate_draft_value(json!({ "formatVersion": DRAFT_FORMAT_VERSION }))
-                .expect("accepts current version"),
-            json!({ "formatVersion": DRAFT_FORMAT_VERSION })
-        );
+    fn format_migration_hook_accepts_legacy_and_current_but_rejects_future_versions() {
+        let draft_id = "11111111-1111-4111-8111-111111111111";
+        let current = json!({
+            "formatVersion": DRAFT_FORMAT_VERSION,
+            "draftId": draft_id,
+            "recordDraft": record_draft("Current"),
+            "createdAt": "2026-07-23T08:00:00Z",
+            "updatedAt": "2026-07-23T08:00:00Z"
+        });
+        assert!(matches!(
+            migrate_draft_value(current).expect("accepts current version"),
+            StoredDraft::Current(_)
+        ));
+
+        let legacy = json!({
+            "formatVersion": LEGACY_DRAFT_FORMAT_VERSION,
+            "draftId": draft_id,
+            "contentType": "team-news",
+            "stableId": "fictional-draft",
+            "titleZh": "Legacy",
+            "createdAt": "2026-07-23T08:00:00Z",
+            "updatedAt": "2026-07-23T08:00:00Z"
+        });
+        assert!(matches!(
+            migrate_draft_value(legacy).expect("accepts legacy version"),
+            StoredDraft::Legacy(_)
+        ));
+
         assert!(matches!(
             migrate_draft_value(json!({ "formatVersion": DRAFT_FORMAT_VERSION + 1 })),
             Err(DraftStoreError::UnsupportedFormat)
+        ));
+    }
+
+    #[test]
+    fn reads_legacy_draft_and_upgrades_it_on_the_next_save() {
+        let temporary = tempdir().expect("temporary directory");
+        let root = temporary.path().join("drafts").join("v1");
+        fs::create_dir_all(&root).expect("creates draft directory");
+        let draft_id = "11111111-1111-4111-8111-111111111111";
+        let path = root.join(format!("{draft_id}.json"));
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "formatVersion": LEGACY_DRAFT_FORMAT_VERSION,
+                "draftId": draft_id,
+                "contentType": "team-news",
+                "stableId": "fictional-draft",
+                "titleZh": "Legacy",
+                "createdAt": "2026-07-23T08:00:00Z",
+                "updatedAt": "2026-07-23T08:00:00Z"
+            }))
+            .expect("serializes legacy draft"),
+        )
+        .expect("writes legacy draft");
+        let store = DraftStore::new(root);
+
+        assert!(matches!(
+            store.open(draft_id).expect("opens legacy draft"),
+            StoredDraft::Legacy(_)
+        ));
+        let saved = store
+            .save(saved_fields(draft_id.to_owned(), "Migrated"))
+            .expect("saves migrated draft");
+        assert_eq!(saved.format_version, DRAFT_FORMAT_VERSION);
+        assert_eq!(saved.created_at, "2026-07-23T08:00:00Z");
+        assert_eq!(saved.record_draft, record_draft("Migrated"));
+        assert!(matches!(
+            store.open(draft_id).expect("opens migrated draft"),
+            StoredDraft::Current(_)
         ));
     }
 
@@ -652,14 +806,19 @@ mod tests {
         let temporary = tempdir().expect("temporary directory");
         let root = temporary.path().join("drafts").join("v1");
         let store = DraftStore::new(root.clone());
-        let damaged = store.create().expect("creates damaged draft");
-        let valid = store.create().expect("creates valid draft");
+        let damaged = store
+            .create(create_request())
+            .expect("creates damaged draft");
+        let valid = store.create(create_request()).expect("creates valid draft");
         let damaged_path = root.join(format!("{}.json", damaged.draft_id));
         let valid_path = root.join(format!("{}.json", valid.draft_id));
         let valid_bytes = fs::read(&valid_path).expect("reads valid draft");
 
         fs::write(&damaged_path, b"{ not valid JSON").expect("damages draft JSON");
-        assert_eq!(store.list().expect("lists remaining drafts"), vec![valid]);
+        assert_eq!(
+            store.list().expect("lists remaining drafts"),
+            vec![StoredDraft::Current(valid)]
+        );
         assert!(!damaged_path.exists());
         assert_eq!(
             fs::read(valid_path).expect("reads untouched valid draft"),
@@ -678,11 +837,14 @@ mod tests {
         let temporary = tempdir().expect("temporary directory");
         let root = temporary.path().join("drafts").join("v1");
         let store = DraftStore::new(root.clone());
-        let created = store.create().expect("creates draft");
+        let created = store.create(create_request()).expect("creates draft");
         let target = root.join(format!("{}.json", created.draft_id));
         let unsupported = fs::read_to_string(&target)
             .expect("reads draft JSON")
-            .replace("\"formatVersion\": 1", "\"formatVersion\": 2");
+            .replace(
+                &format!("\"formatVersion\": {DRAFT_FORMAT_VERSION}"),
+                &format!("\"formatVersion\": {}", DRAFT_FORMAT_VERSION + 1),
+            );
         fs::write(&target, unsupported).expect("writes unsupported draft");
 
         assert!(matches!(

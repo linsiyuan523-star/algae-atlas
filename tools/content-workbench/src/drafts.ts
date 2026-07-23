@@ -1,22 +1,32 @@
 import { invoke } from "@tauri-apps/api/core";
+import { inspectRecordDraft, validateDraftFields } from "./schema-drafts";
+import type {
+  DraftFields,
+  DraftRecordInspection,
+  RecordDraft,
+} from "./schema-drafts";
+
+export const DRAFT_FORMAT_VERSION = 2;
 
 export type Draft = {
   formatVersion: number;
   draftId: string;
-  contentType: string;
-  stableId: string;
-  titleZh: string;
+  recordDraft: unknown;
   createdAt: string;
   updatedAt: string;
+  legacyFields?: DraftFields;
 };
 
-export type SaveDraftInput = Pick<
-  Draft,
-  "draftId" | "contentType" | "stableId" | "titleZh"
->;
+export type CreateDraftInput = {
+  recordDraft: RecordDraft;
+};
+
+export type SaveDraftInput = CreateDraftInput & {
+  draftId: string;
+};
 
 export type DraftApi = {
-  createDraft: () => Promise<Draft>;
+  createDraft: (draft: CreateDraftInput) => Promise<Draft>;
   listDrafts: () => Promise<Draft[]>;
   openDraft: (draftId: string) => Promise<Draft>;
   saveDraft: (draft: SaveDraftInput) => Promise<Draft>;
@@ -25,12 +35,81 @@ export type DraftApi = {
 };
 
 export const tauriDraftApi: DraftApi = {
-  createDraft: () => invoke<Draft>("create_draft"),
-  listDrafts: () => invoke<Draft[]>("list_drafts"),
-  openDraft: (draftId) =>
-    invoke<Draft>("open_draft", { request: { draftId } }),
-  saveDraft: (draft) => invoke<Draft>("save_draft", { draft }),
+  createDraft: async (draft) =>
+    normalizeStoredDraft(await invoke<unknown>("create_draft", { draft })),
+  listDrafts: async () =>
+    (await invoke<unknown[]>("list_drafts")).map(normalizeStoredDraft),
+  openDraft: async (draftId) =>
+    normalizeStoredDraft(
+      await invoke<unknown>("open_draft", { request: { draftId } }),
+    ),
+  saveDraft: async (draft) =>
+    normalizeStoredDraft(await invoke<unknown>("save_draft", { draft })),
   deleteDraft: (draftId) =>
     invoke<void>("delete_draft", { request: { draftId } }),
-  takeRecoveryDraft: () => invoke<Draft | null>("take_recovery_draft"),
+  takeRecoveryDraft: async () => {
+    const stored = await invoke<unknown | null>("take_recovery_draft");
+    return stored === null ? null : normalizeStoredDraft(stored);
+  },
 };
+
+export function normalizeStoredDraft(input: unknown): Draft {
+  const stored = asRecord(input);
+  if (
+    !stored ||
+    typeof stored.formatVersion !== "number" ||
+    typeof stored.draftId !== "string" ||
+    typeof stored.createdAt !== "string" ||
+    typeof stored.updatedAt !== "string"
+  ) {
+    throw new Error("草稿存储格式无效。");
+  }
+
+  if (stored.formatVersion === DRAFT_FORMAT_VERSION && "recordDraft" in stored) {
+    return {
+      formatVersion: stored.formatVersion,
+      draftId: stored.draftId,
+      recordDraft: stored.recordDraft,
+      createdAt: stored.createdAt,
+      updatedAt: stored.updatedAt,
+    };
+  }
+
+  if (
+    stored.formatVersion === 1 &&
+    typeof stored.contentType === "string" &&
+    typeof stored.stableId === "string" &&
+    typeof stored.titleZh === "string"
+  ) {
+    return {
+      formatVersion: stored.formatVersion,
+      draftId: stored.draftId,
+      recordDraft: null,
+      createdAt: stored.createdAt,
+      updatedAt: stored.updatedAt,
+      legacyFields: {
+        contentType: stored.contentType,
+        stableId: stored.stableId,
+        titleZh: stored.titleZh,
+      },
+    };
+  }
+
+  throw new Error("草稿格式版本不受支持。");
+}
+
+export function inspectDraft(draft: Draft): DraftRecordInspection {
+  if (draft.legacyFields) {
+    return {
+      fields: draft.legacyFields,
+      errors: validateDraftFields(draft.legacyFields),
+    };
+  }
+  return inspectRecordDraft(draft.recordDraft);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}

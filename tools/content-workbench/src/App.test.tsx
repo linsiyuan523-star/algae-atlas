@@ -4,23 +4,37 @@ import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
 import App from "./App";
 import type { Draft, DraftApi } from "./drafts";
+import { createSharedRecordDraft } from "./schema-drafts";
 
-const draft: Draft = {
-  formatVersion: 1,
-  draftId: "11111111-1111-4111-8111-111111111111",
-  contentType: "",
-  stableId: "",
-  titleZh: "",
-  createdAt: "2026-07-23T08:00:00Z",
-  updatedAt: "2026-07-23T08:00:00Z",
-};
+function makeDraft(titleZh = "虚构标题"): Draft {
+  const prepared = createSharedRecordDraft(
+    {
+      contentType: "team-news",
+      stableId: "fictional-draft",
+      titleZh,
+    },
+    "2026-07-23T08:00:00Z",
+  );
+  if (!prepared.success) {
+    throw new Error("test draft must be valid");
+  }
+  return {
+    formatVersion: 2,
+    draftId: "11111111-1111-4111-8111-111111111111",
+    recordDraft: prepared.recordDraft,
+    createdAt: "2026-07-23T08:00:00Z",
+    updatedAt: "2026-07-23T08:00:00Z",
+  };
+}
+
+const draft = makeDraft();
 
 function createApi(): DraftApi {
   return {
-    createDraft: vi.fn(async () => draft),
+    createDraft: vi.fn(async (input) => ({ ...draft, recordDraft: input.recordDraft })),
     listDrafts: vi.fn(async () => []),
     openDraft: vi.fn(async () => draft),
-    saveDraft: vi.fn(async (input) => ({ ...draft, ...input })),
+    saveDraft: vi.fn(async (input) => ({ ...draft, recordDraft: input.recordDraft })),
     deleteDraft: vi.fn(async () => undefined),
     takeRecoveryDraft: vi.fn(async () => null),
   };
@@ -35,7 +49,7 @@ test("switches between all workbench pages", async () => {
     screen.getByRole("heading", { name: "藻类团队内容发布工作台" }),
   ).toBeInTheDocument();
   expect(screen.getByText("版本 0.1.0")).toBeVisible();
-  expect(screen.getByRole("button", { name: "新建基础草稿" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "新建草稿" })).toBeVisible();
 
   const navigation = screen.getByRole("navigation", { name: "工作台导航" });
   expect(within(navigation).getAllByRole("button")).toHaveLength(5);
@@ -60,15 +74,24 @@ test("switches between all workbench pages", async () => {
   }
 });
 
-test("creates a basic draft and opens it in the drafts page", async () => {
+test("creates a shared-schema draft and opens it in the drafts page", async () => {
   const user = userEvent.setup();
   const api = createApi();
   api.listDrafts = vi.fn(async () => [draft]);
   render(<App draftApi={api} />);
 
-  await user.click(screen.getByRole("button", { name: "新建基础草稿" }));
+  await user.type(screen.getByLabelText("稳定 ID"), "fictional-draft");
+  await user.type(screen.getByLabelText("中文标题"), "虚构标题");
+  await user.click(screen.getByRole("button", { name: "新建草稿" }));
 
   expect(api.createDraft).toHaveBeenCalledOnce();
+  expect(api.createDraft).toHaveBeenCalledWith({
+    recordDraft: expect.objectContaining({
+      schemaVersion: 1,
+      id: "fictional-draft",
+      type: "team-news",
+    }),
+  });
   expect(await screen.findByRole("heading", { name: "草稿箱", level: 2 })).toBeVisible();
   expect(screen.getByRole("heading", { name: "编辑草稿" })).toBeVisible();
   expect(screen.getByText(draft.draftId)).toBeVisible();
@@ -77,7 +100,7 @@ test("creates a basic draft and opens it in the drafts page", async () => {
 test("offers the most recent draft once after an interrupted session", async () => {
   const user = userEvent.setup();
   const api = createApi();
-  const recovered = { ...draft, titleZh: "待恢复草稿" };
+  const recovered = makeDraft("待恢复草稿");
   api.takeRecoveryDraft = vi.fn(async () => recovered);
   api.listDrafts = vi.fn(async () => [recovered]);
   render(

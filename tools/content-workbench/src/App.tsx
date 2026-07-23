@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DraftsPage, NewDraftPage } from "./components/DraftPages";
-import { tauriDraftApi } from "./drafts";
+import { inspectDraft, tauriDraftApi } from "./drafts";
 import type { Draft, DraftApi } from "./drafts";
 
 const APP_VERSION = "0.1.0";
@@ -147,7 +147,8 @@ export default function App({ draftApi = tauriDraftApi }: AppProps) {
             <div>
               <strong>检测到上次会话异常结束</strong>
               <p>
-                最近草稿：{recoveryDraft.titleZh.trim() || "未命名草稿"}
+                最近草稿：
+                {inspectDraft(recoveryDraft).fields.titleZh.trim() || "未命名草稿"}
               </p>
             </div>
             <div className="recovery-actions">

@@ -13,7 +13,19 @@ import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { Draft, DraftApi, SaveDraftInput } from "../drafts";
+import { inspectDraft } from "../drafts";
+import type { Draft, DraftApi } from "../drafts";
+import {
+  contentTypeLabel,
+  contentTypeOptions,
+  createSharedRecordDraft,
+  SHARED_SCHEMA_VERSION,
+  updateSharedRecordDraft,
+} from "../schema-drafts";
+import type {
+  DraftFieldErrors,
+  DraftFields,
+} from "../schema-drafts";
 
 type NewDraftPageProps = {
   api: DraftApi;
@@ -23,14 +35,33 @@ type NewDraftPageProps = {
 export const AUTOSAVE_DELAY_MS = 700;
 
 export function NewDraftPage({ api, onCreated }: NewDraftPageProps) {
+  const [fields, setFields] = useState<DraftFields>({
+    contentType: contentTypeOptions[0].value,
+    stableId: "",
+    titleZh: "",
+  });
+  const [fieldErrors, setFieldErrors] = useState<DraftFieldErrors>({});
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleCreate() {
+  function updateField(field: keyof DraftFields, value: string) {
+    setFields((current) => ({ ...current, [field]: value }));
+    setFieldErrors((current) => ({ ...current, [field]: undefined }));
+    setError(null);
+  }
+
+  async function handleCreate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const prepared = createSharedRecordDraft(fields, new Date().toISOString());
+    if (!prepared.success) {
+      setFieldErrors(prepared.errors);
+      return;
+    }
+
     setIsCreating(true);
     setError(null);
     try {
-      onCreated(await api.createDraft());
+      onCreated(await api.createDraft({ recordDraft: prepared.recordDraft }));
     } catch (caught) {
       setError(describeError(caught));
     } finally {
@@ -39,23 +70,68 @@ export function NewDraftPage({ api, onCreated }: NewDraftPageProps) {
   }
 
   return (
-    <div className="new-draft-action">
+    <form className="new-draft-action" onSubmit={(event) => void handleCreate(event)}>
       <FilePlus2 aria-hidden="true" size={30} strokeWidth={1.6} />
+      <div className="new-draft-fields">
+        <div className="field-group">
+          <label htmlFor="new-content-type">内容类型</label>
+          <select
+            id="new-content-type"
+            value={fields.contentType}
+            aria-invalid={Boolean(fieldErrors.contentType)}
+            aria-describedby={fieldErrors.contentType ? "new-content-type-error" : undefined}
+            onChange={(event) => updateField("contentType", event.target.value)}
+          >
+            {contentTypeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.labelZh} / {option.labelEn}
+              </option>
+            ))}
+          </select>
+          <FieldError id="new-content-type-error" message={fieldErrors.contentType} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="new-stable-id">稳定 ID</label>
+          <input
+            id="new-stable-id"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            value={fields.stableId}
+            aria-invalid={Boolean(fieldErrors.stableId)}
+            aria-describedby={fieldErrors.stableId ? "new-stable-id-error" : undefined}
+            onChange={(event) => updateField("stableId", event.target.value)}
+          />
+          <FieldError id="new-stable-id-error" message={fieldErrors.stableId} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="new-title-zh">中文标题</label>
+          <input
+            id="new-title-zh"
+            type="text"
+            maxLength={500}
+            value={fields.titleZh}
+            aria-invalid={Boolean(fieldErrors.titleZh)}
+            aria-describedby={fieldErrors.titleZh ? "new-title-zh-error" : undefined}
+            onChange={(event) => updateField("titleZh", event.target.value)}
+          />
+          <FieldError id="new-title-zh-error" message={fieldErrors.titleZh} />
+        </div>
+      </div>
       <button
         className="primary-button"
-        type="button"
+        type="submit"
         disabled={isCreating}
-        onClick={() => void handleCreate()}
       >
         <FilePlus2 aria-hidden="true" size={18} />
-        {isCreating ? "正在新建..." : "新建基础草稿"}
+        {isCreating ? "正在新建..." : "新建草稿"}
       </button>
       {error ? (
         <p className="operation-error" role="alert">
           {error}
         </p>
       ) : null}
-    </div>
+    </form>
   );
 }
 
@@ -122,23 +198,6 @@ export function DraftsPage({ api, initialDraft = null }: DraftsPageProps) {
     };
   }, [api]);
 
-  async function handleCreate() {
-    setPendingAction("create");
-    setError(null);
-    try {
-      const created = await api.createDraft();
-      setDrafts((current) => [
-        created,
-        ...current.filter((draft) => draft.draftId !== created.draftId),
-      ]);
-      setSelectedDraft(created);
-    } catch (caught) {
-      setError(describeError(caught));
-    } finally {
-      setPendingAction(null);
-    }
-  }
-
   async function handleOpen(draftId: string) {
     setPendingAction(draftId);
     setError(null);
@@ -169,15 +228,7 @@ export function DraftsPage({ api, initialDraft = null }: DraftsPageProps) {
   return (
     <div className="draft-workspace">
       <div className="draft-toolbar">
-        <button
-          className="primary-button"
-          type="button"
-          disabled={isBusy}
-          onClick={() => void handleCreate()}
-        >
-          <FilePlus2 aria-hidden="true" size={18} />
-          {pendingAction === "create" ? "正在新建..." : "新建草稿"}
-        </button>
+        <span>本地草稿</span>
         <button
           className="icon-button"
           type="button"
@@ -211,7 +262,9 @@ export function DraftsPage({ api, initialDraft = null }: DraftsPageProps) {
             <h3 id="draft-list-title">草稿列表</h3>
             <ul>
               {drafts.map((draft) => {
-                const title = draft.titleZh.trim() || "未命名草稿";
+                const { fields, errors } = inspectDraft(draft);
+                const title = fields.titleZh.trim() || "未命名草稿";
+                const typeLabel = contentTypeLabel(fields.contentType);
                 return (
                   <li key={draft.draftId}>
                     <button
@@ -222,7 +275,11 @@ export function DraftsPage({ api, initialDraft = null }: DraftsPageProps) {
                       onClick={() => void handleOpen(draft.draftId)}
                     >
                       <strong>{title}</strong>
-                      <span>{draft.stableId.trim() || "尚无稳定 ID"}</span>
+                      <span>{typeLabel ?? "内容类型无效"}</span>
+                      <span>{fields.stableId.trim() || "尚无稳定 ID"}</span>
+                      {Object.keys(errors).length > 0 ? (
+                        <span className="draft-row-warning">字段需修正</span>
+                      ) : null}
                       <time dateTime={draft.updatedAt}>
                         {formatTimestamp(draft.updatedAt)}
                       </time>
@@ -263,14 +320,19 @@ type DraftEditorProps = {
 };
 
 function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
-  const initialFields = toSaveInput(draft);
-  const [fields, setFields] = useState<SaveDraftInput>(initialFields);
-  const [savedFields, setSavedFields] = useState<SaveDraftInput>(initialFields);
+  const initialInspection = inspectDraft(draft);
+  const initialFields = initialInspection.fields;
+  const [fields, setFields] = useState<DraftFields>(initialFields);
+  const [savedFields, setSavedFields] = useState<DraftFields>(initialFields);
+  const [fieldErrors, setFieldErrors] = useState<DraftFieldErrors>(
+    initialInspection.errors,
+  );
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"delete" | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const fieldsRef = useRef(fields);
+  const recordDraftRef = useRef(draft.recordDraft);
   const saveInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const isDirty = !sameSaveInput(fields, savedFields);
@@ -283,9 +345,25 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
     };
   }, []);
 
+  useEffect(() => {
+    recordDraftRef.current = draft.recordDraft;
+  }, [draft.recordDraft]);
+
   const persist = useCallback(
-    async (snapshot: SaveDraftInput) => {
+    async (snapshot: DraftFields) => {
       if (saveInFlightRef.current) {
+        return;
+      }
+
+      const prepared = updateSharedRecordDraft(
+        recordDraftRef.current,
+        snapshot,
+        new Date().toISOString(),
+      );
+      if (!prepared.success) {
+        setFieldErrors(prepared.errors);
+        setSaveError("请修正标出的字段后重试。");
+        setSaveStatus("failed");
         return;
       }
 
@@ -293,12 +371,17 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       setSaveStatus("saving");
       setSaveError(null);
       try {
-        const saved = await api.saveDraft(snapshot);
-        const persistedFields = toSaveInput(saved);
+        const saved = await api.saveDraft({
+          draftId: draft.draftId,
+          recordDraft: prepared.recordDraft,
+        });
+        const persistedFields = inspectDraft(saved).fields;
         if (!mountedRef.current) {
           return;
         }
         setSavedFields(persistedFields);
+        setFieldErrors({});
+        recordDraftRef.current = saved.recordDraft;
         onSaved(saved);
         setSaveStatus(
           sameSaveInput(fieldsRef.current, persistedFields) ? "saved" : "pending",
@@ -312,7 +395,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         saveInFlightRef.current = false;
       }
     },
-    [api, onSaved],
+    [api, draft.draftId, onSaved],
   );
 
   useEffect(() => {
@@ -327,10 +410,11 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
     return () => window.clearTimeout(timer);
   }, [fields, pendingAction, persist, saveStatus]);
 
-  function updateField(field: keyof Omit<SaveDraftInput, "draftId">, value: string) {
+  function updateField(field: keyof DraftFields, value: string) {
     const next = { ...fields, [field]: value };
     fieldsRef.current = next;
     setFields(next);
+    setFieldErrors((current) => ({ ...current, [field]: undefined }));
     setSaveError(null);
     setSaveStatus((current) => {
       if (current === "saving") {
@@ -370,7 +454,12 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       <div className="draft-editor-heading">
         <div>
           <h3>编辑草稿</h3>
-          <p>格式 v{draft.formatVersion}</p>
+          <p>
+            草稿格式 v{draft.formatVersion} · Schema v
+            {inspectDraft(draft).errors.schemaVersion
+              ? "?"
+              : SHARED_SCHEMA_VERSION}
+          </p>
         </div>
         <button
           className="danger-button"
@@ -383,35 +472,56 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         </button>
       </div>
 
-      <label>
-        <span>内容类型（占位）</span>
-        <input
-          type="text"
-          maxLength={100}
+      <div className="field-group">
+        <label htmlFor="draft-content-type">内容类型</label>
+        <select
+          id="draft-content-type"
           value={fields.contentType}
+          aria-invalid={Boolean(fieldErrors.contentType)}
+          aria-describedby={fieldErrors.contentType ? "draft-content-type-error" : undefined}
           onChange={(event) => updateField("contentType", event.target.value)}
-        />
-      </label>
-      <label>
-        <span>稳定 ID</span>
+        >
+          {!contentTypeLabel(fields.contentType) ? (
+            <option value={fields.contentType}>未知类型</option>
+          ) : null}
+          {contentTypeOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.labelZh} / {option.labelEn}
+            </option>
+          ))}
+        </select>
+        <FieldError id="draft-content-type-error" message={fieldErrors.contentType} />
+      </div>
+      <div className="field-group">
+        <label htmlFor="draft-stable-id">稳定 ID</label>
         <input
+          id="draft-stable-id"
           type="text"
           maxLength={200}
           autoComplete="off"
           spellCheck={false}
           value={fields.stableId}
+          aria-invalid={Boolean(fieldErrors.stableId)}
+          aria-describedby={fieldErrors.stableId ? "draft-stable-id-error" : undefined}
           onChange={(event) => updateField("stableId", event.target.value)}
         />
-      </label>
-      <label>
-        <span>中文标题</span>
+        <FieldError id="draft-stable-id-error" message={fieldErrors.stableId} />
+      </div>
+      <div className="field-group">
+        <label htmlFor="draft-title-zh">中文标题</label>
         <input
+          id="draft-title-zh"
           type="text"
           maxLength={500}
           value={fields.titleZh}
+          aria-invalid={Boolean(fieldErrors.titleZh)}
+          aria-describedby={fieldErrors.titleZh ? "draft-title-zh-error" : undefined}
           onChange={(event) => updateField("titleZh", event.target.value)}
         />
-      </label>
+        <FieldError id="draft-title-zh-error" message={fieldErrors.titleZh} />
+      </div>
+
+      <FieldError id="draft-schema-version-error" message={fieldErrors.schemaVersion} />
 
       <dl className="draft-metadata">
         <div>
@@ -528,22 +638,20 @@ function SaveStatusIndicator({
   );
 }
 
-function toSaveInput(draft: Draft): SaveDraftInput {
-  return {
-    draftId: draft.draftId,
-    contentType: draft.contentType,
-    stableId: draft.stableId,
-    titleZh: draft.titleZh,
-  };
-}
-
-function sameSaveInput(left: SaveDraftInput, right: SaveDraftInput) {
+function sameSaveInput(left: DraftFields, right: DraftFields) {
   return (
-    left.draftId === right.draftId &&
     left.contentType === right.contentType &&
     left.stableId === right.stableId &&
     left.titleZh === right.titleZh
   );
+}
+
+function FieldError({ id, message }: { id: string; message?: string }) {
+  return message ? (
+    <span className="field-error" id={id} role="alert">
+      {message}
+    </span>
+  ) : null;
 }
 
 function formatTimestamp(value: string) {

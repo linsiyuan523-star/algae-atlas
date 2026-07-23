@@ -1,4 +1,4 @@
-use crate::drafts::{Draft, DraftStore};
+use crate::drafts::{DraftStore, StoredDraft};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -142,7 +142,7 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
 pub fn take_recovery_draft(
     drafts: tauri::State<'_, DraftStore>,
     session: tauri::State<'_, SessionState>,
-) -> Result<Option<Draft>, String> {
+) -> Result<Option<StoredDraft>, String> {
     if !session
         .has_pending_recovery()
         .map_err(|error| error.to_string())?
