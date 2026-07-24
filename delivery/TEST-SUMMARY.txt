@@ -1,32 +1,57 @@
-Stage: Stage-08A
-Status: PASS
-ValidatedAt: 2026-07-24
-Branch: local/stage-08a-onboarding
-StartCommit: 12ea637bdc2e00ce2bb8dbdf930b681543f9b5f1
-ImplementationCommit: 7d8ae19
+Stage: Stage-08B
+Status: PASS_WITH_LIMITATIONS
+ValidatedAt: 2026-07-24T19:30:50+08:00
+Branch: local/stage-08b-package
+StartCommit: 4d74c25739ede050d740247c82fce2907da934cd
+ImplementationCommit: c3a0b0023f1783b8e8e54b0d469bfa8a24939ed4
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
-Stage-08A validation:
-- npm.cmd run desktop:check: PASS
-- npm.cmd run desktop:frontend:build: PASS; 1,956 modules transformed
-- npm.cmd run desktop:rust:fmt: PASS
-- npm.cmd run desktop:rust:clippy: PASS
-- npm.cmd run test --workspace @algae-atlas/content-workbench -- src/components/OnboardingPage.test.tsx src/App.test.tsx: PASS; 2 files, 8 tests
-- cargo +1.97.1 test --locked --manifest-path src-tauri/Cargo.toml onboarding::tests: PASS; 3 tests
+Build:
+- npm.cmd ci --no-audit --no-fund: PASS; root package-lock used
+- npm.cmd run desktop:build: PASS
+- Frontend typecheck and Vite production build: PASS; 1,956 modules transformed
+- Rust 1.97.1 x86_64-pc-windows-msvc release build: PASS
+- NSIS 3.11 x64 current-user candidate build: PASS
+- PowerShell candidate-build script parse: PASS
 - git diff --check: PASS
 
-Behavior evidence:
-- First run holds the workbench behind local configuration until paths are saved: PASS
-- Simulated Git, Node, Rust, MSVC, WebView2, path, local Git, image, and application-data diagnostics render: PASS
-- Native save rejects an invalid draft storage path: PASS
-- Simulated native permission failure is surfaced in the UI: PASS
-- Invalid saved storage returns the next launch to onboarding: PASS
-- Local preview HTTP 200 and browser console warnings/errors: NONE
+Candidate:
+- File: content-workbench_0.1.0_x64-setup.exe
+- Size: 2627443 bytes
+- SHA256: 51227623E19C502233B1954A46E2F2DF0669D7DDA48A07DF2E501B1278A22602
+- Authenticode: NotSigned (expected rehearsal status; no certificate supplied)
 
-Boundary:
-- Production installer build, installer candidate, remote Git, GitHub login, token handling, push, PR, merge, tag, release, and deployment: NOT RUN
+Install and lifecycle:
+- No existing product install/uninstall registration before rehearsal: PASS
+- Silent current-user install exit code: 0
+- Installed registry and executable version: 0.1.0
+- Main window title and nonzero window handle: PASS
+- Graceful application close: PASS
+- Established TCP connections for application/WebView process tree during observation: 0
+- Baseline 0.0.9 to candidate 0.1.0 overwrite upgrade: PASS
+- Silent default uninstall exit code: 0
+- Install directory and uninstall registration removed: PASS
+- Marker in default drafts directory retained after default uninstall: PASS
 
-Known non-blocking notices:
-- Existing ESLint missing-pages notice
-- Existing Vite chunk-size warning
-- Browser-only Vite cannot invoke native Tauri commands
+Security and packaging boundaries:
+- Candidate/application scan for host workspace, user profile, USB path, private-key headers, and GitHub token shapes: PASS; no matches
+- Rust source paths remapped to generic workspace/user-home prefixes: PASS
+- Tauri capability main-local: local Windows main window, no permissions
+- Packaged CSP: self-only resources; connect-src limited to ipc and http://ipc.localhost
+- Installer contains no PDB, draft fixture, token, signing key, or environment file
+- Downgrades blocked; installer requires no administrator privilege
+- WebView2 installer download disabled; installed supported runtime is required
+
+Dependency metadata:
+- Root npm lock third-party packages: 862; missing license metadata: 0
+- Cargo metadata third-party packages: 473; missing license/license-file metadata: 0
+
+Key resolved failure:
+- First bundle attempt timed out downloading Tauri's fixed NSIS archive from GitHub.
+- NSIS 3.11 and nsis_tauri_utils 0.5.3 were fetched through official release endpoints, hash-verified, and cached locally.
+
+Limitations and notices:
+- Separate clean Windows VM/Sandbox was unavailable; tested a clean product-install state on Windows 10 Pro 19045 x64.
+- Candidate is unsigned and may trigger a Windows reputation warning.
+- Existing Vite chunk-size warning remains non-blocking.
+- Remote Git, GitHub release, merge, tag, signing, and deployment: NOT RUN.
