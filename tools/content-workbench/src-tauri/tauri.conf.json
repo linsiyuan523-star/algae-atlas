@@ -27,6 +27,17 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "useLocalToolsDir": true,
+    "targets": ["nsis"],
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "skip"
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }
