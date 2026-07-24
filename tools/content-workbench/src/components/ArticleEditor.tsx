@@ -21,6 +21,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import type { Editor } from "@tiptap/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import type { Locale } from "@algae-atlas/content-schema";
 import { createArticleExtensions } from "../editor/article-extensions";
 import {
   isSafeArticleLink,
@@ -32,6 +33,7 @@ import {
 
 type ArticleEditorProps = {
   value: string;
+  locale?: Locale;
   error?: string;
   disabled?: boolean;
   onChange: (markdown: string, error?: string) => void;
@@ -47,10 +49,13 @@ type BlockStyle =
 
 export function ArticleEditor({
   value,
+  locale = "zh",
   error,
   disabled = false,
   onChange,
 }: ArticleEditorProps) {
+  const localeLabel = locale === "zh" ? "中文" : "英文";
+  const editorId = `article-editor-${locale}`;
   const onChangeRef = useRef(onChange);
   const [commandError, setCommandError] = useState<string>();
   const extensions = useMemo(() => createArticleExtensions(), []);
@@ -60,11 +65,11 @@ export function ArticleEditor({
   }, [onChange]);
 
   const reportUpdate = useCallback((activeEditor: Editor) => {
-    const prepared = prepareArticleMarkdown(activeEditor.getMarkdown());
+    const prepared = prepareArticleMarkdown(activeEditor.getMarkdown(), locale);
     const nextError = prepared.issues[0]?.message;
     setCommandError(undefined);
     onChangeRef.current(prepared.markdown, nextError);
-  }, []);
+  }, [locale]);
 
   const editor = useEditor({
     immediatelyRender: true,
@@ -74,7 +79,7 @@ export function ArticleEditor({
     editable: !disabled,
     editorProps: {
       attributes: {
-        "aria-label": "中文正文编辑区",
+        "aria-label": `${localeLabel}正文编辑区`,
         "aria-multiline": "true",
         class: "article-editor-content",
         role: "textbox",
@@ -93,15 +98,15 @@ export function ArticleEditor({
     if (!editor) {
       return;
     }
-    const incoming = prepareArticleMarkdown(value).markdown;
-    const current = prepareArticleMarkdown(editor.getMarkdown()).markdown;
+    const incoming = prepareArticleMarkdown(value, locale).markdown;
+    const current = prepareArticleMarkdown(editor.getMarkdown(), locale).markdown;
     if (incoming !== current) {
       editor.commands.setContent(incoming, {
         contentType: "markdown",
         emitUpdate: false,
       });
     }
-  }, [editor, value]);
+  }, [editor, locale, value]);
 
   const blockStyle = activeBlockStyle(editor);
   const displayError = commandError ?? error;
@@ -112,11 +117,11 @@ export function ArticleEditor({
     }
     editor.view.dom.setAttribute("aria-invalid", String(Boolean(displayError)));
     if (displayError) {
-      editor.view.dom.setAttribute("aria-describedby", "article-editor-error");
+      editor.view.dom.setAttribute("aria-describedby", `${editorId}-error`);
     } else {
       editor.view.dom.removeAttribute("aria-describedby");
     }
-  }, [displayError, editor]);
+  }, [displayError, editor, editorId]);
 
   function setBlockStyle(style: BlockStyle) {
     if (!editor) {
@@ -165,12 +170,12 @@ export function ArticleEditor({
       setCommandError("媒体 ID 必须由小写英文、数字和单个连字符组成。");
       return;
     }
-    const alt = window.prompt("中文替代文本", "")?.trim();
+    const alt = window.prompt(`${localeLabel}替代文本`, "")?.trim();
     if (alt === undefined) {
       return;
     }
     if (!alt) {
-      setCommandError("图片占位必须填写中文替代文本。");
+      setCommandError(`图片占位必须填写${localeLabel}替代文本。`);
       return;
     }
     setCommandError(undefined);
@@ -185,18 +190,18 @@ export function ArticleEditor({
   return (
     <section
       className={`article-editor-field${displayError ? " article-editor-invalid" : ""}`}
-      aria-labelledby="article-editor-title"
+      aria-labelledby={`${editorId}-title`}
     >
       <div className="article-editor-heading">
-        <h4 id="article-editor-title">中文正文</h4>
+        <h4 id={`${editorId}-title`}>{localeLabel}正文</h4>
       </div>
 
       <div className="article-editor-toolbar" role="toolbar" aria-label="正文格式">
-        <label className="visually-hidden" htmlFor="article-block-style">
+        <label className="visually-hidden" htmlFor={`${editorId}-block-style`}>
           段落格式
         </label>
         <select
-          id="article-block-style"
+          id={`${editorId}-block-style`}
           aria-label="段落格式"
           value={blockStyle}
           disabled={!editor || disabled}
@@ -357,7 +362,7 @@ export function ArticleEditor({
 
       <EditorContent editor={editor} />
       {displayError ? (
-        <span className="field-error" id="article-editor-error" role="alert">
+        <span className="field-error" id={`${editorId}-error`} role="alert">
           {displayError}
         </span>
       ) : null}

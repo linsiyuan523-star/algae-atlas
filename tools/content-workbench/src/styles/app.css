@@ -221,6 +221,7 @@ button:disabled {
 }
 
 .primary-button,
+.secondary-button,
 .danger-button,
 .icon-button {
   min-height: 40px;
@@ -242,6 +243,18 @@ button:disabled {
 
 .primary-button:hover:not(:disabled) {
   background: #1a4b3d;
+}
+
+.secondary-button {
+  padding: 7px 11px;
+  border-color: #9db1a8;
+  color: #2c5548;
+  background: #ffffff;
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: #678c7d;
+  background: #edf4f1;
 }
 
 .danger-button {
@@ -271,6 +284,7 @@ button:disabled {
 }
 
 .primary-button:focus-visible,
+.secondary-button:focus-visible,
 .danger-button:focus-visible,
 .icon-button:focus-visible,
 .draft-list-panel button:focus-visible,
@@ -645,6 +659,157 @@ button:disabled {
   color: #6b7972;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
+}
+
+.locale-version-control {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 0;
+  border-top: 2px solid #477466;
+  border-bottom: 1px solid #d6dfdb;
+}
+
+.locale-version-control h4,
+.locale-workflow-heading h4,
+.english-editor-heading h4 {
+  margin: 0;
+  color: #25483d;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.locale-version-control p {
+  margin: 4px 0 0;
+  color: #66766f;
+  font-size: 12px;
+}
+
+.locale-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #29493e;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.draft-editor .locale-switch input {
+  position: relative;
+  width: 38px;
+  min-height: 22px;
+  flex: 0 0 38px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  border: 1px solid #93a69e;
+  border-radius: 11px;
+  background: #d9e0dd;
+  cursor: pointer;
+}
+
+.draft-editor .locale-switch input::before {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(31 50 42 / 28%);
+  content: "";
+  transition: transform 120ms ease;
+}
+
+.draft-editor .locale-switch input:checked {
+  border-color: #245f4e;
+  background: #245f4e;
+}
+
+.draft-editor .locale-switch input:checked::before {
+  transform: translateX(16px);
+}
+
+.locale-workflow {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  padding: 16px 0 18px;
+  border-bottom: 1px solid #d6dfdb;
+}
+
+.locale-workflow-heading,
+.english-editor-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.locale-state-badge {
+  padding: 3px 7px;
+  border: 1px solid #b9c7c1;
+  border-radius: 3px;
+  color: #52675e;
+  background: #f5f7f6;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.locale-state-badge[data-state="approved"],
+.locale-state-badge[data-state="published"] {
+  border-color: #c5a35f;
+  color: #725014;
+  background: #fff9eb;
+}
+
+.locale-workflow-grid,
+.english-media-text-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.english-editor-section {
+  min-width: 0;
+  display: grid;
+  gap: 18px;
+  padding-top: 20px;
+  border-top: 3px solid #315d70;
+}
+
+.english-editor-section .schema-form,
+.english-editor-section .article-editor-field {
+  border-top-color: #557f91;
+}
+
+.english-editor-section .article-editor-content {
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.english-editor-section .article-editor-content > p {
+  text-indent: 0;
+}
+
+.english-media-text {
+  min-width: 0;
+  margin: 0;
+  padding: 15px 0 0;
+  border: 0;
+  border-top: 1px solid #ccd8dd;
+}
+
+.english-media-text legend {
+  padding: 0 0 12px;
+  color: #355866;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .visually-hidden {
@@ -1067,7 +1232,9 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .schema-form-grid {
+  .schema-form-grid,
+  .locale-workflow-grid,
+  .english-media-text-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1107,6 +1274,12 @@ button:disabled {
 
   .draft-editor-heading {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .locale-version-control,
+  .english-editor-heading {
+    align-items: flex-start;
     flex-direction: column;
   }
 

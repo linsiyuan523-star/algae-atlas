@@ -3,6 +3,7 @@ import {
   stableIdSchema,
   validateMarkdown,
 } from "@algae-atlas/content-schema";
+import type { Locale } from "@algae-atlas/content-schema";
 import type { ValidationIssue } from "@algae-atlas/content-schema";
 
 const ALLOWED_PASTE_TAGS = [
@@ -156,7 +157,10 @@ export function isValidMediaId(value: string): boolean {
   return stableIdSchema.safeParse(value).success;
 }
 
-export function prepareArticleMarkdown(value: string): PreparedArticleMarkdown {
+export function prepareArticleMarkdown(
+  value: string,
+  locale: Locale = "zh",
+): PreparedArticleMarkdown {
   const normalized = value
     .replace(/^\uFEFF/, "")
     .replace(/\r\n?/g, "\n")
@@ -164,22 +168,71 @@ export function prepareArticleMarkdown(value: string): PreparedArticleMarkdown {
     .trim();
   const markdown = normalized ? `${normalized}\n` : "";
   const issues = validateMarkdown(markdown, {
-    path: "locales.zh.bodyFile",
-    locale: "zh",
+    path: `locales.${locale}.bodyFile`,
+    locale,
   });
 
   if (markdown.includes("\t")) {
     issues.push({
       code: "MARKDOWN_TAB_FORBIDDEN",
       severity: "error",
-      locale: "zh",
-      path: "locales.zh.bodyFile",
-      message: "中文正文不能包含 Tab 字符",
+      locale,
+      path: `locales.${locale}.bodyFile`,
+      message: `${locale === "zh" ? "中文" : "英文"}正文不能包含 Tab 字符`,
       remedy: "重新粘贴或删除 Tab，列表缩进由编辑器生成。",
     });
   }
 
   return { markdown, issues };
+}
+
+export type ArticleMediaText = {
+  mediaId: string;
+  alt: string;
+};
+
+export function extractArticleMediaText(markdown: string): ArticleMediaText[] {
+  const entries = new Map<string, ArticleMediaText>();
+  for (const match of markdown.matchAll(articleMediaPattern())) {
+    const mediaId = match[2];
+    if (mediaId && !entries.has(mediaId)) {
+      entries.set(mediaId, { mediaId, alt: match[1] ?? "" });
+    }
+  }
+  return [...entries.values()];
+}
+
+export function updateArticleMediaAltText(
+  markdown: string,
+  mediaId: string,
+  alt: string,
+): string {
+  if (!isValidMediaId(mediaId)) {
+    return prepareArticleMarkdown(markdown, "en").markdown;
+  }
+  const normalizedAlt = normalizePastedText(alt)
+    .replace(/[\[\]\r\n]/g, " ")
+    .replace(/\s{2,}/g, " ");
+  const updated = markdown.replace(
+    articleMediaPattern(),
+    (source, currentAlt: string, currentId: string) =>
+      currentId === mediaId
+        ? `![${normalizedAlt}](media:${currentId})`
+        : source,
+  );
+  return prepareArticleMarkdown(updated, "en").markdown;
+}
+
+export function copyChineseArticleStructure(markdown: string): string {
+  const withoutChineseImageText = markdown.replace(
+    articleMediaPattern(),
+    (_source, _alt: string, mediaId: string) => `![](media:${mediaId})`,
+  );
+  return prepareArticleMarkdown(withoutChineseImageText, "en").markdown;
+}
+
+function articleMediaPattern() {
+  return /!\[([^\]\r\n]*)\]\(media:([a-z0-9]+(?:-[a-z0-9]+)*)\)/g;
 }
 
 function decodeProtocolText(value: string): string {

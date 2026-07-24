@@ -6,13 +6,15 @@ import type {
   RecordDraft,
 } from "./schema-drafts";
 
-export const DRAFT_FORMAT_VERSION = 3;
+export const DRAFT_FORMAT_VERSION = 4;
 
 export type Draft = {
   formatVersion: number;
   draftId: string;
   recordDraft: unknown;
   bodyZh: string;
+  bodyEn: string;
+  parkedEnglishLocale?: unknown;
   createdAt: string;
   updatedAt: string;
   legacyFields?: DraftFields;
@@ -21,6 +23,8 @@ export type Draft = {
 export type CreateDraftInput = {
   recordDraft: RecordDraft;
   bodyZh: string;
+  bodyEn: string;
+  parkedEnglishLocale?: unknown;
 };
 
 export type SaveDraftInput = CreateDraftInput & {
@@ -70,6 +74,26 @@ export function normalizeStoredDraft(input: unknown): Draft {
   if (
     stored.formatVersion === DRAFT_FORMAT_VERSION &&
     "recordDraft" in stored &&
+    typeof stored.bodyZh === "string" &&
+    typeof stored.bodyEn === "string"
+  ) {
+    return {
+      formatVersion: stored.formatVersion,
+      draftId: stored.draftId,
+      recordDraft: stored.recordDraft,
+      bodyZh: stored.bodyZh,
+      bodyEn: stored.bodyEn,
+      ...(stored.parkedEnglishLocale !== undefined
+        ? { parkedEnglishLocale: stored.parkedEnglishLocale }
+        : {}),
+      createdAt: stored.createdAt,
+      updatedAt: stored.updatedAt,
+    };
+  }
+
+  if (
+    stored.formatVersion === 3 &&
+    "recordDraft" in stored &&
     typeof stored.bodyZh === "string"
   ) {
     return {
@@ -77,6 +101,7 @@ export function normalizeStoredDraft(input: unknown): Draft {
       draftId: stored.draftId,
       recordDraft: stored.recordDraft,
       bodyZh: stored.bodyZh,
+      bodyEn: "",
       createdAt: stored.createdAt,
       updatedAt: stored.updatedAt,
     };
@@ -88,6 +113,7 @@ export function normalizeStoredDraft(input: unknown): Draft {
       draftId: stored.draftId,
       recordDraft: stored.recordDraft,
       bodyZh: "",
+      bodyEn: "",
       createdAt: stored.createdAt,
       updatedAt: stored.updatedAt,
     };
@@ -104,6 +130,7 @@ export function normalizeStoredDraft(input: unknown): Draft {
       draftId: stored.draftId,
       recordDraft: null,
       bodyZh: "",
+      bodyEn: "",
       createdAt: stored.createdAt,
       updatedAt: stored.updatedAt,
       legacyFields: {

@@ -5,7 +5,7 @@ import {
   createRecordDraftDefaults,
   stableIdSchema,
 } from "@algae-atlas/content-schema";
-import type { ContentType } from "@algae-atlas/content-schema";
+import type { ContentType, Locale } from "@algae-atlas/content-schema";
 
 export type RecordDraft = ReturnType<typeof createRecordDraftDefaults>;
 
@@ -128,17 +128,25 @@ export function updateChineseBodyReference(
   existing: RecordDraft,
   bodyZh: string,
 ): RecordDraft {
+  return updateLocaleBodyReference(existing, "zh", bodyZh);
+}
+
+export function updateLocaleBodyReference(
+  existing: RecordDraft,
+  locale: Locale,
+  body: string,
+): RecordDraft {
   const recordDraft = structuredClone(existing);
   const locales = asRecord(recordDraft.locales);
-  const zh = asRecord(locales?.zh);
-  if (!zh) {
-    throw new Error("共享 Schema 默认草稿缺少中文字段。");
+  const localized = asRecord(locales?.[locale]);
+  if (!localized || localized.state === "missing") {
+    throw new Error(`共享 Schema 草稿缺少 ${locale} 字段。`);
   }
 
-  if (bodyZh.trim()) {
-    zh.bodyFile = "zh.md";
+  if (body.trim()) {
+    localized.bodyFile = locale === "zh" ? "zh.md" : "en.md";
   } else {
-    delete zh.bodyFile;
+    delete localized.bodyFile;
   }
   return recordDraft;
 }

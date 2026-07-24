@@ -26,13 +26,19 @@ describe("stored draft compatibility", () => {
       fields: legacy.legacyFields,
       errors: {},
     });
+    expect(legacy.bodyEn).toBe("");
   });
 
   test("surfaces invalid record identity as field errors without throwing", () => {
     const current = normalizeStoredDraft({
       ...envelope,
-      formatVersion: 3,
+      formatVersion: 4,
       bodyZh: "## 正文\n",
+      bodyEn: "## English\n",
+      parkedEnglishLocale: {
+        contentType: "team-news",
+        locale: { state: "draft", title: "English draft" },
+      },
       recordDraft: {
         schemaVersion: 7,
         id: "Bad ID",
@@ -48,6 +54,22 @@ describe("stored draft compatibility", () => {
       schemaVersion: "仅支持 Schema v1。",
     });
     expect(current.bodyZh).toBe("## 正文\n");
+    expect(current.bodyEn).toBe("## English\n");
+    expect(current.parkedEnglishLocale).toMatchObject({
+      contentType: "team-news",
+    });
+  });
+
+  test("opens format-three drafts with their Chinese body and empty English", () => {
+    const previous = normalizeStoredDraft({
+      ...envelope,
+      formatVersion: 3,
+      bodyZh: "## 正文\n",
+      recordDraft: {},
+    });
+
+    expect(previous.bodyZh).toBe("## 正文\n");
+    expect(previous.bodyEn).toBe("");
   });
 
   test("opens format-two drafts with an empty Chinese body", () => {
@@ -58,13 +80,14 @@ describe("stored draft compatibility", () => {
     });
 
     expect(previous.bodyZh).toBe("");
+    expect(previous.bodyEn).toBe("");
   });
 
   test("rejects unsupported envelope versions", () => {
     expect(() =>
       normalizeStoredDraft({
         ...envelope,
-        formatVersion: 4,
+        formatVersion: 5,
         recordDraft: {},
       }),
     ).toThrow("草稿格式版本不受支持。");

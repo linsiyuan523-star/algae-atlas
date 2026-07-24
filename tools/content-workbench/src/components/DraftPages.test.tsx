@@ -37,10 +37,11 @@ function makeDraft(titleZh = "初始标题"): Draft {
     throw new Error("test team-news form must be valid");
   }
   return {
-    formatVersion: 3,
+    formatVersion: 4,
     draftId: "11111111-1111-4111-8111-111111111111",
     recordDraft: completed.recordDraft,
     bodyZh: "",
+    bodyEn: "",
     createdAt: "2026-07-23T08:00:00Z",
     updatedAt: "2026-07-23T08:00:00Z",
   };
@@ -77,12 +78,48 @@ function makeScienceArticleDraft(): Draft {
   return { ...draft, recordDraft: completed.recordDraft };
 }
 
+function makeMachinePublishedEnglishDraft(): Draft {
+  const article = makeScienceArticleDraft();
+  const recordDraft = structuredClone(article.recordDraft) as Record<
+    string,
+    unknown
+  >;
+  const locales = recordDraft.locales as Record<string, unknown>;
+  locales.en = {
+    state: "published",
+    title: "Fictional English article",
+    summary: "Fictional English summary.",
+    bodyFile: "en.md",
+    fields: {
+      topic: "Fictional algae topic",
+      targetAudienceLabel: "General public",
+    },
+    translationOrigin: "machine-assisted",
+    review: {
+      status: "reviewed",
+      updatedAt: "2026-07-23",
+      reviewedAt: "2026-07-23",
+      version: "1.0",
+      reviewerIds: ["fictional-reviewer"],
+      references: [],
+    },
+    publishedAt: "2026-07-23T09:00:00Z",
+  };
+  return {
+    ...article,
+    recordDraft,
+    bodyEn: "## Fictional English body\n",
+  };
+}
+
 function createApi(): DraftApi {
   return {
     createDraft: vi.fn(async (input) => ({
       ...draft,
       recordDraft: input.recordDraft,
       bodyZh: input.bodyZh,
+      bodyEn: input.bodyEn,
+      parkedEnglishLocale: input.parkedEnglishLocale,
     })),
     listDrafts: vi.fn(async () => [draft]),
     openDraft: vi.fn(async () => draft),
@@ -90,6 +127,8 @@ function createApi(): DraftApi {
       ...draft,
       recordDraft: input.recordDraft,
       bodyZh: input.bodyZh,
+      bodyEn: input.bodyEn,
+      parkedEnglishLocale: input.parkedEnglishLocale,
       updatedAt: "2026-07-23T09:00:00Z",
     })),
     deleteDraft: vi.fn(async () => undefined),
@@ -290,6 +329,140 @@ test("persists the safe Chinese body and its Markdown file reference", async () 
   expect(saved?.recordDraft).toMatchObject({
     locales: { zh: { bodyFile: "zh.md" } },
   });
+});
+
+test("adds optional English while leaving new records missing by default", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  render(<DraftsPage api={api} initialDraft={draft} />);
+
+  const englishSwitch = screen.getByRole("switch", { name: "英文版本" });
+  expect(englishSwitch).not.toBeChecked();
+  expect(screen.queryByLabelText(/英文标题/)).not.toBeInTheDocument();
+
+  await user.click(englishSwitch);
+  expect(englishSwitch).toBeChecked();
+  expect(screen.getByLabelText(/英文标题/)).toBeVisible();
+  expect(screen.getByLabelText(/英文摘要/)).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "英文正文编辑区" })).toBeVisible();
+  expect(screen.getByLabelText("英文图片文字")).toHaveAttribute(
+    "placeholder",
+    "在英文正文插入图片占位后填写",
+  );
+
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0]).toMatchObject({
+    bodyEn: "",
+    recordDraft: { locales: { en: { state: "draft" } } },
+  });
+});
+
+test("copies Chinese structure and exposes English image text placeholders", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const article = {
+    ...makeScienceArticleDraft(),
+    bodyZh: "## 虚构结构\n\n![中文图](media:fictional-image)\n",
+  };
+  render(<DraftsPage api={api} initialDraft={article} />);
+
+  await user.click(screen.getByRole("switch", { name: "英文版本" }));
+  await user.click(screen.getByRole("button", { name: "复制中文结构" }));
+
+  expect(screen.getByLabelText(/英文标题/)).toHaveValue("虚构科普文章");
+  expect(screen.getByLabelText(/英文摘要/)).toHaveValue(
+    "仅用于组件测试的虚构科普摘要。",
+  );
+  const imageText = screen.getByLabelText(/英文替代文字/);
+  expect(imageText).toHaveValue("");
+  await user.type(imageText, "Fictional microscopy image");
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0].bodyEn).toContain(
+    "![Fictional microscopy image](media:fictional-image)",
+  );
+});
+
+test("parks an English draft when disabled and restores it later", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<DraftsPage api={api} initialDraft={draft} />);
+
+  const englishSwitch = screen.getByRole("switch", { name: "英文版本" });
+  await user.click(englishSwitch);
+  await user.type(screen.getByLabelText(/英文标题/), "Retained English draft");
+  await user.click(englishSwitch);
+  expect(englishSwitch).not.toBeChecked();
+  expect(screen.queryByLabelText(/英文标题/)).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0]).toMatchObject({
+    bodyEn: "",
+    recordDraft: { locales: { en: { state: "missing" } } },
+    parkedEnglishLocale: {
+      contentType: "team-news",
+      locale: { state: "draft", title: "Retained English draft" },
+    },
+  });
+
+  await user.click(englishSwitch);
+  expect(screen.getByLabelText(/英文标题/)).toHaveValue(
+    "Retained English draft",
+  );
+});
+
+test("moves Chinese to a publication candidate while English stays missing", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  render(<DraftsPage api={api} initialDraft={draft} />);
+
+  const chineseWorkflow = screen.getByRole("region", {
+    name: "中文语言状态",
+  });
+  await user.selectOptions(
+    within(chineseWorkflow).getByLabelText("审核状态"),
+    "reviewed",
+  );
+  await user.type(
+    within(chineseWorkflow).getByLabelText("审核人稳定 ID"),
+    "fictional-reviewer",
+  );
+  await user.type(
+    within(chineseWorkflow).getByLabelText("审核日期"),
+    "2026-07-23",
+  );
+  const state = within(chineseWorkflow).getByLabelText("语言状态");
+  await user.selectOptions(state, "internal-review");
+  await user.selectOptions(state, "approved");
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0].recordDraft).toMatchObject({
+    locales: {
+      zh: { state: "approved", review: { status: "reviewed" } },
+      en: { state: "missing" },
+    },
+  });
+});
+
+test("blocks machine-assisted published English without a human verifier", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const published = makeMachinePublishedEnglishDraft();
+  render(<DraftsPage api={api} initialDraft={published} />);
+
+  expect(screen.getByLabelText("英文来源")).toHaveValue("machine-assisted");
+  expect(screen.getByLabelText("人工复核人稳定 ID")).toHaveValue("");
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+
+  expect(api.saveDraft).not.toHaveBeenCalled();
+  expect(
+    screen.getByText("机器辅助英文发布前必须记录人工复核人。"),
+  ).toBeVisible();
 });
 
 test("debounces autosave, reports progress and failure, and warns while dirty", async () => {

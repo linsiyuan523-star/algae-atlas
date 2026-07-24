@@ -2,10 +2,13 @@ import { Editor } from "@tiptap/core";
 import { afterEach, describe, expect, test } from "vitest";
 import { createArticleExtensions } from "./article-extensions";
 import {
+  copyChineseArticleStructure,
+  extractArticleMediaText,
   isSafeArticleLink,
   normalizePastedText,
   prepareArticleMarkdown,
   sanitizePastedHtml,
+  updateArticleMediaAltText,
 } from "./article-markdown";
 
 const editors: Editor[] = [];
@@ -143,6 +146,52 @@ describe("safe Markdown serialization", () => {
         "MARKDOWN_EXECUTABLE_SYNTAX_FORBIDDEN",
       ]),
     );
+  });
+});
+
+describe("English image text placeholders", () => {
+  const source = [
+    "## 中文结构",
+    "",
+    "中文段落。",
+    "",
+    "![显微图](media:fictional-image)",
+    "",
+  ].join("\n");
+
+  test("copies the article structure while clearing Chinese image text", () => {
+    const copied = copyChineseArticleStructure(source);
+    expect(copied).toContain("## 中文结构");
+    expect(copied).toContain("中文段落。");
+    expect(copied).toContain("![](media:fictional-image)");
+    expect(extractArticleMediaText(copied)).toEqual([
+      { mediaId: "fictional-image", alt: "" },
+    ]);
+  });
+
+  test("updates English alternative text without changing the media id", () => {
+    const updated = updateArticleMediaAltText(
+      copyChineseArticleStructure(source),
+      "fictional-image",
+      "Fictional microscopy image",
+    );
+    expect(updated).toContain(
+      "![Fictional microscopy image](media:fictional-image)",
+    );
+    expect(extractArticleMediaText(updated)).toEqual([
+      {
+        mediaId: "fictional-image",
+        alt: "Fictional microscopy image",
+      },
+    ]);
+  });
+
+  test("reports English Markdown issues against the English locale", () => {
+    const result = prepareArticleMarkdown("# English heading", "en");
+    expect(result.issues[0]).toMatchObject({
+      locale: "en",
+      path: "locales.en.bodyFile",
+    });
   });
 });
 

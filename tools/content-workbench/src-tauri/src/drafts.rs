@@ -10,8 +10,9 @@ use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::{Uuid, Version};
 
-pub const DRAFT_FORMAT_VERSION: u32 = 3;
-const PREVIOUS_DRAFT_FORMAT_VERSION: u32 = 2;
+pub const DRAFT_FORMAT_VERSION: u32 = 4;
+const PREVIOUS_DRAFT_FORMAT_VERSION: u32 = 3;
+const V2_DRAFT_FORMAT_VERSION: u32 = 2;
 const LEGACY_DRAFT_FORMAT_VERSION: u32 = 1;
 const MAX_BODY_BYTES: usize = 1_000_000;
 const MAX_DRAFT_BYTES: u64 = (MAX_BODY_BYTES as u64 * 2) + (256 * 1024);
@@ -26,8 +27,22 @@ pub struct Draft {
     pub draft_id: String,
     pub record_draft: Value,
     pub body_zh: String,
+    pub body_en: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_english_locale: Option<Value>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreviousDraftV3 {
+    format_version: u32,
+    draft_id: String,
+    record_draft: Value,
+    body_zh: String,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -88,6 +103,10 @@ pub struct CreateDraftRequest {
     pub record_draft: Value,
     #[serde(default)]
     pub body_zh: String,
+    #[serde(default)]
+    pub body_en: String,
+    #[serde(default)]
+    pub parked_english_locale: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -97,6 +116,10 @@ pub struct SaveDraftRequest {
     pub record_draft: Value,
     #[serde(default)]
     pub body_zh: String,
+    #[serde(default)]
+    pub body_en: String,
+    #[serde(default)]
+    pub parked_english_locale: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -171,6 +194,8 @@ impl DraftStore {
     fn create(&self, request: CreateDraftRequest) -> StoreResult<Draft> {
         validate_record_draft(&request.record_draft)?;
         validate_body_zh(&request.body_zh)?;
+        validate_body_en(&request.body_en)?;
+        validate_parked_english_locale(&request.parked_english_locale)?;
         let _guard = self.lock()?;
         self.prepare_root()?;
 
@@ -180,6 +205,8 @@ impl DraftStore {
             draft_id: Uuid::new_v4().to_string(),
             record_draft: request.record_draft,
             body_zh: request.body_zh,
+            body_en: request.body_en,
+            parked_english_locale: request.parked_english_locale,
             created_at: now.clone(),
             updated_at: now,
         };
@@ -239,6 +266,8 @@ impl DraftStore {
     fn save(&self, request: SaveDraftRequest) -> StoreResult<Draft> {
         validate_record_draft(&request.record_draft)?;
         validate_body_zh(&request.body_zh)?;
+        validate_body_en(&request.body_en)?;
+        validate_parked_english_locale(&request.parked_english_locale)?;
 
         let _guard = self.lock()?;
         self.prepare_root()?;
@@ -249,6 +278,8 @@ impl DraftStore {
             draft_id: current.draft_id().to_owned(),
             record_draft: request.record_draft,
             body_zh: request.body_zh,
+            body_en: request.body_en,
+            parked_english_locale: request.parked_english_locale,
             created_at: current.created_at().to_owned(),
             updated_at: current_timestamp()?,
         };
@@ -420,12 +451,27 @@ fn migrate_draft_value(value: Value) -> StoreResult<StoredDraft> {
     match version {
         LEGACY_DRAFT_FORMAT_VERSION => Ok(StoredDraft::Legacy(serde_json::from_value(value)?)),
         PREVIOUS_DRAFT_FORMAT_VERSION => {
+            let previous: PreviousDraftV3 = serde_json::from_value(value)?;
+            Ok(StoredDraft::Current(Draft {
+                format_version: DRAFT_FORMAT_VERSION,
+                draft_id: previous.draft_id,
+                record_draft: previous.record_draft,
+                body_zh: previous.body_zh,
+                body_en: String::new(),
+                parked_english_locale: None,
+                created_at: previous.created_at,
+                updated_at: previous.updated_at,
+            }))
+        }
+        V2_DRAFT_FORMAT_VERSION => {
             let previous: PreviousDraftV2 = serde_json::from_value(value)?;
             Ok(StoredDraft::Current(Draft {
                 format_version: DRAFT_FORMAT_VERSION,
                 draft_id: previous.draft_id,
                 record_draft: previous.record_draft,
                 body_zh: String::new(),
+                body_en: String::new(),
+                parked_english_locale: None,
                 created_at: previous.created_at,
                 updated_at: previous.updated_at,
             }))
@@ -466,6 +512,8 @@ fn validate_current_draft(draft: &Draft, expected_id: Uuid) -> StoreResult<()> {
     }
     validate_record_draft(&draft.record_draft)?;
     validate_body_zh(&draft.body_zh)?;
+    validate_body_en(&draft.body_en)?;
+    validate_parked_english_locale(&draft.parked_english_locale)?;
 
     validate_timestamps(&draft.created_at, &draft.updated_at)
 }
@@ -492,13 +540,28 @@ fn validate_record_draft(record_draft: &Value) -> StoreResult<()> {
 }
 
 fn validate_body_zh(body_zh: &str) -> StoreResult<()> {
-    if body_zh.len() > MAX_BODY_BYTES
-        || body_zh.starts_with('\u{feff}')
-        || body_zh.chars().any(|character| {
+    validate_body(body_zh, "bodyZh")
+}
+
+fn validate_body_en(body_en: &str) -> StoreResult<()> {
+    validate_body(body_en, "bodyEn")
+}
+
+fn validate_body(body: &str, field: &'static str) -> StoreResult<()> {
+    if body.len() > MAX_BODY_BYTES
+        || body.starts_with('\u{feff}')
+        || body.chars().any(|character| {
             character == '\r' || character == '\t' || (character.is_control() && character != '\n')
         })
     {
-        return Err(DraftStoreError::InvalidField("bodyZh"));
+        return Err(DraftStoreError::InvalidField(field));
+    }
+    Ok(())
+}
+
+fn validate_parked_english_locale(value: &Option<Value>) -> StoreResult<()> {
+    if value.as_ref().is_some_and(|locale| !locale.is_object()) {
+        return Err(DraftStoreError::InvalidField("parkedEnglishLocale"));
     }
     Ok(())
 }
@@ -645,9 +708,10 @@ pub fn delete_draft(
 #[cfg(test)]
 mod tests {
     use super::{
-        migrate_draft_value, validate_body_zh, AtomicInstaller, CreateDraftRequest, DraftStore,
-        DraftStoreError, SaveDraftRequest, StoredDraft, DRAFT_FORMAT_VERSION,
-        LEGACY_DRAFT_FORMAT_VERSION, MAX_BODY_BYTES, PREVIOUS_DRAFT_FORMAT_VERSION,
+        migrate_draft_value, validate_body_en, validate_body_zh, AtomicInstaller,
+        CreateDraftRequest, DraftStore, DraftStoreError, SaveDraftRequest, StoredDraft,
+        DRAFT_FORMAT_VERSION, LEGACY_DRAFT_FORMAT_VERSION, MAX_BODY_BYTES,
+        PREVIOUS_DRAFT_FORMAT_VERSION, V2_DRAFT_FORMAT_VERSION,
     };
     use serde_json::json;
     use std::{fs, path::Path, sync::Arc};
@@ -666,6 +730,8 @@ mod tests {
         CreateDraftRequest {
             record_draft: record_draft("Fictional title"),
             body_zh: String::new(),
+            body_en: String::new(),
+            parked_english_locale: None,
         }
     }
 
@@ -674,6 +740,11 @@ mod tests {
             draft_id,
             record_draft: record_draft(title),
             body_zh: "## Fictional body\n".to_owned(),
+            body_en: "## English body\n".to_owned(),
+            parked_english_locale: Some(json!({
+                "contentType": "team-news",
+                "locale": { "state": "draft", "title": "English draft" }
+            })),
         }
     }
 
@@ -686,6 +757,8 @@ mod tests {
         assert_eq!(created.format_version, DRAFT_FORMAT_VERSION);
         assert_eq!(created.record_draft, record_draft("Fictional title"));
         assert!(created.body_zh.is_empty());
+        assert!(created.body_en.is_empty());
+        assert!(created.parked_english_locale.is_none());
         assert_eq!(
             store.list().expect("lists drafts"),
             vec![StoredDraft::Current(created.clone())]
@@ -701,6 +774,8 @@ mod tests {
         assert_eq!(saved.created_at, created.created_at);
         assert_eq!(saved.record_draft, record_draft("Updated title"));
         assert_eq!(saved.body_zh, "## Fictional body\n");
+        assert_eq!(saved.body_en, "## English body\n");
+        assert!(saved.parked_english_locale.is_some());
         assert_eq!(
             store.open(&created.draft_id).expect("opens saved draft"),
             StoredDraft::Current(saved)
@@ -715,8 +790,9 @@ mod tests {
     }
 
     #[test]
-    fn validates_chinese_body_storage_boundaries() {
+    fn validates_bilingual_body_storage_boundaries() {
         assert!(validate_body_zh("## Fictional body\n").is_ok());
+        assert!(validate_body_en("## English body\n").is_ok());
         assert!(validate_body_zh(&"a".repeat(MAX_BODY_BYTES)).is_ok());
 
         for invalid in ["\u{feff}body", "body\ttext", "body\r\n", "body\0text"] {
@@ -728,6 +804,10 @@ mod tests {
         assert!(matches!(
             validate_body_zh(&"a".repeat(MAX_BODY_BYTES + 1)),
             Err(DraftStoreError::InvalidField("bodyZh"))
+        ));
+        assert!(matches!(
+            validate_body_en("body\ttext"),
+            Err(DraftStoreError::InvalidField("bodyEn"))
         ));
     }
 
@@ -802,6 +882,7 @@ mod tests {
             "draftId": draft_id,
             "recordDraft": record_draft("Current"),
             "bodyZh": "## Current body\n",
+            "bodyEn": "## English body\n",
             "createdAt": "2026-07-23T08:00:00Z",
             "updatedAt": "2026-07-23T08:00:00Z"
         });
@@ -814,6 +895,7 @@ mod tests {
             "formatVersion": PREVIOUS_DRAFT_FORMAT_VERSION,
             "draftId": draft_id,
             "recordDraft": record_draft("Previous"),
+            "bodyZh": "## Previous body\n",
             "createdAt": "2026-07-23T08:00:00Z",
             "updatedAt": "2026-07-23T08:00:00Z"
         });
@@ -821,7 +903,22 @@ mod tests {
         assert!(matches!(
             migrated,
             StoredDraft::Current(ref draft)
-                if draft.format_version == DRAFT_FORMAT_VERSION && draft.body_zh.is_empty()
+                if draft.format_version == DRAFT_FORMAT_VERSION
+                    && draft.body_zh == "## Previous body\n"
+                    && draft.body_en.is_empty()
+        ));
+
+        let version_two = json!({
+            "formatVersion": V2_DRAFT_FORMAT_VERSION,
+            "draftId": draft_id,
+            "recordDraft": record_draft("Version two"),
+            "createdAt": "2026-07-23T08:00:00Z",
+            "updatedAt": "2026-07-23T08:00:00Z"
+        });
+        assert!(matches!(
+            migrate_draft_value(version_two).expect("accepts version two"),
+            StoredDraft::Current(ref draft)
+                if draft.body_zh.is_empty() && draft.body_en.is_empty()
         ));
 
         let legacy = json!({
@@ -878,6 +975,7 @@ mod tests {
         assert_eq!(saved.created_at, "2026-07-23T08:00:00Z");
         assert_eq!(saved.record_draft, record_draft("Migrated"));
         assert_eq!(saved.body_zh, "## Fictional body\n");
+        assert_eq!(saved.body_en, "## English body\n");
         assert!(matches!(
             store.open(draft_id).expect("opens migrated draft"),
             StoredDraft::Current(_)

@@ -2,6 +2,7 @@ import {
   CheckCircle2,
   CircleAlert,
   Clock3,
+  Copy,
   FilePlus2,
   Files,
   LoaderCircle,
@@ -16,6 +17,7 @@ import type { FormEvent } from "react";
 import { inspectDraft } from "../drafts";
 import type { Draft, DraftApi } from "../drafts";
 import { getContentFormAdapter } from "../forms/content-forms";
+import { getEnglishContentFormAdapter } from "../forms/english-locale";
 import { sameFormValues } from "../forms/form-engine";
 import type {
   FormErrors,
@@ -27,15 +29,36 @@ import {
   contentTypeOptions,
   createSharedRecordDraft,
   SHARED_SCHEMA_VERSION,
-  updateChineseBodyReference,
+  updateLocaleBodyReference,
   updateSharedRecordDraft,
 } from "../schema-drafts";
 import type {
   DraftFieldErrors,
   DraftFields,
 } from "../schema-drafts";
-import { prepareArticleMarkdown } from "../editor/article-markdown";
+import {
+  copyChineseArticleStructure,
+  extractArticleMediaText,
+  prepareArticleMarkdown,
+  updateArticleMediaAltText,
+} from "../editor/article-markdown";
+import {
+  applyLocaleWorkflow,
+  createEnglishWorkflow,
+  inspectLocaleWorkflow,
+  markLocaleContentEdited,
+  parkEnglishLocale,
+  requestLocaleState,
+  restoreEnglishLocale,
+  setEnglishLocaleMissing,
+  validateLocaleWorkflow,
+} from "../locale-workflow";
+import type {
+  LocaleWorkflowErrors,
+  LocaleWorkflowInput,
+} from "../locale-workflow";
 import { ArticleEditor } from "./ArticleEditor";
+import { LocaleWorkflowFields } from "./LocaleWorkflowFields";
 import { SchemaForm } from "./SchemaForm";
 
 type NewDraftPageProps = {
@@ -73,7 +96,11 @@ export function NewDraftPage({ api, onCreated }: NewDraftPageProps) {
     setError(null);
     try {
       onCreated(
-        await api.createDraft({ recordDraft: prepared.recordDraft, bodyZh: "" }),
+        await api.createDraft({
+          recordDraft: prepared.recordDraft,
+          bodyZh: "",
+          bodyEn: "",
+        }),
       );
     } catch (caught) {
       setError(describeError(caught));
@@ -336,18 +363,18 @@ type EditorInput = {
   fields: DraftFields;
   contentForm: FormValues;
   bodyZh: string;
+  englishForm: FormValues;
+  bodyEn: string;
+  zhWorkflow: LocaleWorkflowInput;
+  enWorkflow: LocaleWorkflowInput | null;
+  parkedEnglishLocale?: unknown;
 };
 
 function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   const initialInspection = inspectDraft(draft);
-  const initialFormInspection = getContentFormAdapter(
-    initialInspection.fields.contentType,
-  )?.inspect(draft.recordDraft) ?? { values: {}, errors: {} };
-  const initialInput: EditorInput = {
-    fields: initialInspection.fields,
-    contentForm: initialFormInspection.values,
-    bodyZh: draft.bodyZh,
-  };
+  const initialFormInspection = getContentFormAdapter(initialInspection.fields.contentType)
+    ?.inspect(draft.recordDraft) ?? { values: {}, errors: {} };
+  const initialInput = editorInputFromDraft(draft);
   const [editorInput, setEditorInput] = useState<EditorInput>(initialInput);
   const [savedInput, setSavedInput] = useState<EditorInput>(initialInput);
   const [fieldErrors, setFieldErrors] = useState<DraftFieldErrors>(
@@ -357,8 +384,14 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
     initialFormInspection.errors,
   );
   const [bodyError, setBodyError] = useState<string | undefined>(
-    prepareArticleMarkdown(draft.bodyZh).issues[0]?.message,
+    prepareArticleMarkdown(draft.bodyZh, "zh").issues[0]?.message,
   );
+  const [englishFormErrors, setEnglishFormErrors] = useState<FormErrors>({});
+  const [englishBodyError, setEnglishBodyError] = useState<string | undefined>(
+    prepareArticleMarkdown(draft.bodyEn, "en").issues[0]?.message,
+  );
+  const [zhWorkflowErrors, setZhWorkflowErrors] = useState<LocaleWorkflowErrors>({});
+  const [enWorkflowErrors, setEnWorkflowErrors] = useState<LocaleWorkflowErrors>({});
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"delete" | null>(null);
@@ -387,10 +420,11 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         return;
       }
 
+      const now = new Date().toISOString();
       const prepared = updateSharedRecordDraft(
         recordDraftRef.current,
         snapshot.fields,
-        new Date().toISOString(),
+        now,
       );
       if (!prepared.success) {
         setFieldErrors(prepared.errors);
@@ -399,7 +433,15 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         return;
       }
 
-      const preparedBody = prepareArticleMarkdown(snapshot.bodyZh);
+      const zhWorkflowValidation = validateLocaleWorkflow(snapshot.zhWorkflow);
+      if (Object.values(zhWorkflowValidation).some(Boolean)) {
+        setZhWorkflowErrors(zhWorkflowValidation);
+        setSaveError("请修正中文语言状态后重试。");
+        setSaveStatus("failed");
+        return;
+      }
+
+      const preparedBody = prepareArticleMarkdown(snapshot.bodyZh, "zh");
       if (preparedBody.issues.length > 0) {
         setBodyError(preparedBody.issues[0]?.message);
         setSaveError("请修正中文正文后重试。");
@@ -407,7 +449,19 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         return;
       }
 
-      let nextRecordDraft = prepared.recordDraft;
+      let nextRecordDraft = applyLocaleWorkflow(
+        prepared.recordDraft,
+        "zh",
+        snapshot.zhWorkflow,
+        now,
+      );
+      nextRecordDraft = updateLocaleBodyReference(
+        nextRecordDraft,
+        "zh",
+        preparedBody.markdown,
+      );
+      // Chinese form validation must not reject an incomplete optional English draft.
+      nextRecordDraft = setEnglishLocaleMissing(nextRecordDraft);
       const adapter = getContentFormAdapter(snapshot.fields.contentType);
       if (adapter) {
         const contentFormPrepared = adapter.validate(
@@ -422,10 +476,94 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         }
         nextRecordDraft = contentFormPrepared.recordDraft;
       }
-      nextRecordDraft = updateChineseBodyReference(
-        nextRecordDraft,
-        preparedBody.markdown,
-      );
+
+      const preparedEnglish = prepareArticleMarkdown(snapshot.bodyEn, "en");
+      if (preparedEnglish.issues.length > 0) {
+        setEnglishBodyError(preparedEnglish.issues[0]?.message);
+        setSaveError("请修正英文正文后重试。");
+        setSaveStatus("failed");
+        return;
+      }
+      const preparedEnglishBody = preparedEnglish.markdown;
+      if (snapshot.enWorkflow) {
+        const englishAdapter = getEnglishContentFormAdapter(
+          snapshot.fields.contentType,
+        );
+        if (!englishAdapter) {
+          setEnglishFormErrors({
+            $form: "当前内容类型不能生成英文字段。",
+          });
+          setSaveError("英文内容类型无效。");
+          setSaveStatus("failed");
+          return;
+        }
+
+        const englishWorkflowValidation = validateLocaleWorkflow(
+          snapshot.enWorkflow,
+        );
+        if (Object.values(englishWorkflowValidation).some(Boolean)) {
+          setEnWorkflowErrors(englishWorkflowValidation);
+          setSaveError("请修正英文语言状态后重试。");
+          setSaveStatus("failed");
+          return;
+        }
+
+        const requireComplete =
+          snapshot.enWorkflow.state === "approved" ||
+          snapshot.enWorkflow.state === "published";
+        const englishValueErrors = englishAdapter.validateValues(
+          snapshot.englishForm,
+        );
+        if (requireComplete && Object.values(englishValueErrors).some(Boolean)) {
+          setEnglishFormErrors(englishValueErrors);
+          setSaveError("英文发布候选必须补齐标出的字段。");
+          setSaveStatus("failed");
+          return;
+        }
+
+        nextRecordDraft = englishAdapter.apply(
+          nextRecordDraft,
+          snapshot.englishForm,
+          now,
+        );
+        nextRecordDraft = applyLocaleWorkflow(
+          nextRecordDraft,
+          "en",
+          snapshot.enWorkflow,
+          now,
+        );
+        nextRecordDraft = updateLocaleBodyReference(
+          nextRecordDraft,
+          "en",
+          preparedEnglishBody,
+        );
+
+        if (requireComplete) {
+          const completeErrors = englishAdapter.validateCompleteRecord(nextRecordDraft);
+          if (Object.values(completeErrors).some(Boolean)) {
+            setEnglishFormErrors(completeErrors);
+            setSaveError("英文发布候选尚未满足完整性要求。");
+            setSaveStatus("failed");
+            return;
+          }
+        }
+
+        if (
+          snapshot.enWorkflow.state === "published" &&
+          extractArticleMediaText(preparedEnglishBody).some(
+            (image) => !image.alt.trim(),
+          )
+        ) {
+          setEnglishFormErrors({
+            $form: "英文已发布正文中的图片必须填写英文替代文字。",
+          });
+          setSaveError("请补齐英文图片文字后重试。");
+          setSaveStatus("failed");
+          return;
+        }
+      } else {
+        nextRecordDraft = setEnglishLocaleMissing(nextRecordDraft);
+      }
 
       saveInFlightRef.current = true;
       setSaveStatus("saving");
@@ -435,16 +573,16 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
           draftId: draft.draftId,
           recordDraft: nextRecordDraft,
           bodyZh: preparedBody.markdown,
+          bodyEn: preparedEnglishBody,
+          ...(snapshot.parkedEnglishLocale !== undefined
+            ? { parkedEnglishLocale: snapshot.parkedEnglishLocale }
+            : {}),
         });
         const persistedInspection = inspectDraft(saved);
         const persistedForm = getContentFormAdapter(
           persistedInspection.fields.contentType,
         )?.inspect(saved.recordDraft) ?? { values: {}, errors: {} };
-        const persistedInput: EditorInput = {
-          fields: persistedInspection.fields,
-          contentForm: persistedForm.values,
-          bodyZh: saved.bodyZh,
-        };
+        const persistedInput = editorInputFromDraft(saved);
         if (!mountedRef.current) {
           return;
         }
@@ -460,8 +598,14 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         setFieldErrors(persistedInspection.errors);
         setContentFormErrors(persistedForm.errors);
         setBodyError(
-          prepareArticleMarkdown(saved.bodyZh).issues[0]?.message,
+          prepareArticleMarkdown(saved.bodyZh, "zh").issues[0]?.message,
         );
+        setEnglishFormErrors({});
+        setEnglishBodyError(
+          prepareArticleMarkdown(saved.bodyEn, "en").issues[0]?.message,
+        );
+        setZhWorkflowErrors({});
+        setEnWorkflowErrors({});
         recordDraftRef.current = saved.recordDraft;
         onSaved(saved);
         setSaveStatus(unchangedDuringSave ? "saved" : "pending");
@@ -489,11 +633,32 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
     return () => window.clearTimeout(timer);
   }, [editorInput, pendingAction, persist, saveStatus]);
 
+  function commitEditorInput(next: EditorInput) {
+    editorInputRef.current = next;
+    setEditorInput(next);
+    setSaveError(null);
+    setSaveStatus((current) => {
+      if (current === "saving") {
+        return current;
+      }
+      return sameEditorInput(next, savedInput) ? "saved" : "pending";
+    });
+  }
+
   function updateField(field: keyof DraftFields, value: string) {
+    const discardsEnglish = Boolean(
+      editorInput.enWorkflow ||
+        editorInput.parkedEnglishLocale ||
+        editorInput.bodyEn.trim(),
+    );
     if (
       field === "contentType" &&
       value !== editorInput.fields.contentType &&
-      !window.confirm("切换内容类型会清空当前类型的专用字段，确定继续？")
+      !window.confirm(
+        `切换内容类型会清空当前类型的专用字段${
+          discardsEnglish ? "和已保留的英文草稿" : ""
+        }，确定继续？`,
+      )
     ) {
       return;
     }
@@ -502,59 +667,274 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       field === "contentType" && value !== editorInput.fields.contentType
         ? getContentFormAdapter(value)?.emptyValues() ?? {}
         : editorInput.contentForm;
+    const now = new Date().toISOString();
+    const typeChanged =
+      field === "contentType" && value !== editorInput.fields.contentType;
     const next: EditorInput = {
       ...editorInput,
       fields: { ...editorInput.fields, [field]: value },
       contentForm,
+      englishForm: typeChanged
+        ? getEnglishContentFormAdapter(value)?.emptyValues() ?? {}
+        : editorInput.englishForm,
+      bodyEn: typeChanged ? "" : editorInput.bodyEn,
+      zhWorkflow:
+        typeChanged || field === "titleZh"
+          ? markLocaleContentEdited(editorInput.zhWorkflow, now)
+          : editorInput.zhWorkflow,
+      enWorkflow: typeChanged
+        ? editorInput.enWorkflow
+          ? createEnglishWorkflow(now)
+          : null
+        : editorInput.enWorkflow,
+      parkedEnglishLocale: typeChanged
+        ? undefined
+        : editorInput.parkedEnglishLocale,
     };
-    editorInputRef.current = next;
-    setEditorInput(next);
+    commitEditorInput(next);
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
     if (field === "contentType") {
       setContentFormErrors({});
+      setEnglishFormErrors({});
+      setEnWorkflowErrors({});
     }
-    setSaveError(null);
-    setSaveStatus((current) => {
-      if (current === "saving") {
-        return current;
-      }
-      return sameEditorInput(next, savedInput) ? "saved" : "pending";
-    });
   }
 
   function updateContentFormField(fieldId: string, value: FormValue) {
+    const now = new Date().toISOString();
+    const adapter = getContentFormAdapter(editorInput.fields.contentType);
+    const fieldPath = adapter
+      ? adapter.schema.sections
+          .flatMap((section) => section.fields)
+          .find((field) => field.id === fieldId)?.path
+      : undefined;
     const next: EditorInput = {
       ...editorInput,
       contentForm: { ...editorInput.contentForm, [fieldId]: value },
+      zhWorkflow: markLocaleContentEdited(editorInput.zhWorkflow, now),
+      enWorkflow:
+        editorInput.enWorkflow && fieldPath && !fieldPath.startsWith("locales.zh")
+          ? markLocaleContentEdited(editorInput.enWorkflow, now)
+          : editorInput.enWorkflow,
     };
-    editorInputRef.current = next;
-    setEditorInput(next);
+    commitEditorInput(next);
     setContentFormErrors((current) => ({
       ...current,
       [fieldId]: undefined,
       $form: undefined,
     }));
-    setSaveError(null);
-    setSaveStatus((current) => {
-      if (current === "saving") {
-        return current;
-      }
-      return sameEditorInput(next, savedInput) ? "saved" : "pending";
-    });
   }
 
   function updateBody(bodyZh: string, error?: string) {
-    const next: EditorInput = { ...editorInputRef.current, bodyZh };
-    editorInputRef.current = next;
-    setEditorInput(next);
+    const current = editorInputRef.current;
+    if (bodyZh === current.bodyZh) {
+      setBodyError(error);
+      return;
+    }
+    const next: EditorInput = {
+      ...current,
+      bodyZh,
+      zhWorkflow: markLocaleContentEdited(
+        current.zhWorkflow,
+        new Date().toISOString(),
+      ),
+    };
+    commitEditorInput(next);
     setBodyError(error);
-    setSaveError(null);
-    setSaveStatus((current) => {
-      if (current === "saving") {
-        return current;
+  }
+
+  function updateEnglishFormField(fieldId: string, value: FormValue) {
+    const current = editorInputRef.current;
+    if (!current.enWorkflow) {
+      return;
+    }
+    const next: EditorInput = {
+      ...current,
+      englishForm: { ...current.englishForm, [fieldId]: value },
+      enWorkflow: markLocaleContentEdited(
+        current.enWorkflow,
+        new Date().toISOString(),
+      ),
+    };
+    commitEditorInput(next);
+    setEnglishFormErrors((errors) => ({
+      ...errors,
+      [fieldId]: undefined,
+      $form: undefined,
+    }));
+  }
+
+  function updateEnglishBody(bodyEn: string, error?: string) {
+    const current = editorInputRef.current;
+    if (!current.enWorkflow) {
+      return;
+    }
+    if (bodyEn === current.bodyEn) {
+      setEnglishBodyError(error);
+      return;
+    }
+    const next: EditorInput = {
+      ...current,
+      bodyEn,
+      enWorkflow: markLocaleContentEdited(
+        current.enWorkflow,
+        new Date().toISOString(),
+      ),
+    };
+    commitEditorInput(next);
+    setEnglishBodyError(error);
+    setEnglishFormErrors((errors) => ({ ...errors, $form: undefined }));
+  }
+
+  function updateEnglishImageText(mediaId: string, alt: string) {
+    updateEnglishBody(
+      updateArticleMediaAltText(editorInputRef.current.bodyEn, mediaId, alt),
+    );
+  }
+
+  function updateWorkflowField<Key extends keyof LocaleWorkflowInput>(
+    locale: "zh" | "en",
+    field: Key,
+    value: LocaleWorkflowInput[Key],
+  ) {
+    const current = editorInputRef.current;
+    const workflow = locale === "zh" ? current.zhWorkflow : current.enWorkflow;
+    if (!workflow) {
+      return;
+    }
+    if (field === "state") {
+      const request = requestLocaleState(
+        locale,
+        workflow,
+        value as LocaleWorkflowInput["state"],
+      );
+      if (!request.allowed) {
+        const setErrors = locale === "zh" ? setZhWorkflowErrors : setEnWorkflowErrors;
+        setErrors((errors) => ({ ...errors, state: request.error }));
+        return;
       }
-      return sameEditorInput(next, savedInput) ? "saved" : "pending";
+      if (
+        value === "published" &&
+        !window.confirm(`确认将${locale === "zh" ? "中文" : "英文"}版本标记为已发布？`)
+      ) {
+        return;
+      }
+    }
+
+    let nextWorkflow: LocaleWorkflowInput = { ...workflow, [field]: value };
+    if (field === "state" && value === "published" && !nextWorkflow.publishedAt) {
+      nextWorkflow = { ...nextWorkflow, publishedAt: new Date().toISOString() };
+    }
+    if (field === "translationOrigin") {
+      nextWorkflow = markLocaleContentEdited(nextWorkflow, new Date().toISOString());
+    }
+    const next: EditorInput =
+      locale === "zh"
+        ? { ...current, zhWorkflow: nextWorkflow }
+        : { ...current, enWorkflow: nextWorkflow };
+    commitEditorInput(next);
+    const setErrors = locale === "zh" ? setZhWorkflowErrors : setEnWorkflowErrors;
+    setErrors((errors) => ({ ...errors, [field]: undefined }));
+  }
+
+  function enableEnglishVersion() {
+    const current = editorInputRef.current;
+    const now = new Date().toISOString();
+    const prepared = updateSharedRecordDraft(
+      recordDraftRef.current,
+      current.fields,
+      now,
+    );
+    if (!prepared.success) {
+      setFieldErrors(prepared.errors);
+      return;
+    }
+    const restored = restoreEnglishLocale(
+      prepared.recordDraft,
+      current.parkedEnglishLocale,
+      now,
+    );
+    const adapter = getEnglishContentFormAdapter(current.fields.contentType);
+    const enWorkflow = inspectLocaleWorkflow(restored, "en", now);
+    if (!adapter || !enWorkflow) {
+      setSaveError("无法创建英文版本。请先修正内容类型。");
+      return;
+    }
+    commitEditorInput({
+      ...current,
+      englishForm: adapter.inspect(restored),
+      enWorkflow,
+      parkedEnglishLocale: undefined,
     });
+    setEnglishFormErrors({});
+    setEnWorkflowErrors({});
+  }
+
+  function disableEnglishVersion() {
+    const current = editorInputRef.current;
+    if (!current.enWorkflow) {
+      return;
+    }
+    if (!window.confirm("关闭英文版本会将其设为 missing，并保留当前英文草稿。")) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const prepared = updateSharedRecordDraft(
+      recordDraftRef.current,
+      current.fields,
+      now,
+    );
+    const adapter = getEnglishContentFormAdapter(current.fields.contentType);
+    if (!prepared.success || !adapter) {
+      setSaveError("无法保留英文草稿。请先修正内容类型和中文标题。");
+      return;
+    }
+    let candidate = adapter.apply(prepared.recordDraft, current.englishForm, now);
+    candidate = applyLocaleWorkflow(candidate, "en", current.enWorkflow, now);
+    candidate = updateLocaleBodyReference(candidate, "en", current.bodyEn);
+    const parked = parkEnglishLocale(candidate);
+    commitEditorInput({
+      ...current,
+      enWorkflow: null,
+      parkedEnglishLocale: parked.parkedEnglishLocale,
+    });
+    setEnglishFormErrors({});
+    setEnWorkflowErrors({});
+  }
+
+  function copyChineseStructureToEnglish() {
+    const current = editorInputRef.current;
+    const adapter = getEnglishContentFormAdapter(current.fields.contentType);
+    if (!adapter || !current.enWorkflow) {
+      return;
+    }
+    const hasEnglishInput =
+      current.bodyEn.trim() ||
+      Object.values(current.englishForm).some((value) =>
+        typeof value === "string" ? value.trim() : Boolean(value),
+      );
+    if (
+      hasEnglishInput &&
+      !window.confirm("复制中文结构会覆盖当前英文草稿内容，确定继续？")
+    ) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const next: EditorInput = {
+      ...current,
+      englishForm: adapter.copyChineseValues(
+        current.fields.titleZh,
+        current.contentForm,
+      ),
+      bodyEn: copyChineseArticleStructure(current.bodyZh),
+      enWorkflow: markLocaleContentEdited(
+        { ...current.enWorkflow, translationOrigin: "human-translated" },
+        now,
+      ),
+    };
+    commitEditorInput(next);
+    setEnglishBodyError(undefined);
+    setEnglishFormErrors({});
   }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
@@ -583,6 +963,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   const isBusy = pendingAction !== null || saveStatus === "saving";
   const fields = editorInput.fields;
   const activeFormAdapter = getContentFormAdapter(fields.contentType);
+  const activeEnglishAdapter = getEnglishContentFormAdapter(fields.contentType);
 
   return (
     <form className="draft-editor" onSubmit={(event) => void handleSave(event)}>
@@ -658,6 +1039,38 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
 
       <FieldError id="draft-schema-version-error" message={fieldErrors.schemaVersion} />
 
+      <section className="locale-version-control" aria-labelledby="locale-version-title">
+        <div>
+          <h4 id="locale-version-title">语言版本</h4>
+          <p>
+            中文：{localeStateLabel(editorInput.zhWorkflow.state)}
+            {" · "}
+            英文：{localeStateLabel(editorInput.enWorkflow?.state ?? "missing")}
+          </p>
+        </div>
+        <label className="locale-switch" htmlFor="english-version-switch">
+          <input
+            id="english-version-switch"
+            type="checkbox"
+            role="switch"
+            checked={Boolean(editorInput.enWorkflow)}
+            disabled={isBusy}
+            onChange={(event) =>
+              event.target.checked ? enableEnglishVersion() : disableEnglishVersion()
+            }
+          />
+          <span>英文版本</span>
+        </label>
+      </section>
+
+      <LocaleWorkflowFields
+        locale="zh"
+        value={editorInput.zhWorkflow}
+        errors={zhWorkflowErrors}
+        disabled={isBusy}
+        onChange={(field, value) => updateWorkflowField("zh", field, value)}
+      />
+
       {activeFormAdapter ? (
         <SchemaForm
           schema={activeFormAdapter.schema}
@@ -670,10 +1083,59 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
 
       <ArticleEditor
         value={editorInput.bodyZh}
+        locale="zh"
         error={bodyError}
         disabled={isBusy}
         onChange={updateBody}
       />
+
+      {editorInput.enWorkflow && activeEnglishAdapter ? (
+        <section className="english-editor-section" aria-labelledby="english-editor-title">
+          <header className="english-editor-heading">
+            <h4 id="english-editor-title">英文版本</h4>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={isBusy}
+              onClick={copyChineseStructureToEnglish}
+            >
+              <Copy aria-hidden="true" size={17} />
+              复制中文结构
+            </button>
+          </header>
+
+          <LocaleWorkflowFields
+            locale="en"
+            value={editorInput.enWorkflow}
+            errors={enWorkflowErrors}
+            disabled={isBusy}
+            onChange={(field, value) => updateWorkflowField("en", field, value)}
+          />
+
+          <SchemaForm
+            schema={activeEnglishAdapter.schema}
+            values={editorInput.englishForm}
+            errors={englishFormErrors}
+            disabled={isBusy}
+            onChange={updateEnglishFormField}
+          />
+
+          <ArticleEditor
+            value={editorInput.bodyEn}
+            locale="en"
+            error={englishBodyError}
+            disabled={isBusy}
+            onChange={updateEnglishBody}
+          />
+
+          <EnglishMediaTextPlaceholders
+            markdown={editorInput.bodyEn}
+            errors={englishFormErrors}
+            disabled={isBusy}
+            onChange={updateEnglishImageText}
+          />
+        </section>
+      ) : null}
 
       <dl className="draft-metadata">
         <div>
@@ -790,6 +1252,89 @@ function SaveStatusIndicator({
   );
 }
 
+function editorInputFromDraft(draft: Draft): EditorInput {
+  const inspection = inspectDraft(draft);
+  const contentForm = getContentFormAdapter(inspection.fields.contentType)?.inspect(
+    draft.recordDraft,
+  ).values ?? {};
+  const englishAdapter = getEnglishContentFormAdapter(
+    inspection.fields.contentType,
+  );
+  const fallbackChinese = {
+    ...createEnglishWorkflow(draft.updatedAt),
+    translationOrigin: "source-authored" as const,
+  };
+  return {
+    fields: inspection.fields,
+    contentForm,
+    bodyZh: draft.bodyZh,
+    englishForm: englishAdapter?.inspect(draft.recordDraft) ?? {},
+    bodyEn: draft.bodyEn,
+    zhWorkflow:
+      inspectLocaleWorkflow(draft.recordDraft, "zh", draft.updatedAt) ??
+      fallbackChinese,
+    enWorkflow: inspectLocaleWorkflow(
+      draft.recordDraft,
+      "en",
+      draft.updatedAt,
+    ),
+    ...(draft.parkedEnglishLocale !== undefined
+      ? { parkedEnglishLocale: draft.parkedEnglishLocale }
+      : {}),
+  };
+}
+
+function EnglishMediaTextPlaceholders({
+  markdown,
+  errors,
+  disabled,
+  onChange,
+}: {
+  markdown: string;
+  errors: FormErrors;
+  disabled: boolean;
+  onChange: (mediaId: string, alt: string) => void;
+}) {
+  const images = extractArticleMediaText(markdown);
+  return (
+    <fieldset className="english-media-text">
+      <legend>英文图片文字占位</legend>
+      <div className="english-media-text-grid">
+        {images.length > 0 ? (
+          images.map((image) => {
+            const id = `english-media-${image.mediaId}`;
+            const hasPublicationError = Boolean(errors.$form) && !image.alt.trim();
+            return (
+              <div className="field-group" key={image.mediaId}>
+                <label htmlFor={id}>英文替代文字 · {image.mediaId}</label>
+                <input
+                  id={id}
+                  type="text"
+                  value={image.alt}
+                  disabled={disabled}
+                  placeholder="English alternative text"
+                  aria-invalid={hasPublicationError}
+                  onChange={(event) => onChange(image.mediaId, event.target.value)}
+                />
+              </div>
+            );
+          })
+        ) : (
+          <div className="field-group">
+            <label htmlFor="english-media-empty">英文图片文字</label>
+            <input
+              id="english-media-empty"
+              type="text"
+              disabled
+              placeholder="在英文正文插入图片占位后填写"
+            />
+          </div>
+        )}
+      </div>
+    </fieldset>
+  );
+}
+
 function sameSaveInput(left: DraftFields, right: DraftFields) {
   return (
     left.contentType === right.contentType &&
@@ -799,21 +1344,44 @@ function sameSaveInput(left: DraftFields, right: DraftFields) {
 }
 
 function sameEditorInput(left: EditorInput, right: EditorInput) {
-  if (left.bodyZh !== right.bodyZh) {
+  if (
+    left.bodyZh !== right.bodyZh ||
+    left.bodyEn !== right.bodyEn ||
+    JSON.stringify(left.zhWorkflow) !== JSON.stringify(right.zhWorkflow) ||
+    JSON.stringify(left.enWorkflow) !== JSON.stringify(right.enWorkflow) ||
+    JSON.stringify(left.parkedEnglishLocale) !==
+      JSON.stringify(right.parkedEnglishLocale)
+  ) {
     return false;
   }
   if (!sameSaveInput(left.fields, right.fields)) {
     return false;
   }
   const adapter = getContentFormAdapter(left.fields.contentType);
-  if (!adapter) {
-    return true;
+  if (
+    adapter &&
+    !sameFormValues(adapter.schema, left.contentForm, right.contentForm)
+  ) {
+    return false;
   }
-  return sameFormValues(
-    adapter.schema,
-    left.contentForm,
-    right.contentForm,
-  );
+  const englishAdapter = getEnglishContentFormAdapter(left.fields.contentType);
+  return !englishAdapter ||
+    sameFormValues(
+      englishAdapter.schema,
+      left.englishForm,
+      right.englishForm,
+    );
+}
+
+function localeStateLabel(state: LocaleWorkflowInput["state"] | "missing") {
+  return {
+    missing: "missing",
+    draft: "草稿",
+    "internal-review": "审核中",
+    approved: "发布候选",
+    published: "已发布",
+    archived: "已归档",
+  }[state];
 }
 
 function FieldError({ id, message }: { id: string; message?: string }) {

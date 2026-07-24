@@ -19,10 +19,11 @@ function makeDraft(titleZh = "虚构标题"): Draft {
     throw new Error("test draft must be valid");
   }
   return {
-    formatVersion: 3,
+    formatVersion: 4,
     draftId: "11111111-1111-4111-8111-111111111111",
     recordDraft: prepared.recordDraft,
     bodyZh: "",
+    bodyEn: "",
     createdAt: "2026-07-23T08:00:00Z",
     updatedAt: "2026-07-23T08:00:00Z",
   };
@@ -36,6 +37,8 @@ function createApi(): DraftApi {
       ...draft,
       recordDraft: input.recordDraft,
       bodyZh: input.bodyZh,
+      bodyEn: input.bodyEn,
+      parkedEnglishLocale: input.parkedEnglishLocale,
     })),
     listDrafts: vi.fn(async () => []),
     openDraft: vi.fn(async () => draft),
@@ -43,6 +46,8 @@ function createApi(): DraftApi {
       ...draft,
       recordDraft: input.recordDraft,
       bodyZh: input.bodyZh,
+      bodyEn: input.bodyEn,
+      parkedEnglishLocale: input.parkedEnglishLocale,
     })),
     deleteDraft: vi.fn(async () => undefined),
     takeRecoveryDraft: vi.fn(async () => null),
@@ -95,6 +100,7 @@ test("creates a shared-schema draft and opens it in the drafts page", async () =
 
   expect(api.createDraft).toHaveBeenCalledOnce();
   expect(api.createDraft).toHaveBeenCalledWith({
+    bodyEn: "",
     bodyZh: "",
     recordDraft: expect.objectContaining({
       schemaVersion: 1,
