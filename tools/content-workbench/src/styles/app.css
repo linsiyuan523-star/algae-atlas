@@ -2381,7 +2381,9 @@ button:disabled {
 }
 
 .repository-export-form input,
-.repository-export-form select {
+.repository-export-form select,
+.github-publish-form input,
+.github-publish-form select {
   width: 100%;
   min-width: 0;
   min-height: 40px;
@@ -2393,12 +2395,16 @@ button:disabled {
 }
 
 .repository-export-form input:hover,
-.repository-export-form select:hover {
+.repository-export-form select:hover,
+.github-publish-form input:hover,
+.github-publish-form select:hover {
   border-color: #7e9b90;
 }
 
 .repository-export-form input:focus-visible,
-.repository-export-form select:focus-visible {
+.repository-export-form select:focus-visible,
+.github-publish-form input:focus-visible,
+.github-publish-form select:focus-visible {
   outline: 2px solid #d89a32;
   outline-offset: 2px;
 }
@@ -3099,6 +3105,148 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.github-publish-panel {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  padding: 20px 0 4px;
+  border-top: 1px solid #cbd5d0;
+}
+
+.github-publish-form {
+  min-width: 0;
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 0.8fr)
+    minmax(120px, 0.5fr)
+    minmax(240px, 1.2fr)
+    auto
+    auto;
+  align-items: end;
+  gap: 14px;
+}
+
+.github-integration-switch {
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: 18px auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  gap: 1px 8px;
+  color: #314a41;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.github-integration-switch input {
+  width: 16px;
+  min-height: 16px;
+  margin: 1px 0 0;
+  grid-row: 1 / -1;
+  accent-color: #2f6f5e;
+}
+
+.github-integration-switch small {
+  color: #6a7771;
+  font-size: 11px;
+}
+
+.github-integration-switch:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.github-preflight-button {
+  justify-self: start;
+  white-space: nowrap;
+}
+
+.github-publish-confirmation {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.github-pr-preview {
+  min-width: 0;
+  grid-column: 1 / -1;
+  padding-top: 10px;
+  border-top: 1px solid currentColor;
+}
+
+.github-pr-preview summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.github-pr-preview > strong {
+  display: block;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.github-pr-preview pre {
+  max-height: 240px;
+  margin: 8px 0 0;
+  padding: 10px 0 0;
+  overflow: auto;
+  border-top: 1px solid rgba(36, 91, 72, 0.22);
+  color: inherit;
+  background: transparent;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.github-publish-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 15px;
+  border: 1px solid;
+  border-radius: 6px;
+}
+
+.github-publish-result.is-ready {
+  border-color: #9ec6b4;
+  color: #245b48;
+  background: #edf7f1;
+}
+
+.github-publish-result.is-blocked {
+  border-color: #e3ba9a;
+  color: #7c4128;
+  background: #fff7f1;
+}
+
+.github-publish-result > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.github-publish-result > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.github-publish-result strong {
+  font-size: 14px;
+}
+
+.github-publish-result span,
+.github-publish-result small {
+  font-size: 12px;
+}
+
+.github-publish-result code {
+  overflow-wrap: anywhere;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
 .repository-section-empty {
   margin: 0;
   color: #6d7a74;
@@ -3108,8 +3256,13 @@ button:disabled {
 
 @media (max-width: 900px) {
   .repository-export-form,
-  .repository-bundle-form {
+  .repository-bundle-form,
+  .github-publish-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .github-pr-title-field {
+    grid-column: 1 / -1;
   }
 
   .repository-run-button,
@@ -3125,9 +3278,14 @@ button:disabled {
 @media (max-width: 760px) {
   .repository-export-form,
   .repository-bundle-form,
+  .github-publish-form,
   .repository-target-columns,
   .repository-script-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .github-pr-title-field {
+    grid-column: auto;
   }
 
   .repository-target-columns {

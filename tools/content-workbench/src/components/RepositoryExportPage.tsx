@@ -13,6 +13,8 @@ import {
 import { useEffect, useState } from "react";
 import { inspectDraft } from "../drafts";
 import type { Draft, DraftApi } from "../drafts";
+import { defaultGitHubPublishApi } from "../github-publish";
+import type { GitHubPublishApi } from "../github-publish";
 import type { MediaApi, StagedImage } from "../media";
 import {
   createExportPlan,
@@ -21,6 +23,7 @@ import {
   runRepositoryExportDryRun,
   runRepositoryLocalCommit,
 } from "../repository";
+import { GitHubDraftPrPanel } from "./GitHubDraftPrPanel";
 import type {
   ExportDryRunResult,
   PlannedGitOperation,
@@ -37,6 +40,7 @@ type RepositoryExportPageProps = {
   draftApi: DraftApi;
   mediaApi: MediaApi;
   repositoryApi: RepositoryApi;
+  githubPublishApi?: GitHubPublishApi;
   now?: () => Date;
 };
 
@@ -50,6 +54,7 @@ export function RepositoryExportPage({
   draftApi,
   mediaApi,
   repositoryApi,
+  githubPublishApi = defaultGitHubPublishApi,
   now = () => new Date(),
 }: RepositoryExportPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -245,7 +250,12 @@ export function RepositoryExportPage({
           onCommit={handleCommit}
         />
       ) : null}
-      {commitResult ? <LocalCommitResult result={commitResult} /> : null}
+      {commitResult ? (
+        <>
+          <LocalCommitResult result={commitResult} />
+          <GitHubDraftPrPanel api={githubPublishApi} commit={commitResult} />
+        </>
+      ) : null}
       <BundleExportPanel repositoryApi={repositoryApi} />
     </div>
   );

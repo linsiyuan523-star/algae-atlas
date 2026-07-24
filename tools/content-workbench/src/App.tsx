@@ -14,6 +14,7 @@ import { DraftsPage, NewDraftPage } from "./components/DraftPages";
 import { RepositoryExportPage } from "./components/RepositoryExportPage";
 import { inspectDraft, tauriDraftApi, unavailableDraftApi } from "./drafts";
 import type { Draft, DraftApi } from "./drafts";
+import type { GitHubPublishApi } from "./github-publish";
 import { tauriMediaApi, unavailableMediaApi } from "./media";
 import type { MediaApi } from "./media";
 import {
@@ -65,6 +66,7 @@ type AppProps = {
   draftApi?: DraftApi;
   mediaApi?: MediaApi;
   repositoryApi?: RepositoryApi;
+  githubPublishApi?: GitHubPublishApi;
 };
 
 const recoveryRequests = new WeakMap<DraftApi, Promise<Draft | null>>();
@@ -83,6 +85,7 @@ export default function App({
   draftApi,
   mediaApi,
   repositoryApi,
+  githubPublishApi,
 }: AppProps) {
   const activeDraftApi =
     draftApi ?? (isTauri() ? tauriDraftApi : unavailableDraftApi);
@@ -212,6 +215,7 @@ export default function App({
               draftApi={activeDraftApi}
               mediaApi={activeMediaApi}
               repositoryApi={activeRepositoryApi}
+              githubPublishApi={githubPublishApi}
             />
           ) : (
             <div className="empty-state" role="status">
