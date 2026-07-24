@@ -1,28 +1,52 @@
-Stage: Stage-06B2
+Stage: Stage-07A1
 Status: PASS
 ValidatedAt: 2026-07-24
-Branch: local/stage-06b2-responsive-preview
-StartCommit: d73ac176a3a820b30bd90a8259ae637a13052717
-FeatureCommit: 1946185d14b69517dbdfe4f0f7997f54d93ae97b
+Branch: local/stage-07a1-repo-dryrun
+StartCommit: 6a40821db4d2aebd8c29e8695f7d1194e22dcee5
+FeatureCommit: 56c4104d1ba94c43d744512d830061bc1d639a2d
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
+Prerequisite:
+- Stage-06B2 bundle SHA256: PASS
+- Stage-06B2 bundle verify: PASS; complete history
+- Stage-06A2 ancestor in Stage-06B2: PASS
+- Worker remotes: NONE
+
+Environment:
+- Git: 2.55.0.windows.2
+- Node: 22.23.1
+- npm: 10.9.8
+- Rust/Cargo: 1.97.1
+- npm.cmd ci --prefer-offline --no-audit --no-fund: PASS; 659 packages
+
 Required checks:
-- npm.cmd run check: PASS
-- Focused preview suites: PASS; 3 files, 20 tests
-- npm.cmd test: PASS; desktop Vitest 17 files, 137 tests; root/schema/render checks also passed
-- npm.cmd run build:next: PASS
+- npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
+- Focused Stage-07A1 Vitest: PASS; 4 files, 13 tests
+- Desktop Vitest: PASS; 19 files, 142 tests
+- Final affected Vitest after browser fallback: PASS; 3 files, 9 tests
+- cargo test --locked --all-targets: PASS; 26 tests
+- Repository dry-run Rust tests: PASS; 5 tests
+- cargo fmt --check: PASS
+- cargo clippy --all-targets -- -D warnings: PASS
 - npm.cmd run desktop:frontend:build: PASS
 - git diff --check: PASS
 
-Tauri smoke:
-- npm.cmd run tauri:dev: PASS; compiled, launched, and loaded the workbench root screen
-- Native WebView2 capture/input automation: NOT AVAILABLE; SetIsBorderRequired failed (0x80004002)
-- Temporary process and logs: removed; no user-app-data test draft created
+Zero-write evidence:
+- Temporary clean repository full byte snapshot: unchanged
+- Temporary conflicting repository full byte snapshot: unchanged
+- Non-repository directory full byte snapshot: unchanged
+- HEAD and clean status after successful dry-run: unchanged
+- Dirty sentinel after conflicting dry-run: preserved
+
+UI smoke:
+- In-app Browser desktop width 1280: PASS; no horizontal overflow
+- In-app Browser mobile width 390: PASS; no horizontal overflow
+- Browser console errors/warnings after fallback: NONE
 
 Boundary:
-- No remote write, GitHub action, PR, merge to main, tag, release, or deployment
-- No root website visual redesign or server-rendering change
+- Root website checks and website production build: NOT RUN
+- No repository export write, branch creation, staging, commit, bundle, remote write, PR, merge, tag, release, or deployment
 
 Known non-blocking notices:
-- Existing Next.js missing-pages notice
 - Existing Vite chunk-size warning
+- Existing ESLint missing-pages notice

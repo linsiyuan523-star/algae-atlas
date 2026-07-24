@@ -1,49 +1,51 @@
-# Stage 6B2 Handoff
+# Stage 7A1 Handoff
 
-- Stage: Stage-06B2 - Card, Responsive Preview, and Stage 6 Checkpoint
-- Start commit: `d73ac176a3a820b30bd90a8259ae637a13052717`
-- Feature commit: `1946185d14b69517dbdfe4f0f7997f54d93ae97b`
-- End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified Stage-06B2 bundle head)
+- Stage: Stage-07A1 - Repository Diagnostics and Export Dry Run
+- Start commit: `6a40821db4d2aebd8c29e8695f7d1194e22dcee5`
+- Feature commit: `56c4104d1ba94c43d744512d830061bc1d639a2d`
+- End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified Stage-07A1 bundle head)
 
 ## Completed
 
-- Integrated the verified Stage-06A2 media metadata and Stage-06B1 detail preview tips locally.
-- Added detail, section-card, and homepage-featured-card preview modes to the draft editor.
-- Added desktop and mobile preview-width controls, including mobile card stacking and constrained detail spacing.
-- Added limited diagnostics for title wrapping, missing image or localized alt text, long URLs, empty paragraphs, and long unbroken tokens that could overflow horizontally.
-- Added wrap-safe CSS for summaries, body text, links, card source URLs, and narrow preview toolbars.
-- Preserved the B1 preview security boundary: only validated `previewSource` values may be used as browser image sources.
-- Added focused component coverage and updated the scaffold assertion for A2's intentional Rust image dependency.
-- Completed the Stage 6 checkpoint checks and native Tauri launch smoke.
+- Added a repository-export page that selects a saved draft and an operator-provided worktree root.
+- Added read-only Tauri diagnostics for canonical Git root, branch, HEAD, status, remotes, Git/Node versions, and root project scripts.
+- Added shared-Schema dry-run results for the record, localized Markdown bodies, and referenced staged media metadata.
+- Derived exact record JSON, optional `zh.md`/`en.md`, media JSON, normalized image, and cover-thumbnail targets without exporting retained originals.
+- Added conflicts for non-repositories, dirty worktrees, remotes, detached HEAD, in-progress Git operations, existing branches/targets, case collisions, and link/reparse paths.
+- Added fixed proposed Git argument vectors for the next stage; no write, branch, staging, commit, remote, or network Git command is exposed.
+- Added disposable-repository tests that compare every repository byte before and after dry-run.
+- Added a clean read-only browser fallback when the Tauri command runtime is unavailable.
 
 ## Not Completed
 
-- No site-wide visual redesign, server rendering change, repository publishing, remote write, PR, merge to `main`, tag, release, or deployment.
-- A staged media `filePath` is still not converted into a browser URL; images without an explicit safe preview source retain the deliberate placeholder treatment.
+- No local content branch was created by the application, and no repository file was written, staged, or committed.
+- No bundle export, GitHub access, PR, merge to `main`, tag, release, deployment, or website build was performed.
+- Existing targets are reported as conflicts; safe editing/rollback belongs to Stage-07A2.
 
 ## Test Summary
 
-- `npm.cmd run check`: PASS.
-- Focused preview suites: PASS; 3 files, 20 tests.
-- `npm.cmd test`: PASS; desktop Vitest 17 files, 137 tests, plus root/schema/render checks.
-- `npm.cmd run build:next`: PASS.
-- `npm.cmd run desktop:frontend:build`: PASS.
-- `git diff --check`: PASS.
-- Native `npm.cmd run tauri:dev` smoke: PASS; the workbench root screen loaded successfully.
+- Locked dependency install: PASS; 659 packages.
+- Desktop TypeScript/ESLint check: PASS.
+- Desktop Vitest: PASS; 19 files, 142 tests before the final browser fallback; final affected suites PASS, 3 files, 9 tests.
+- Rust tests: PASS; 26 tests, including 5 repository dry-run tests.
+- Rust format and Clippy with warnings denied: PASS.
+- Desktop frontend production build: PASS.
+- Browser layout smoke: PASS at 1280px and 390px; no horizontal overflow or console errors.
+- Git whitespace check: PASS.
 
 ## Known Issues
 
-- Windows capture/input automation cannot inspect this WebView2 window after launch: `SetIsBorderRequired failed (0x80004002)`. The native smoke itself succeeded; do not retry that automation path.
-- The existing non-fatal Next.js missing-pages notice and Vite chunk-size warning remain outside this stage's changes.
+- Browser-only Vite cannot invoke native repository diagnostics and intentionally shows an empty read-only draft state.
+- The existing non-fatal Vite chunk-size and ESLint missing-pages notices remain.
 
 ## Next Stage Exact Start
 
-- Start from the clean, verified Stage-06B2 delivery tip and bundle.
-- Execute `28_Stage7A1_仓库诊断与导出DryRun.md`.
+- Start from the clean, verified Stage-07A1 delivery tip and bundle.
+- Execute `29_Stage7A2_本地分支写入与提交.md`.
 
 ## Do Not Repeat
 
-- Do not derive a browser image URL directly from `Media.filePath` or `StagedImage.targetPath`.
-- Do not weaken the Markdown-to-React rendering boundary or use raw HTML injection.
-- Use `npm.cmd` under the current PowerShell policy.
-- Do not retry WebView2 capture/input automation for the native smoke; use launch confirmation only unless the capture layer is repaired.
+- Do not add repository writes or execute the proposed Git operations in Stage-07A1.
+- Do not retry an inline/data-URL browser report harness; the in-app Browser security policy blocks it.
+- Do not run the full website build unless website or shared code changes in a later checkpoint.
+- Use `npm.cmd` under the current PowerShell policy and do not perform remote Git operations.
