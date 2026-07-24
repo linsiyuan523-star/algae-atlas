@@ -45,7 +45,8 @@ UI smoke:
 
 Boundary:
 - Root website checks and website production build: NOT RUN
-- No repository export write, branch creation, staging, commit, bundle, remote write, PR, merge, tag, release, or deployment
+- Application operations: no repository export write, branch creation, staging, commit, content bundle, remote write, PR, merge, tag, release, or deployment
+- Development handoff bundle: created and verified externally after the final clean stage commit
 
 Known non-blocking notices:
 - Existing Vite chunk-size warning

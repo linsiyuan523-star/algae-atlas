@@ -14,7 +14,7 @@
 
 ## Not Completed
 
-- No repository write, local content branch, staging, commit, bundle, remote action, PR, merge, tag, release, or deployment.
+- No application-driven repository write, local content branch, staging, commit, content bundle, remote action, PR, merge, tag, release, or deployment. The development handoff bundle is external stage packaging.
 - Existing-target updates and rollback are deferred to Stage-07A2.
 
 ## Test Summary

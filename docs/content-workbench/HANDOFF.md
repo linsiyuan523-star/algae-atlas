@@ -19,7 +19,7 @@
 ## Not Completed
 
 - No local content branch was created by the application, and no repository file was written, staged, or committed.
-- No bundle export, GitHub access, PR, merge to `main`, tag, release, deployment, or website build was performed.
+- No application-driven content bundle export, GitHub access, PR, merge to `main`, tag, release, deployment, or website build was performed. The development handoff bundle is produced externally after the clean stage commit.
 - Existing targets are reported as conflicts; safe editing/rollback belongs to Stage-07A2.
 
 ## Test Summary
