@@ -2714,6 +2714,10 @@ mod tests {
     const RECORD_ID: &str = "fictional-dry-run";
     const DRAFT_ID: &str = "11111111-1111-4111-8111-111111111111";
     const IMAGE_ID: &str = "22222222-2222-4222-8222-222222222222";
+    const ACCEPTANCE_RECORD_ID: &str = "stage-08c-team-news";
+    const ACCEPTANCE_DRAFT_ID: &str = "33333333-3333-4333-8333-333333333333";
+    const ACCEPTANCE_COVER_ID: &str = "44444444-4444-4444-8444-444444444444";
+    const ACCEPTANCE_BODY_ID: &str = "55555555-5555-4555-8555-555555555555";
 
     fn git(root: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
@@ -2809,6 +2813,161 @@ mod tests {
                 path: image_path,
                 staged_name: format!("{IMAGE_ID}.webp"),
             }],
+            confirmed: true,
+        }
+    }
+
+    fn acceptance_local_commit_request(root: &Path) -> RepositoryLocalCommitRequest {
+        let record_root = format!("content/records/team-news/{ACCEPTANCE_RECORD_ID}");
+        let record_path = format!("{record_root}/record.json");
+        let body_path = format!("{record_root}/zh.md");
+        let cover_metadata_path = format!("content/media/{ACCEPTANCE_COVER_ID}.json");
+        let body_metadata_path = format!("content/media/{ACCEPTANCE_BODY_ID}.json");
+        let cover_path = format!("public/images/uploads/2026/07/{ACCEPTANCE_COVER_ID}.webp");
+        let cover_thumbnail_path =
+            format!("public/images/uploads/2026/07/{ACCEPTANCE_COVER_ID}.thumbnail.webp");
+        let body_image_path = format!("public/images/uploads/2026/07/{ACCEPTANCE_BODY_ID}.webp");
+        let record = serde_json::json!({
+            "schemaVersion": 1,
+            "id": ACCEPTANCE_RECORD_ID,
+            "type": "team-news",
+            "createdAt": "2026-07-24T09:30:00+08:00",
+            "updatedAt": "2026-07-24T09:30:00+08:00",
+            "authors": ["stage-08c-author"],
+            "tags": ["offline-acceptance"],
+            "media": [ACCEPTANCE_COVER_ID, ACCEPTANCE_BODY_ID],
+            "shared": {
+                "eventDate": "2026-07-24",
+                "locationLabel": { "zh": "离线验收环境" },
+                "category": "research",
+                "pinned": false,
+                "coverMediaId": ACCEPTANCE_COVER_ID,
+                "galleryMediaIds": [],
+                "relatedContentIds": [],
+                "participantAuthorIds": [],
+                "sources": [{
+                    "id": "stage-08c-source",
+                    "kind": "other",
+                    "title": "Stage 8C 本地验收记录",
+                    "verificationStatus": "pending"
+                }],
+                "disclosureStatus": "approved"
+            },
+            "locales": {
+                "zh": {
+                    "state": "approved",
+                    "title": "Stage 8C 中文团队动态验收",
+                    "summary": "验证离线内容发布候选流程。",
+                    "bodyFile": "zh.md",
+                    "fields": {
+                        "participantDescription": "仅包含虚构验收数据。",
+                        "captions": {}
+                    },
+                    "translationOrigin": "source-authored",
+                    "review": {
+                        "status": "reviewed",
+                        "updatedAt": "2026-07-24",
+                        "reviewedAt": "2026-07-24",
+                        "version": "1.0",
+                        "reviewerIds": ["stage-08c-reviewer"],
+                        "references": []
+                    }
+                },
+                "en": { "state": "missing" }
+            }
+        });
+        let media_contents = |id: &str, path: &str, alt: &str| {
+            let value = serde_json::json!({
+                "schemaVersion": 1,
+                "id": id,
+                "filePath": path,
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "mimeType": "image/webp",
+                "bytes": 9,
+                "width": 1200,
+                "height": 800,
+                "uploadedAt": "2026-07-24T09:30:00+08:00",
+                "creatorOrProvider": "Stage 8C acceptance author",
+                "license": {
+                    "identifier": "team-owned",
+                    "name": "Stage 8C offline acceptance fixture",
+                    "attribution": "Stage 8C acceptance author",
+                    "usageScope": "public-site"
+                },
+                "rightsStatus": "approved",
+                "identificationStatus": "not-applicable",
+                "identifiablePeople": false,
+                "consentState": "not-applicable",
+                "alt": { "zh": alt },
+                "relatedContentIds": [],
+                "legacy": false
+            });
+            format!("{}\n", serde_json::to_string_pretty(&value).unwrap())
+        };
+
+        RepositoryLocalCommitRequest {
+            plan: RepositoryDryRunRequest {
+                repository_path: root.to_string_lossy().into_owned(),
+                record_id: ACCEPTANCE_RECORD_ID.to_owned(),
+                content_type: "team-news".to_owned(),
+                branch_name: format!("content/20260724-{ACCEPTANCE_RECORD_ID}"),
+                content_targets: vec![
+                    record_path.clone(),
+                    body_path.clone(),
+                    cover_metadata_path.clone(),
+                    body_metadata_path.clone(),
+                ],
+                image_targets: vec![
+                    cover_path.clone(),
+                    cover_thumbnail_path.clone(),
+                    body_image_path.clone(),
+                ],
+            },
+            expected_head_sha: git(root, &["rev-parse", "HEAD"]),
+            expected_base_branch: git(root, &["branch", "--show-current"]),
+            draft_id: ACCEPTANCE_DRAFT_ID.to_owned(),
+            text_files: vec![
+                RepositoryTextFile {
+                    path: record_path,
+                    contents: format!("{}\n", serde_json::to_string_pretty(&record).unwrap()),
+                },
+                RepositoryTextFile {
+                    path: body_path,
+                    contents: format!(
+                        "## Stage 8C 离线发布验收\n\n正文只包含虚构数据。\n\n![Stage 8C 中文正文验收图](media:{ACCEPTANCE_BODY_ID})\n"
+                    ),
+                },
+                RepositoryTextFile {
+                    path: cover_metadata_path,
+                    contents: media_contents(
+                        ACCEPTANCE_COVER_ID,
+                        &cover_path,
+                        "Stage 8C 中文封面验收图",
+                    ),
+                },
+                RepositoryTextFile {
+                    path: body_metadata_path,
+                    contents: media_contents(
+                        ACCEPTANCE_BODY_ID,
+                        &body_image_path,
+                        "Stage 8C 中文正文验收图",
+                    ),
+                },
+            ],
+            image_files: vec![
+                RepositoryImageFile {
+                    path: cover_path,
+                    staged_name: format!("{ACCEPTANCE_COVER_ID}.webp"),
+                },
+                RepositoryImageFile {
+                    path: cover_thumbnail_path,
+                    staged_name: format!("{ACCEPTANCE_COVER_ID}.thumbnail.webp"),
+                },
+                RepositoryImageFile {
+                    path: body_image_path,
+                    staged_name: format!("{ACCEPTANCE_BODY_ID}.webp"),
+                },
+            ],
             confirmed: true,
         }
     }
@@ -3224,6 +3383,115 @@ mod tests {
             ),
             commit.commit_sha
         );
+        assert!(git(&integration_root, &["status", "--short"]).is_empty());
+    }
+
+    #[test]
+    fn stage_8c_team_news_candidate_commits_bundles_and_imports_offline() {
+        let (temporary, root) = repository_fixture();
+        let publisher = RepositoryPublisher::new(temporary.path().join("publication-staging"));
+        let request = acceptance_local_commit_request(&root);
+        let base_commit = request.expected_head_sha.clone();
+        let commit = publish_local_commit(
+            &publisher,
+            request,
+            |draft_id, staged_name| {
+                assert_eq!(draft_id, ACCEPTANCE_DRAFT_ID);
+                assert!(matches!(
+                    staged_name,
+                    name if name == format!("{ACCEPTANCE_COVER_ID}.webp")
+                        || name == format!("{ACCEPTANCE_COVER_ID}.thumbnail.webp")
+                        || name == format!("{ACCEPTANCE_BODY_ID}.webp")
+                ));
+                Ok(format!("RIFF-{staged_name}-WEBP").into_bytes())
+            },
+            PublishFault::None,
+        )
+        .expect("commits Stage 8C content candidate");
+
+        assert_eq!(commit.previous_head_sha, base_commit);
+        assert_eq!(commit.committed_paths.len(), 7);
+        assert_eq!(git(&root, &["rev-list", "--count", "main..HEAD"]), "1");
+        assert!(git(&root, &["status", "--short"]).is_empty());
+        assert!(!root
+            .join(format!(
+                "content/records/team-news/{ACCEPTANCE_RECORD_ID}/en.md"
+            ))
+            .exists());
+
+        let usb_root = temporary.path().join("usb");
+        fs::create_dir(&usb_root).expect("creates acceptance USB parent");
+        let destination = usb_root.join("stage-08c-content-candidate");
+        let preflight_request = RepositoryBundlePreflightRequest {
+            repository_path: root.to_string_lossy().into_owned(),
+            destination_directory: destination.to_string_lossy().into_owned(),
+        };
+        let preflight = inspect_repository_bundle(preflight_request.clone())
+            .expect("preflights Stage 8C bundle");
+        assert!(preflight.ready, "{:#?}", preflight.conflicts);
+        assert_eq!(preflight.changed_files.len(), 7);
+
+        let result = export_repository_bundle(
+            &publisher,
+            RepositoryBundleExportRequest {
+                repository_path: preflight_request.repository_path,
+                destination_directory: preflight_request.destination_directory,
+                expected_branch_name: commit.branch_name.clone(),
+                expected_head_sha: commit.commit_sha.clone(),
+                confirmed: true,
+            },
+        )
+        .expect("exports Stage 8C bundle");
+        assert_eq!(
+            result.bundle_file_name,
+            "content-20260724-stage-08c-team-news-v1.bundle"
+        );
+        assert_eq!(result.artifact_names.len(), 7);
+
+        let (_integration_temporary, integration_root) = repository_fixture();
+        let integration_head = git(&integration_root, &["rev-parse", "HEAD"]);
+        let imported = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                destination
+                    .join("Import-Bundle.ps1")
+                    .to_string_lossy()
+                    .as_ref(),
+                "-RepositoryPath",
+                integration_root.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .expect("runs Stage 8C import script");
+        assert!(
+            imported.status.success(),
+            "{}",
+            String::from_utf8_lossy(&imported.stderr)
+        );
+        assert_eq!(
+            git(&integration_root, &["rev-parse", "HEAD"]),
+            integration_head
+        );
+        let imported_ref = format!("refs/heads/{}", result.import_branch_name);
+        assert_eq!(
+            git(&integration_root, &["rev-parse", "--verify", &imported_ref]),
+            commit.commit_sha
+        );
+        let imported_paths = git(
+            &integration_root,
+            &["ls-tree", "-r", "--name-only", &imported_ref],
+        );
+        assert!(imported_paths.contains(&format!(
+            "content/records/team-news/{ACCEPTANCE_RECORD_ID}/zh.md"
+        )));
+        assert!(imported_paths.contains(&format!(
+            "public/images/uploads/2026/07/{ACCEPTANCE_COVER_ID}.thumbnail.webp"
+        )));
+        assert!(!imported_paths.contains(&format!(
+            "content/records/team-news/{ACCEPTANCE_RECORD_ID}/en.md"
+        )));
         assert!(git(&integration_root, &["status", "--short"]).is_empty());
     }
 
