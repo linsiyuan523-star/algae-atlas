@@ -1,5 +1,6 @@
 mod drafts;
 mod media;
+mod repository;
 mod session;
 
 use tauri::Manager;
@@ -33,6 +34,7 @@ pub fn run() {
             media::stage_image,
             media::list_staged_images,
             media::save_image_metadata,
+            repository::repository_export_dry_run,
             session::take_recovery_draft,
         ])
         .build(tauri::generate_context!())

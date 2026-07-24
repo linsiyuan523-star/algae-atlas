@@ -59,6 +59,23 @@ export const tauriDraftApi: DraftApi = {
   },
 };
 
+export const unavailableDraftApi: DraftApi = {
+  createDraft: async () => {
+    throw new Error("草稿创建仅在桌面应用中可用。");
+  },
+  listDrafts: async () => [],
+  openDraft: async () => {
+    throw new Error("草稿读取仅在桌面应用中可用。");
+  },
+  saveDraft: async () => {
+    throw new Error("草稿保存仅在桌面应用中可用。");
+  },
+  deleteDraft: async () => {
+    throw new Error("草稿删除仅在桌面应用中可用。");
+  },
+  takeRecoveryDraft: async () => null,
+};
+
 export function normalizeStoredDraft(input: unknown): Draft {
   const stored = asRecord(input);
   if (

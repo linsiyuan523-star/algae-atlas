@@ -202,7 +202,7 @@ export function imagePublicationIssues(
     issues.push("可识别人物照片必须确认同意并填写非敏感授权引用。");
   }
 
-  const parsed = parseMedia(mediaCandidate(image));
+  const parsed = parseMedia(createMediaRecordCandidate(image));
   if (!parsed.success) {
     issues.push(...parsed.issues.map((issue) => issue.message));
   }
@@ -276,7 +276,7 @@ export function appendBodyImage(markdown: string, image: StagedImage): string {
   return `${prefix}${prefix ? "\n\n" : ""}![${alt}](media:${image.id})\n`;
 }
 
-function mediaCandidate(image: StagedImage): unknown {
+export function createMediaRecordCandidate(image: StagedImage): unknown {
   const metadata = image.metadata;
   const alt = {
     zh: metadata.altZh.trim(),

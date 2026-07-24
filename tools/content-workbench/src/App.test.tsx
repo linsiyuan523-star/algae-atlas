@@ -77,7 +77,6 @@ test("switches between all workbench pages", async () => {
   for (const [title, emptyState] of [
     ["已提交", "目前没有已提交内容。"],
     ["设置", "当前没有可配置项。"],
-    ["诊断", "当前没有诊断信息。"],
   ] as const) {
     const navigationButton = within(navigation).getByRole("button", { name: title });
     await user.click(navigationButton);
@@ -86,6 +85,14 @@ test("switches between all workbench pages", async () => {
     expect(screen.getByRole("heading", { name: title, level: 2 })).toBeVisible();
     expect(screen.getByText(emptyState)).toBeVisible();
   }
+
+  const repositoryButton = within(navigation).getByRole("button", {
+    name: "仓库导出",
+  });
+  await user.click(repositoryButton);
+  expect(repositoryButton).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("heading", { name: "仓库导出", level: 2 })).toBeVisible();
+  expect(await screen.findByText("目前没有可导出的草稿。")).toBeVisible();
 });
 
 test("creates a shared-schema draft and opens it in the drafts page", async () => {
@@ -134,4 +141,15 @@ test("offers the most recent draft once after an interrupted session", async () 
   expect(screen.queryByRole("status", { name: "异常恢复" })).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "草稿箱", level: 2 })).toBeVisible();
   expect(screen.getByDisplayValue("待恢复草稿")).toBeVisible();
+});
+
+test("uses read-only browser fallbacks when Tauri is unavailable", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "仓库导出" }));
+
+  expect(await screen.findByText("目前没有可导出的草稿。")).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });

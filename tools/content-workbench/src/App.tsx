@@ -1,8 +1,8 @@
 import {
-  Activity,
   Archive,
   FilePlus2,
   Files,
+  GitBranch,
   Inbox,
   RotateCcw,
   Settings,
@@ -11,10 +11,16 @@ import {
 import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { DraftsPage, NewDraftPage } from "./components/DraftPages";
-import { inspectDraft, tauriDraftApi } from "./drafts";
+import { RepositoryExportPage } from "./components/RepositoryExportPage";
+import { inspectDraft, tauriDraftApi, unavailableDraftApi } from "./drafts";
 import type { Draft, DraftApi } from "./drafts";
 import { tauriMediaApi, unavailableMediaApi } from "./media";
 import type { MediaApi } from "./media";
+import {
+  tauriRepositoryApi,
+  unavailableRepositoryApi,
+} from "./repository";
+import type { RepositoryApi } from "./repository";
 
 const APP_VERSION = "0.1.0";
 
@@ -42,10 +48,9 @@ const navigationItems = [
     icon: Settings,
   },
   {
-    id: "diagnostics",
-    label: "诊断",
-    emptyState: "当前没有诊断信息。",
-    icon: Activity,
+    id: "repository-export",
+    label: "仓库导出",
+    icon: GitBranch,
   },
 ] as const;
 
@@ -54,12 +59,12 @@ type SectionId = (typeof navigationItems)[number]["id"];
 const staticEmptyStates: Partial<Record<SectionId, string>> = {
   submitted: "目前没有已提交内容。",
   settings: "当前没有可配置项。",
-  diagnostics: "当前没有诊断信息。",
 };
 
 type AppProps = {
   draftApi?: DraftApi;
   mediaApi?: MediaApi;
+  repositoryApi?: RepositoryApi;
 };
 
 const recoveryRequests = new WeakMap<DraftApi, Promise<Draft | null>>();
@@ -74,9 +79,18 @@ function takeRecoveryDraftOnce(draftApi: DraftApi) {
   return request;
 }
 
-export default function App({ draftApi = tauriDraftApi, mediaApi }: AppProps) {
+export default function App({
+  draftApi,
+  mediaApi,
+  repositoryApi,
+}: AppProps) {
+  const activeDraftApi =
+    draftApi ?? (isTauri() ? tauriDraftApi : unavailableDraftApi);
   const activeMediaApi =
     mediaApi ?? (isTauri() ? tauriMediaApi : unavailableMediaApi);
+  const activeRepositoryApi =
+    repositoryApi ??
+    (isTauri() ? tauriRepositoryApi : unavailableRepositoryApi);
   const [activeSection, setActiveSection] = useState<SectionId>("new-content");
   const [initialDraft, setInitialDraft] = useState<Draft | null>(null);
   const [recoveryDraft, setRecoveryDraft] = useState<Draft | null>(null);
@@ -87,7 +101,7 @@ export default function App({ draftApi = tauriDraftApi, mediaApi }: AppProps) {
   useEffect(() => {
     let isCurrent = true;
 
-    takeRecoveryDraftOnce(draftApi)
+    takeRecoveryDraftOnce(activeDraftApi)
       .then((candidate) => {
         if (isCurrent) {
           setRecoveryDraft(candidate);
@@ -102,7 +116,7 @@ export default function App({ draftApi = tauriDraftApi, mediaApi }: AppProps) {
     return () => {
       isCurrent = false;
     };
-  }, [draftApi]);
+  }, [activeDraftApi]);
 
   function handleDraftCreated(draft: Draft) {
     setInitialDraft(draft);
@@ -186,12 +200,18 @@ export default function App({ draftApi = tauriDraftApi, mediaApi }: AppProps) {
         <section className="workspace-page" aria-labelledby="workspace-title">
           <h2 id="workspace-title">{activeItem.label}</h2>
           {activeSection === "new-content" ? (
-            <NewDraftPage api={draftApi} onCreated={handleDraftCreated} />
+            <NewDraftPage api={activeDraftApi} onCreated={handleDraftCreated} />
           ) : activeSection === "drafts" ? (
             <DraftsPage
-              api={draftApi}
+              api={activeDraftApi}
               mediaApi={activeMediaApi}
               initialDraft={initialDraft}
+            />
+          ) : activeSection === "repository-export" ? (
+            <RepositoryExportPage
+              draftApi={activeDraftApi}
+              mediaApi={activeMediaApi}
+              repositoryApi={activeRepositoryApi}
             />
           ) : (
             <div className="empty-state" role="status">
