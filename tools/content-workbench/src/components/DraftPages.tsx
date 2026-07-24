@@ -3,9 +3,11 @@ import {
   CircleAlert,
   Clock3,
   Copy,
+  Eye,
   FilePlus2,
   Files,
   LoaderCircle,
+  PenLine,
   RefreshCw,
   Save,
   Trash2,
@@ -21,6 +23,7 @@ import { getEnglishContentFormAdapter } from "../forms/english-locale";
 import { sameFormValues } from "../forms/form-engine";
 import type {
   FormErrors,
+  FormSchemaDefinition,
   FormValue,
   FormValues,
 } from "../forms/form-engine";
@@ -58,6 +61,8 @@ import type {
   LocaleWorkflowInput,
 } from "../locale-workflow";
 import { ArticleEditor } from "./ArticleEditor";
+import { DetailPreview } from "./DetailPreview";
+import type { DetailPreviewValue } from "./DetailPreview";
 import { LocaleWorkflowFields } from "./LocaleWorkflowFields";
 import { SchemaForm } from "./SchemaForm";
 
@@ -396,6 +401,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"delete" | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"edit" | "preview">("edit");
   const editorInputRef = useRef(editorInput);
   const recordDraftRef = useRef(draft.recordDraft);
   const saveInFlightRef = useRef(false);
@@ -964,6 +970,42 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   const fields = editorInput.fields;
   const activeFormAdapter = getContentFormAdapter(fields.contentType);
   const activeEnglishAdapter = getEnglishContentFormAdapter(fields.contentType);
+  const contentTypeOption = contentTypeOptions.find(
+    (option) => option.value === fields.contentType,
+  );
+  const previewValue: DetailPreviewValue = {
+    contentType: {
+      zh: contentTypeOption?.labelZh ?? "未知内容类型",
+      en: contentTypeOption?.labelEn ?? "Unknown content type",
+    },
+    authors: previewAuthorIds(
+      draft.recordDraft,
+      activeFormAdapter?.schema,
+      editorInput.contentForm,
+    ),
+    locales: {
+      zh: {
+        title: fields.titleZh,
+        summary: stringFormValue(editorInput.contentForm.summaryZh),
+        body: editorInput.bodyZh,
+        state: editorInput.zhWorkflow.state,
+        reviewStatus: editorInput.zhWorkflow.reviewStatus,
+        timestamp: editorInput.zhWorkflow.publishedAt || draft.updatedAt,
+        isPublished: editorInput.zhWorkflow.state === "published",
+      },
+      en: editorInput.enWorkflow
+        ? {
+            title: stringFormValue(editorInput.englishForm.titleEn),
+            summary: stringFormValue(editorInput.englishForm.summaryEn),
+            body: editorInput.bodyEn,
+            state: editorInput.enWorkflow.state,
+            reviewStatus: editorInput.enWorkflow.reviewStatus,
+            timestamp: editorInput.enWorkflow.publishedAt || draft.updatedAt,
+            isPublished: editorInput.enWorkflow.state === "published",
+          }
+        : null,
+    },
+  };
 
   return (
     <form className="draft-editor" onSubmit={(event) => void handleSave(event)}>
@@ -977,17 +1019,37 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
               : SHARED_SCHEMA_VERSION}
           </p>
         </div>
-        <button
-          className="danger-button"
-          type="button"
-          disabled={isBusy}
-          onClick={() => void handleDelete()}
-        >
-          <Trash2 aria-hidden="true" size={17} />
-          {pendingAction === "delete" ? "正在删除..." : "删除"}
-        </button>
+        <div className="draft-editor-heading-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            aria-pressed={viewMode === "preview"}
+            disabled={isBusy}
+            onClick={() =>
+              setViewMode((current) => current === "edit" ? "preview" : "edit")
+            }
+          >
+            {viewMode === "edit" ? (
+              <Eye aria-hidden="true" size={17} />
+            ) : (
+              <PenLine aria-hidden="true" size={17} />
+            )}
+            {viewMode === "edit" ? "预览详情页" : "返回编辑"}
+          </button>
+          <button
+            className="danger-button"
+            type="button"
+            disabled={isBusy}
+            onClick={() => void handleDelete()}
+          >
+            <Trash2 aria-hidden="true" size={17} />
+            {pendingAction === "delete" ? "正在删除..." : "删除"}
+          </button>
+        </div>
       </div>
 
+      {viewMode === "edit" ? (
+        <>
       <div className="field-group">
         <label htmlFor="draft-content-type">内容类型</label>
         <select
@@ -1136,6 +1198,10 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
           />
         </section>
       ) : null}
+        </>
+      ) : (
+        <DetailPreview value={previewValue} />
+      )}
 
       <dl className="draft-metadata">
         <div>
@@ -1333,6 +1399,38 @@ function EnglishMediaTextPlaceholders({
       </div>
     </fieldset>
   );
+}
+
+function previewAuthorIds(
+  recordDraft: unknown,
+  schema: FormSchemaDefinition | undefined,
+  values: FormValues,
+) {
+  const authorFields = schema?.sections
+    .flatMap((section) => section.fields)
+    .filter((field) => /^authors(?:\[\d+\])?$/.test(field.path)) ?? [];
+  if (authorFields.length > 0) {
+    return [...new Set(
+      authorFields
+        .map((field) => stringFormValue(values[field.id]).trim())
+        .filter(Boolean),
+    )];
+  }
+
+  const record = asRecord(recordDraft);
+  return Array.isArray(record?.authors)
+    ? [...new Set(record.authors.filter((value): value is string => typeof value === "string"))]
+    : [];
+}
+
+function stringFormValue(value: FormValue | undefined) {
+  return typeof value === "string" ? value : "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function sameSaveInput(left: DraftFields, right: DraftFields) {
