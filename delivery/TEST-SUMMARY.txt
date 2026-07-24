@@ -1,15 +1,15 @@
-Stage: Stage-07A1
+Stage: Stage-07A2
 Status: PASS
 ValidatedAt: 2026-07-24
-Branch: local/stage-07a1-repo-dryrun
-StartCommit: 6a40821db4d2aebd8c29e8695f7d1194e22dcee5
-FeatureCommit: 56c4104d1ba94c43d744512d830061bc1d639a2d
+Branch: local/stage-07a2-local-commit
+StartCommit: f745c49ce54cb77dec23d5856c4bdd0a34251afe
+FeatureCommit: e632f4f
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Prerequisite:
-- Stage-06B2 bundle SHA256: PASS
-- Stage-06B2 bundle verify: PASS; complete history
-- Stage-06A2 ancestor in Stage-06B2: PASS
+- Stage-07A1 USB bundle SHA256: PASS
+- Stage-07A1 bundle verify: PASS; complete history
+- Stage-07A1 bundle head: f745c49ce54cb77dec23d5856c4bdd0a34251afe
 - Worker remotes: NONE
 
 Environment:
@@ -20,34 +20,38 @@ Environment:
 - npm.cmd ci --prefer-offline --no-audit --no-fund: PASS; 659 packages
 
 Required checks:
-- npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
-- Focused Stage-07A1 Vitest: PASS; 4 files, 13 tests
-- Desktop Vitest: PASS; 19 files, 142 tests
-- Final affected Vitest after browser fallback: PASS; 3 files, 9 tests
-- cargo test --locked --all-targets: PASS; 26 tests
-- Repository dry-run Rust tests: PASS; 5 tests
+- npm.cmd run desktop:check: PASS
+- Focused Stage-07A2 Vitest: PASS; 2 files, 6 tests
+- npm.cmd run desktop:test: PASS; scaffold 1 test; Vitest 19 files, 144 tests
+- Focused repository Rust tests: PASS; 9 tests
+- cargo test --locked --all-targets: PASS; 30 tests
 - cargo fmt --check: PASS
 - cargo clippy --all-targets -- -D warnings: PASS
 - npm.cmd run desktop:frontend:build: PASS
 - git diff --check: PASS
 
-Zero-write evidence:
-- Temporary clean repository full byte snapshot: unchanged
-- Temporary conflicting repository full byte snapshot: unchanged
-- Non-repository directory full byte snapshot: unchanged
-- HEAD and clean status after successful dry-run: unchanged
-- Dirty sentinel after conflicting dry-run: preserved
+Transactional evidence:
+- Success: one content branch and one content commit; main remained at the original SHA
+- Exact planned files only: PASS; every staged blob matched prepared bytes
+- Existing target conflict: PASS; full repository snapshot unchanged
+- Injected failure after staging: PASS; original branch, HEAD, index, files, and clean status restored
+- Operation-created branch and application staging directory removed after failure: PASS
+- Protected main target: PASS; rejected before any write
+- Worker remote block and post-commit remote recheck: PASS
+- Git clean filters rejected; hooks and commit signing disabled for the controlled commit
 
 UI smoke:
 - In-app Browser desktop width 1280: PASS; no horizontal overflow
-- In-app Browser mobile width 390: PASS; no horizontal overflow
-- Browser console errors/warnings after fallback: NONE
+- In-app Browser mobile width 390: PASS; all five navigation items inside viewport
+- Browser console warnings/errors: NONE
+- Native confirmation and commit result: PASS via component and disposable-repository tests
 
 Boundary:
 - Root website checks and website production build: NOT RUN
-- Application operations: no repository export write, branch creation, staging, commit, content bundle, remote write, PR, merge, tag, release, or deployment
-- Development handoff bundle: created and verified externally after the final clean stage commit
+- Content bundle export: NOT RUN; belongs to Stage-07A3
+- Remote Git, GitHub, PR, merge, tag, release, and deployment: NOT RUN
 
 Known non-blocking notices:
 - Existing Vite chunk-size warning
 - Existing ESLint missing-pages notice
+- Windows test linker informational notice

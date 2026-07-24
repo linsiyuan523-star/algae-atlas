@@ -1,51 +1,48 @@
-# Stage 7A1 Handoff
+# Stage 7A2 Handoff
 
-- Stage: Stage-07A1 - Repository Diagnostics and Export Dry Run
-- Start commit: `6a40821db4d2aebd8c29e8695f7d1194e22dcee5`
-- Feature commit: `56c4104d1ba94c43d744512d830061bc1d639a2d`
-- End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified Stage-07A1 bundle head)
+- Stage: Stage-07A2 - Safe Local Branch Write and Commit
+- Start commit: `f745c49ce54cb77dec23d5856c4bdd0a34251afe`
+- Feature commit: `e632f4f` (`feat: add safe local content commit workflow`)
+- End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the clean Stage-07A2 branch tip)
 
 ## Completed
 
-- Added a repository-export page that selects a saved draft and an operator-provided worktree root.
-- Added read-only Tauri diagnostics for canonical Git root, branch, HEAD, status, remotes, Git/Node versions, and root project scripts.
-- Added shared-Schema dry-run results for the record, localized Markdown bodies, and referenced staged media metadata.
-- Derived exact record JSON, optional `zh.md`/`en.md`, media JSON, normalized image, and cover-thumbnail targets without exporting retained originals.
-- Added conflicts for non-repositories, dirty worktrees, remotes, detached HEAD, in-progress Git operations, existing branches/targets, case collisions, and link/reparse paths.
-- Added fixed proposed Git argument vectors for the next stage; no write, branch, staging, commit, remote, or network Git command is exposed.
-- Added disposable-repository tests that compare every repository byte before and after dry-run.
-- Added a clean read-only browser fallback when the Tauri command runtime is unavailable.
+- Added deterministic record, Markdown, media metadata, primary-image, and thumbnail publication payloads from the approved dry-run snapshot.
+- Added an explicit local-commit confirmation UI with exact new text-file contents, binary paths, target branch, progress, and final commit SHA.
+- Added a named Tauri local-commit command; no generic shell or filesystem capability was exposed.
+- Prepared every candidate in a random application-data staging directory before rechecking canonical root, HEAD, base branch, cleanliness, remotes, operation markers, branch/target collisions, and allowlists.
+- Created only `content/YYYYMMDD-<id>` branches, copied new files atomically, staged exact paths, rejected Git clean filters, disabled hooks/signing, and compared every staged blob byte-for-byte with the prepared source.
+- Verified one-parent HEAD advancement, exact committed paths, no remote, and a clean post-commit worktree.
+- Added rollback that removes only operation-created paths, unstages only planned paths, returns to the original branch/HEAD, deletes the uncommitted operation branch, and preserves unrelated state.
+- Revalidated staged media bytes and SHA-256 immediately before publication.
+- Added disposable-repository success, target-conflict, injected-failure rollback, and protected-`main` tests.
 
 ## Not Completed
 
-- No local content branch was created by the application, and no repository file was written, staged, or committed.
-- No application-driven content bundle export, GitHub access, PR, merge to `main`, tag, release, deployment, or website build was performed. The development handoff bundle is produced externally after the clean stage commit.
-- Existing targets are reported as conflicts; safe editing/rollback belongs to Stage-07A2.
+- Existing target replacement remains blocked as `TARGET_EXISTS`; this stage only creates new content safely.
+- No application-driven bundle, remote Git action, GitHub access, PR, merge, tag, release, deployment, or full website build was performed.
+- Stage-07A3 owns the content bundle export and Stage-07A checkpoint.
 
 ## Test Summary
 
-- Locked dependency install: PASS; 659 packages.
-- Desktop TypeScript/ESLint check: PASS.
-- Desktop Vitest: PASS; 19 files, 142 tests before the final browser fallback; final affected suites PASS, 3 files, 9 tests.
-- Rust tests: PASS; 26 tests, including 5 repository dry-run tests.
-- Rust format and Clippy with warnings denied: PASS.
-- Desktop frontend production build: PASS.
-- Browser layout smoke: PASS at 1280px and 390px; no horizontal overflow or console errors.
-- Git whitespace check: PASS.
+- Desktop scaffold and Vitest: PASS; 19 files, 144 tests.
+- Rust tests: PASS; 30 tests, including 9 repository tests.
+- Desktop TypeScript/ESLint check, Rust format, Rust Clippy with warnings denied, desktop frontend build, and Git whitespace check: PASS.
+- Local Browser smoke at 1280px and 390px: PASS; no horizontal overflow or console warnings/errors.
+- Full website build: NOT RUN by stage boundary.
 
 ## Known Issues
 
-- Browser-only Vite cannot invoke native repository diagnostics and intentionally shows an empty read-only draft state.
-- The existing non-fatal Vite chunk-size and ESLint missing-pages notices remain.
+- Browser-only Vite has no Tauri draft/media store and therefore shows the expected empty repository-export state; commit interaction is covered by component tests and native disposable repositories.
+- Existing non-fatal Vite chunk-size, ESLint missing-pages, and Windows linker notices remain.
 
 ## Next Stage Exact Start
 
-- Start from the clean, verified Stage-07A1 delivery tip and bundle.
-- Execute `29_Stage7A2_本地分支写入与提交.md`.
+- Start from the clean `local/stage-07a2-local-commit` branch tip produced by this handoff.
+- Execute `30_Stage7A3_Bundle导出与Stage7A检查点.md`.
 
 ## Do Not Repeat
 
-- Do not add repository writes or execute the proposed Git operations in Stage-07A1.
-- Do not retry an inline/data-URL browser report harness; the in-app Browser security policy blocks it.
-- Do not run the full website build unless website or shared code changes in a later checkpoint.
-- Use `npm.cmd` under the current PowerShell policy and do not perform remote Git operations.
+- Do not use reset, clean, stash, force deletion, or broad staging to recover a failed publication.
+- Do not retry publishing an existing target as a new-file operation.
+- Do not generate a bundle, run the full website build, or perform any remote Git operation in Stage-07A2.
