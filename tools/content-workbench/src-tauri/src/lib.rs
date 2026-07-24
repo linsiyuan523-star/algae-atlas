@@ -12,9 +12,13 @@ pub fn run() {
             let app_data_root = app.path().app_data_dir()?;
             let drafts_root = app_data_root.join("drafts").join("v1");
             let media_root = app_data_root.join("media-staging").join("v1");
+            let repository_staging_root = app_data_root.join("repository-staging").join("v1");
             let session_root = app_data_root.join("session");
             app.manage(drafts::DraftStore::new(drafts_root));
             app.manage(media::MediaStore::new(media_root));
+            app.manage(repository::RepositoryPublisher::new(
+                repository_staging_root,
+            ));
             app.manage(session::SessionState::begin(session_root)?);
             Ok(())
         })
@@ -35,6 +39,7 @@ pub fn run() {
             media::list_staged_images,
             media::save_image_metadata,
             repository::repository_export_dry_run,
+            repository::repository_local_commit,
             session::take_recovery_draft,
         ])
         .build(tauri::generate_context!())

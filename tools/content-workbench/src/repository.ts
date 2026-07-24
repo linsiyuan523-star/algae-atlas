@@ -3,6 +3,8 @@ import {
   CONTENT_TYPES,
   parseMedia,
   parseRecord,
+  serializeMedia,
+  serializeRecord,
   validateMarkdown,
 } from "@algae-atlas/content-schema";
 import type {
@@ -77,6 +79,34 @@ export type RepositoryDryRunResult = {
   repositoryReady: boolean;
 };
 
+export type RepositoryTextFile = {
+  path: string;
+  contents: string;
+};
+
+export type RepositoryImageFile = {
+  path: string;
+  stagedName: string;
+};
+
+export type RepositoryLocalCommitRequest = {
+  plan: RepositoryDryRunRequest;
+  expectedHeadSha: string;
+  expectedBaseBranch: string;
+  draftId: string;
+  textFiles: RepositoryTextFile[];
+  imageFiles: RepositoryImageFile[];
+  confirmed: boolean;
+};
+
+export type RepositoryLocalCommitResult = {
+  branchName: string;
+  previousHeadSha: string;
+  commitSha: string;
+  commitMessage: string;
+  committedPaths: string[];
+};
+
 export type ExportSchemaResult = {
   valid: boolean;
   issues: ValidationIssue[];
@@ -89,22 +119,33 @@ export type ExportDryRunResult = RepositoryDryRunResult & {
 
 export type RepositoryApi = {
   dryRun: (request: RepositoryDryRunRequest) => Promise<RepositoryDryRunResult>;
+  commit: (
+    request: RepositoryLocalCommitRequest,
+  ) => Promise<RepositoryLocalCommitResult>;
 };
 
 export const tauriRepositoryApi: RepositoryApi = {
   dryRun: (request) =>
     invoke<RepositoryDryRunResult>("repository_export_dry_run", { request }),
+  commit: (request) =>
+    invoke<RepositoryLocalCommitResult>("repository_local_commit", { request }),
 };
 
 export const unavailableRepositoryApi: RepositoryApi = {
   dryRun: async () => {
     throw new Error("仓库诊断仅在桌面应用中可用。");
   },
+  commit: async () => {
+    throw new Error("本地内容提交仅在桌面应用中可用。");
+  },
 };
 
 type ExportPlan = {
   request: Omit<RepositoryDryRunRequest, "repositoryPath">;
   schema: ExportSchemaResult;
+  draftId: string;
+  textFiles: RepositoryTextFile[];
+  imageFiles: RepositoryImageFile[];
 };
 
 export async function runRepositoryExportDryRun(
@@ -124,6 +165,49 @@ export async function runRepositoryExportDryRun(
     schema: plan.schema,
     ready: repository.repositoryReady && plan.schema.valid,
   };
+}
+
+export async function runRepositoryLocalCommit(
+  api: RepositoryApi,
+  repositoryPath: string,
+  draft: Draft,
+  stagedImages: readonly StagedImage[],
+  dryRun: ExportDryRunResult,
+  now = new Date(),
+): Promise<RepositoryLocalCommitResult> {
+  const plan = createExportPlan(draft, stagedImages, now);
+  const expectedHeadSha = dryRun.diagnostics.headSha;
+  const expectedBaseBranch = dryRun.diagnostics.currentBranch;
+  if (
+    !dryRun.ready ||
+    !plan.schema.valid ||
+    !expectedHeadSha ||
+    !expectedBaseBranch ||
+    plan.textFiles.length !== plan.request.contentTargets.length ||
+    !samePathSet(
+      plan.request.contentTargets,
+      dryRun.contentTargets.map((target) => target.path),
+    ) ||
+    !samePathSet(
+      plan.request.imageTargets,
+      dryRun.imageTargets.map((target) => target.path),
+    )
+  ) {
+    throw new Error("预演结果已失效，请重新诊断后再提交。");
+  }
+
+  return api.commit({
+    plan: {
+      repositoryPath,
+      ...plan.request,
+    },
+    expectedHeadSha,
+    expectedBaseBranch,
+    draftId: plan.draftId,
+    textFiles: plan.textFiles,
+    imageFiles: plan.imageFiles,
+    confirmed: true,
+  });
 }
 
 export function createExportPlan(
@@ -189,8 +273,10 @@ export function createExportPlan(
     }
   }
 
-  for (const [index, image] of selectedImages.entries()) {
-    const parsed = parseMedia(createMediaRecordCandidate(image));
+  const parsedMedia = selectedImages.map((image) =>
+    parseMedia(createMediaRecordCandidate(image)),
+  );
+  for (const [index, parsed] of parsedMedia.entries()) {
     if (!parsed.success) {
       issues.push(
         ...parsed.issues.map((issue) => ({
@@ -221,6 +307,47 @@ export function createExportPlan(
       : []),
   ]);
 
+  const textFiles: RepositoryTextFile[] = [];
+  if (parsedRecord.success) {
+    textFiles.push({
+      path: `${recordRoot}/record.json`,
+      contents: serializeRecord(parsedRecord.data),
+    });
+  }
+  if (localeBodyFile(draft.recordDraft, "zh") === "zh.md") {
+    textFiles.push({
+      path: `${recordRoot}/zh.md`,
+      contents: serializeMarkdown(draft.bodyZh),
+    });
+  }
+  if (localeBodyFile(draft.recordDraft, "en") === "en.md") {
+    textFiles.push({
+      path: `${recordRoot}/en.md`,
+      contents: serializeMarkdown(draft.bodyEn),
+    });
+  }
+  for (const [index, image] of selectedImages.entries()) {
+    const parsed = parsedMedia[index];
+    if (parsed?.success) {
+      textFiles.push({
+        path: `content/media/${image.id}.json`,
+        contents: serializeMedia(parsed.data),
+      });
+    }
+  }
+
+  const imageFiles = selectedImages.flatMap<RepositoryImageFile>((image) => [
+    { path: image.targetPath, stagedName: image.stagedName },
+    ...(image.processing?.thumbnail
+      ? [
+          {
+            path: image.processing.thumbnail.targetPath,
+            stagedName: image.processing.thumbnail.stagedName,
+          },
+        ]
+      : []),
+  ]);
+
   return {
     request: {
       recordId,
@@ -233,7 +360,15 @@ export function createExportPlan(
       valid: !issues.some((issue) => issue.severity === "error"),
       issues: deduplicateIssues(issues),
     },
+    draftId: draft.draftId,
+    textFiles,
+    imageFiles,
   };
+}
+
+function serializeMarkdown(body: string) {
+  const normalized = body.replace(/\r\n?/g, "\n");
+  return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
 }
 
 function validateLocaleBody(
@@ -356,6 +491,15 @@ function localDateStamp(date: Date) {
 
 function unique(values: readonly string[]) {
   return [...new Set(values)];
+}
+
+function samePathSet(left: readonly string[], right: readonly string[]) {
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return (
+    sortedLeft.length === sortedRight.length &&
+    sortedLeft.every((value, index) => value === sortedRight[index])
+  );
 }
 
 function deduplicateIssues(issues: readonly ValidationIssue[]) {

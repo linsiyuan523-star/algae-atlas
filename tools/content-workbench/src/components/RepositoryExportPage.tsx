@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   FileText,
+  GitCommitHorizontal,
   Image as ImageIcon,
   Inbox,
   LoaderCircle,
@@ -11,15 +12,20 @@ import {
 import { useEffect, useState } from "react";
 import { inspectDraft } from "../drafts";
 import type { Draft, DraftApi } from "../drafts";
-import type { MediaApi } from "../media";
+import type { MediaApi, StagedImage } from "../media";
 import {
+  createExportPlan,
   runRepositoryExportDryRun,
+  runRepositoryLocalCommit,
 } from "../repository";
 import type {
   ExportDryRunResult,
   PlannedGitOperation,
   PlannedTarget,
   RepositoryApi,
+  RepositoryImageFile,
+  RepositoryLocalCommitResult,
+  RepositoryTextFile,
 } from "../repository";
 
 type RepositoryExportPageProps = {
@@ -27,6 +33,12 @@ type RepositoryExportPageProps = {
   mediaApi: MediaApi;
   repositoryApi: RepositoryApi;
   now?: () => Date;
+};
+
+type PreparedCommit = {
+  draft: Draft;
+  images: StagedImage[];
+  plannedAt: Date;
 };
 
 export function RepositoryExportPage({
@@ -41,6 +53,11 @@ export function RepositoryExportPage({
   const [result, setResult] = useState<ExportDryRunResult | null>(null);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
   const [running, setRunning] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [prepared, setPrepared] = useState<PreparedCommit | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const [commitResult, setCommitResult] =
+    useState<RepositoryLocalCommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -86,24 +103,66 @@ export function RepositoryExportPage({
     setRunning(true);
     setError(null);
     setResult(null);
+    setPrepared(null);
+    setConfirmed(false);
+    setCommitResult(null);
     try {
       const draft = await draftApi.openDraft(selectedDraftId);
       const images = await mediaApi.listImages(selectedDraftId);
-      setResult(
-        await runRepositoryExportDryRun(
-          repositoryApi,
-          selectedPath,
-          draft,
-          images,
-          now(),
-        ),
+      const plannedAt = now();
+      const nextResult = await runRepositoryExportDryRun(
+        repositoryApi,
+        selectedPath,
+        draft,
+        images,
+        plannedAt,
       );
+      setResult(nextResult);
+      setPrepared({ draft, images, plannedAt });
     } catch (caught: unknown) {
       setError(`预演失败：${describeError(caught)}`);
     } finally {
       setRunning(false);
     }
   }
+
+  async function handleCommit() {
+    if (!confirmed || !result?.ready || !prepared) {
+      setError("请先完成预演并确认本地提交内容。");
+      return;
+    }
+    setCommitting(true);
+    setError(null);
+    try {
+      setCommitResult(
+        await runRepositoryLocalCommit(
+          repositoryApi,
+          repositoryPath.trim(),
+          prepared.draft,
+          prepared.images,
+          result,
+          prepared.plannedAt,
+        ),
+      );
+      setConfirmed(false);
+    } catch (caught: unknown) {
+      setError(`本地提交失败：${describeError(caught)}`);
+    } finally {
+      setCommitting(false);
+    }
+  }
+
+  function clearPreparedResult() {
+    setResult(null);
+    setPrepared(null);
+    setConfirmed(false);
+    setCommitResult(null);
+  }
+
+  const publicationPlan = prepared
+    ? createExportPlan(prepared.draft, prepared.images, prepared.plannedAt)
+    : null;
+  const busy = running || committing;
 
   if (!loadingDrafts && drafts.length === 0 && !error) {
     return (
@@ -122,10 +181,10 @@ export function RepositoryExportPage({
           <select
             id="export-draft"
             value={selectedDraftId}
-            disabled={loadingDrafts || running}
+            disabled={loadingDrafts || busy}
             onChange={(event) => {
               setSelectedDraftId(event.target.value);
-              setResult(null);
+              clearPreparedResult();
             }}
           >
             {loadingDrafts ? <option value="">正在读取草稿...</option> : null}
@@ -143,19 +202,19 @@ export function RepositoryExportPage({
             type="text"
             value={repositoryPath}
             placeholder="D:\\project-worktree"
-            disabled={running}
+            disabled={busy}
             spellCheck={false}
             autoComplete="off"
             onChange={(event) => {
               setRepositoryPath(event.target.value);
-              setResult(null);
+              clearPreparedResult();
             }}
           />
         </div>
         <button
           className="primary-button repository-run-button"
           type="submit"
-          disabled={loadingDrafts || running || drafts.length === 0}
+          disabled={loadingDrafts || busy || drafts.length === 0}
         >
           {running ? (
             <LoaderCircle className="repository-spinner" aria-hidden="true" size={18} />
@@ -172,7 +231,109 @@ export function RepositoryExportPage({
         </p>
       ) : null}
       {result ? <DryRunReport result={result} /> : null}
+      {result?.ready && publicationPlan && !commitResult ? (
+        <LocalCommitPanel
+          branchName={publicationPlan.request.branchName}
+          textFiles={publicationPlan.textFiles}
+          imageFiles={publicationPlan.imageFiles}
+          confirmed={confirmed}
+          committing={committing}
+          onConfirmedChange={setConfirmed}
+          onCommit={handleCommit}
+        />
+      ) : null}
+      {commitResult ? <LocalCommitResult result={commitResult} /> : null}
     </div>
+  );
+}
+
+function LocalCommitPanel({
+  branchName,
+  textFiles,
+  imageFiles,
+  confirmed,
+  committing,
+  onConfirmedChange,
+  onCommit,
+}: {
+  branchName: string;
+  textFiles: RepositoryTextFile[];
+  imageFiles: RepositoryImageFile[];
+  confirmed: boolean;
+  committing: boolean;
+  onConfirmedChange: (confirmed: boolean) => void;
+  onCommit: () => void;
+}) {
+  return (
+    <section className="repository-commit-panel" aria-labelledby="local-commit-title">
+      <div className="repository-commit-heading">
+        <GitCommitHorizontal aria-hidden="true" size={21} />
+        <div>
+          <h3 id="local-commit-title">本地内容提交</h3>
+          <code>{branchName}</code>
+        </div>
+      </div>
+
+      <details className="repository-content-preview">
+        <summary>新文件内容 ({textFiles.length})</summary>
+        <div>
+          {textFiles.map((file) => (
+            <article key={file.path}>
+              <code>{file.path}</code>
+              <pre>{file.contents}</pre>
+            </article>
+          ))}
+        </div>
+      </details>
+
+      {imageFiles.length ? (
+        <ul className="repository-binary-preview" aria-label="图片写入清单">
+          {imageFiles.map((file) => (
+            <li key={file.path}>
+              <ImageIcon aria-hidden="true" size={16} />
+              <code>{file.path}</code>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <label className="repository-commit-confirmation">
+        <input
+          type="checkbox"
+          checked={confirmed}
+          disabled={committing}
+          onChange={(event) => onConfirmedChange(event.target.checked)}
+        />
+        <span>确认创建上述本地分支，并仅提交所列文件</span>
+      </label>
+      <button
+        className="primary-button repository-commit-button"
+        type="button"
+        disabled={!confirmed || committing}
+        onClick={onCommit}
+      >
+        {committing ? (
+          <LoaderCircle className="repository-spinner" aria-hidden="true" size={18} />
+        ) : (
+          <GitCommitHorizontal aria-hidden="true" size={18} />
+        )}
+        {committing ? "正在创建提交" : "创建本地提交"}
+      </button>
+    </section>
+  );
+}
+
+function LocalCommitResult({ result }: { result: RepositoryLocalCommitResult }) {
+  return (
+    <section className="repository-commit-result" role="status">
+      <CheckCircle2 aria-hidden="true" size={24} />
+      <div>
+        <strong>本地提交完成</strong>
+        <span>{result.branchName}</span>
+        <code>{result.commitSha}</code>
+        <small>{result.commitMessage}</small>
+      </div>
+    </section>
   );
 }
 

@@ -2803,6 +2803,188 @@ button:disabled {
   line-height: 1.5;
 }
 
+.repository-commit-panel {
+  display: grid;
+  gap: 16px;
+  padding: 20px 0 4px;
+  border-top: 1px solid #cbd5d0;
+}
+
+.repository-commit-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.repository-commit-heading > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: #2f6f5e;
+}
+
+.repository-commit-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.repository-commit-heading h3 {
+  margin: 0;
+  color: #203b32;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.repository-commit-heading code,
+.repository-content-preview code,
+.repository-binary-preview code,
+.repository-commit-result code {
+  overflow-wrap: anywhere;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+.repository-commit-heading code {
+  color: #53645c;
+  font-size: 12px;
+}
+
+.repository-content-preview {
+  border: 1px solid #ccd6d1;
+  border-radius: 6px;
+  background: #f9fbfa;
+}
+
+.repository-content-preview summary {
+  padding: 11px 13px;
+  color: #314a41;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.repository-content-preview > div {
+  display: grid;
+  border-top: 1px solid #d8e0dc;
+}
+
+.repository-content-preview article {
+  min-width: 0;
+  padding: 12px;
+}
+
+.repository-content-preview article + article {
+  border-top: 1px solid #d8e0dc;
+}
+
+.repository-content-preview article > code {
+  display: block;
+  margin-bottom: 8px;
+  color: #2e6254;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.repository-content-preview pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 11px;
+  overflow: auto;
+  border-radius: 4px;
+  color: #263c34;
+  background: #edf2ef;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.repository-binary-preview {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.repository-binary-preview li {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  color: #4e5f58;
+}
+
+.repository-binary-preview svg {
+  margin-top: 1px;
+  color: #426a8c;
+}
+
+.repository-binary-preview code {
+  font-size: 11px;
+}
+
+.repository-commit-confirmation {
+  width: fit-content;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  color: #354c43;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.repository-commit-confirmation input {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: #2f6f5e;
+}
+
+.repository-commit-button {
+  justify-self: start;
+}
+
+.repository-commit-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 16px;
+  border: 1px solid #9ec6b4;
+  border-radius: 6px;
+  color: #245b48;
+  background: #edf7f1;
+}
+
+.repository-commit-result > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.repository-commit-result > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.repository-commit-result strong {
+  font-size: 14px;
+}
+
+.repository-commit-result span,
+.repository-commit-result small {
+  color: #48675b;
+  font-size: 12px;
+}
+
+.repository-commit-result code {
+  color: #25483d;
+  font-size: 11px;
+}
+
 .repository-section-empty {
   margin: 0;
   color: #6d7a74;

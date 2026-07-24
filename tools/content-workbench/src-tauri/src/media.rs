@@ -250,6 +250,51 @@ impl MediaStore {
         }
     }
 
+    pub(crate) fn publication_asset(
+        &self,
+        draft_id: &str,
+        staged_name: &str,
+    ) -> Result<Vec<u8>, String> {
+        self.read_publication_asset(draft_id, staged_name)
+            .map_err(command_error)
+    }
+
+    fn read_publication_asset(&self, draft_id: &str, staged_name: &str) -> StoreResult<Vec<u8>> {
+        let draft_id = parse_uuid_v4(draft_id, MediaStoreError::InvalidDraftId)?;
+        let image_id_text = staged_name
+            .split('.')
+            .next()
+            .ok_or(MediaStoreError::InvalidFileName)?;
+        let image_id = parse_uuid_v4(image_id_text, MediaStoreError::InvalidImageId)?;
+
+        let _guard = self.lock()?;
+        let draft_root = self.prepare_draft_root(draft_id)?;
+        self.cleanup_draft_root(&draft_root, draft_id)?;
+        let image = self.read_image(&draft_root, draft_id, image_id)?;
+        let (expected_bytes, expected_sha256) = if image.staged_name == staged_name {
+            (image.bytes, image.sha256.as_str())
+        } else if let Some(thumbnail) = image
+            .processing
+            .as_ref()
+            .and_then(|processing| processing.thumbnail.as_ref())
+            .filter(|thumbnail| thumbnail.staged_name == staged_name)
+        {
+            (thumbnail.bytes, thumbnail.sha256.as_str())
+        } else {
+            return Err(MediaStoreError::UnsafePath);
+        };
+
+        let bytes = read_limited_file(
+            &draft_root,
+            &draft_root.join(staged_name),
+            MAX_IMAGE_BYTES as u64,
+        )?;
+        if bytes.len() as u64 != expected_bytes || sha256_hex(&bytes) != expected_sha256 {
+            return Err(MediaStoreError::InvalidImage);
+        }
+        Ok(bytes)
+    }
+
     fn stage(&self, request: StageImageRequest) -> StoreResult<StagedImage> {
         let draft_id = parse_uuid_v4(&request.draft_id, MediaStoreError::InvalidDraftId)?;
         let source_extension = validate_original_name(&request.original_name)?;

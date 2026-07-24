@@ -8,6 +8,7 @@ import type { StagedImage } from "./media";
 import {
   createExportPlan,
   runRepositoryExportDryRun,
+  runRepositoryLocalCommit,
 } from "./repository";
 import type {
   RepositoryApi,
@@ -149,6 +150,28 @@ test("plans exact record, Markdown, metadata and processed image targets", () =>
   });
   expect(JSON.stringify(plan.request)).not.toContain("original.png");
   expect(JSON.stringify(plan.request)).not.toContain("en.md");
+  expect(plan.textFiles).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        path: `content/records/science-article/${RECORD_ID}/record.json`,
+        contents: expect.stringContaining(`"id": "${RECORD_ID}"`),
+      }),
+      expect.objectContaining({
+        path: `content/media/${IMAGE_ID}.json`,
+        contents: expect.stringContaining(`"filePath": "public/images/uploads/2026/07/${IMAGE_ID}.webp"`),
+      }),
+    ]),
+  );
+  expect(plan.imageFiles).toEqual([
+    {
+      path: `public/images/uploads/2026/07/${IMAGE_ID}.webp`,
+      stagedName: `${IMAGE_ID}.webp`,
+    },
+    {
+      path: `public/images/uploads/2026/07/${IMAGE_ID}.thumbnail.webp`,
+      stagedName: `${IMAGE_ID}.thumbnail.webp`,
+    },
+  ]);
 });
 
 test("blocks missing-English body and excludes unreferenced staged images", () => {
@@ -184,6 +207,7 @@ test("blocks missing-English body and excludes unreferenced staged images", () =
 test("combines shared Schema validation with read-only repository diagnostics", async () => {
   const api: RepositoryApi = {
     dryRun: vi.fn(async (request) => backendResult(request)),
+    commit: vi.fn(),
   };
 
   const result = await runRepositoryExportDryRun(
@@ -200,6 +224,55 @@ test("combines shared Schema validation with read-only repository diagnostics", 
     expect.objectContaining({
       repositoryPath: "D:\\fictional-worktree",
       branchName: `content/20260724-${RECORD_ID}`,
+    }),
+  );
+});
+
+test("uses the approved dry-run snapshot for one confirmed local commit", async () => {
+  const commit = vi.fn(async (request: Parameters<RepositoryApi["commit"]>[0]) => ({
+    branchName: request.plan.branchName,
+    previousHeadSha: request.expectedHeadSha,
+    commitSha: "b".repeat(40),
+    commitMessage: `content: publish ${request.plan.recordId}`,
+    committedPaths: [...request.plan.contentTargets, ...request.plan.imageTargets].sort(),
+  }));
+  const api: RepositoryApi = {
+    dryRun: vi.fn(async (request) => backendResult(request)),
+    commit,
+  };
+  const draft = draftFixture();
+  const images = [imageFixture()];
+  const plannedAt = new Date(2026, 6, 24);
+  const dryRun = await runRepositoryExportDryRun(
+    api,
+    "D:\\fictional-worktree",
+    draft,
+    images,
+    plannedAt,
+  );
+
+  const result = await runRepositoryLocalCommit(
+    api,
+    "D:\\fictional-worktree",
+    draft,
+    images,
+    dryRun,
+    plannedAt,
+  );
+
+  expect(result.commitSha).toBe("b".repeat(40));
+  expect(commit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      confirmed: true,
+      expectedBaseBranch: "main",
+      expectedHeadSha: "a".repeat(40),
+      draftId: draft.draftId,
+      plan: expect.objectContaining({
+        branchName: `content/20260724-${RECORD_ID}`,
+      }),
+      textFiles: expect.arrayContaining([
+        expect.objectContaining({ path: expect.stringMatching(/record\.json$/) }),
+      ]),
     }),
   );
 });

@@ -156,8 +156,16 @@ function backendResult(
 test("selects a draft and renders repository, target, Schema and Git dry-run output", async () => {
   const user = userEvent.setup();
   const draft = draftFixture();
+  const commit = vi.fn(async (request: Parameters<RepositoryApi["commit"]>[0]) => ({
+    branchName: request.plan.branchName,
+    previousHeadSha: request.expectedHeadSha,
+    commitSha: "b".repeat(40),
+    commitMessage: `content: publish ${request.plan.recordId}`,
+    committedPaths: [...request.plan.contentTargets, ...request.plan.imageTargets],
+  }));
   const repositoryApi: RepositoryApi = {
     dryRun: vi.fn(async (request) => backendResult(request)),
+    commit,
   };
   render(
     <RepositoryExportPage
@@ -177,16 +185,36 @@ test("selects a draft and renders repository, target, Schema and Git dry-run out
   expect(screen.getByRole("heading", { name: "Schema 结果" })).toBeVisible();
   expect(screen.getByRole("heading", { name: "拟执行 Git 操作" })).toBeVisible();
   expect(
-    screen.getByText(
+    screen.getAllByText(
       `content/records/science-article/${RECORD_ID}/record.json`,
-    ),
+    )[0],
   ).toBeVisible();
   expect(
-    screen.getByText(`public/images/uploads/2026/07/${IMAGE_ID}.webp`),
+    screen.getAllByText(`public/images/uploads/2026/07/${IMAGE_ID}.webp`)[0],
   ).toBeVisible();
   expect(screen.getByText(`git switch -c content/20260724-${RECORD_ID}`)).toBeVisible();
   expect(repositoryApi.dryRun).toHaveBeenCalledWith(
     expect.objectContaining({ repositoryPath: "D:\\fictional-worktree" }),
+  );
+
+  expect(screen.getByRole("heading", { name: "本地内容提交" })).toBeVisible();
+  const commitButton = screen.getByRole("button", { name: "创建本地提交" });
+  expect(commitButton).toBeDisabled();
+  await user.click(
+    screen.getByRole("checkbox", {
+      name: "确认创建上述本地分支，并仅提交所列文件",
+    }),
+  );
+  await user.click(commitButton);
+
+  expect(await screen.findByText("本地提交完成")).toBeVisible();
+  expect(screen.getByText("b".repeat(40))).toBeVisible();
+  expect(commit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      confirmed: true,
+      expectedBaseBranch: "main",
+      expectedHeadSha: "a".repeat(40),
+    }),
   );
 });
 
@@ -195,6 +223,7 @@ test("shows repository conflicts as a blocked dry-run", async () => {
   const draft = draftFixture();
   const repositoryApi: RepositoryApi = {
     dryRun: vi.fn(async (request) => backendResult(request, true)),
+    commit: vi.fn(),
   };
   render(
     <RepositoryExportPage
