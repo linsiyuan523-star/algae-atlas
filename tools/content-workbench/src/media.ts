@@ -6,6 +6,46 @@ export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 export type MediaPurpose = "cover" | "body" | "gallery" | "portrait";
 
+export type ImageMimeType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp"
+  | "image/avif";
+
+export type ImageProcessingOptions = {
+  maxWidth: number;
+  maxHeight: number;
+  maxOutputBytes: number;
+  preserveOriginal: boolean;
+};
+
+export const DEFAULT_IMAGE_PROCESSING_OPTIONS: ImageProcessingOptions = {
+  maxWidth: 2048,
+  maxHeight: 2048,
+  maxOutputBytes: 2 * 1024 * 1024,
+  preserveOriginal: false,
+};
+
+export type ImageDerivative = {
+  stagedName: string;
+  targetPath: string;
+  mimeType: "image/webp";
+  bytes: number;
+  width: number;
+  height: number;
+  sha256: string;
+};
+
+export type ImageProcessingResult = {
+  sourceSha256: string;
+  sourceMimeType: ImageMimeType;
+  sourceBytes: number;
+  privacyMetadataRemoved: boolean;
+  originalRetained: boolean;
+  originalStagedName?: string;
+  thumbnail?: ImageDerivative;
+};
+
 export type ImageMetadataDraft = {
   creatorOrProvider: string;
   sourceUrl: string;
@@ -36,7 +76,7 @@ export type StagedImage = {
   originalName: string;
   stagedName: string;
   targetPath: string;
-  mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/avif";
+  mimeType: ImageMimeType;
   bytes: number;
   width: number;
   height: number;
@@ -44,6 +84,7 @@ export type StagedImage = {
   uploadedAt: string;
   purpose: MediaPurpose;
   metadata: ImageMetadataDraft;
+  processing?: ImageProcessingResult;
 };
 
 export type StageImageInput = {
@@ -51,6 +92,7 @@ export type StageImageInput = {
   originalName: string;
   purpose: MediaPurpose;
   bytes: number[];
+  processing: ImageProcessingOptions;
 };
 
 export type MediaApi = {
@@ -109,6 +151,7 @@ export async function stageSelectedFile(
   draftId: string,
   purpose: MediaPurpose,
   file: File,
+  processing: ImageProcessingOptions = DEFAULT_IMAGE_PROCESSING_OPTIONS,
 ): Promise<StagedImage> {
   if (file.size === 0 || file.size > MAX_IMAGE_BYTES) {
     throw new Error("图片必须大于 0 字节且不超过 20 MiB。");
@@ -119,6 +162,7 @@ export async function stageSelectedFile(
     originalName: file.name,
     purpose,
     bytes: Array.from(bytes),
+    processing,
   });
 }
 

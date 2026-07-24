@@ -1,8 +1,13 @@
 use crate::drafts::{install_atomically, sync_directory, verify_safe_regular_file};
+use image::{
+    codecs::webp::WebPEncoder, imageops::FilterType, DynamicImage, ExtendedColorType, ImageDecoder,
+    ImageEncoder, ImageFormat, ImageReader,
+};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
 };
@@ -10,12 +15,17 @@ use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::{Uuid, Version};
 
-const STAGED_MEDIA_FORMAT_VERSION: u32 = 1;
+const STAGED_MEDIA_FORMAT_VERSION: u32 = 2;
+const LEGACY_STAGED_MEDIA_FORMAT_VERSION: u32 = 1;
 const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_STAGED_IMAGES_PER_DRAFT: usize = 64;
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 const MAX_IMAGE_PIXELS: u64 = 100_000_000;
+const DEFAULT_MAX_OUTPUT_DIMENSION: u32 = 2_048;
+const DEFAULT_MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
+const COVER_THUMBNAIL_MAX_DIMENSION: u32 = 640;
+const COVER_THUMBNAIL_MAX_BYTES: u64 = 512 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -45,6 +55,52 @@ pub struct MediaMetadataDraft {
     pub alt_en: String,
     pub caption_zh: String,
     pub caption_en: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageProcessingOptions {
+    pub max_width: u32,
+    pub max_height: u32,
+    pub max_output_bytes: u64,
+    pub preserve_original: bool,
+}
+
+impl Default for ImageProcessingOptions {
+    fn default() -> Self {
+        Self {
+            max_width: DEFAULT_MAX_OUTPUT_DIMENSION,
+            max_height: DEFAULT_MAX_OUTPUT_DIMENSION,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            preserve_original: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageDerivative {
+    pub staged_name: String,
+    pub target_path: String,
+    pub mime_type: String,
+    pub bytes: u64,
+    pub width: u32,
+    pub height: u32,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageProcessingResult {
+    pub source_sha256: String,
+    pub source_mime_type: String,
+    pub source_bytes: u64,
+    pub privacy_metadata_removed: bool,
+    pub original_retained: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_staged_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<ImageDerivative>,
 }
 
 impl Default for MediaMetadataDraft {
@@ -87,6 +143,8 @@ pub struct StagedImage {
     pub uploaded_at: String,
     pub purpose: MediaPurpose,
     pub metadata: MediaMetadataDraft,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing: Option<ImageProcessingResult>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +154,8 @@ pub struct StageImageRequest {
     pub original_name: String,
     pub purpose: MediaPurpose,
     pub bytes: Vec<u8>,
+    #[serde(default)]
+    pub processing: ImageProcessingOptions,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +184,16 @@ enum MediaStoreError {
     UnsupportedFileType,
     #[error("the selected image is empty or exceeds the 20 MiB limit")]
     InvalidFileSize,
+    #[error("image processing settings are outside supported limits")]
+    InvalidProcessingOptions,
+    #[error("the processed WebP cannot satisfy the configured size limit")]
+    OutputTooLarge,
+    #[error(
+        "AVIF cannot be privacy-safely converted in this Windows build; choose JPEG, PNG, or WebP"
+    )]
+    UnsupportedProcessingFormat,
+    #[error("an identical image is already staged for this draft")]
+    DuplicateImage,
     #[error("the file extension does not match the image signature")]
     SignatureMismatch,
     #[error("the image is truncated, malformed, or has unsafe dimensions")]
@@ -142,6 +212,9 @@ enum MediaStoreError {
     Storage(#[from] std::io::Error),
     #[error("media manifest JSON failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[cfg(test)]
+    #[error("injected media write failure")]
+    InjectedWriteFailure,
 }
 
 type StoreResult<T> = Result<T, MediaStoreError>;
@@ -153,9 +226,18 @@ struct ImageInfo {
     height: u32,
 }
 
+struct ProcessedMedia {
+    primary_bytes: Vec<u8>,
+    primary_info: ImageInfo,
+    thumbnail_bytes: Option<Vec<u8>>,
+    thumbnail_info: Option<ImageInfo>,
+}
+
 pub struct MediaStore {
     root: PathBuf,
     operation_lock: Mutex<()>,
+    #[cfg(test)]
+    fail_after_next_write: Mutex<bool>,
 }
 
 impl MediaStore {
@@ -163,34 +245,68 @@ impl MediaStore {
         Self {
             root,
             operation_lock: Mutex::new(()),
+            #[cfg(test)]
+            fail_after_next_write: Mutex::new(false),
         }
     }
 
     fn stage(&self, request: StageImageRequest) -> StoreResult<StagedImage> {
         let draft_id = parse_uuid_v4(&request.draft_id, MediaStoreError::InvalidDraftId)?;
-        let extension = validate_original_name(&request.original_name)?;
-        let image_info = inspect_image(&request.bytes)?;
-        if !extension_matches_mime(&extension, image_info.mime_type) {
+        let source_extension = validate_original_name(&request.original_name)?;
+        let source_info = inspect_image(&request.bytes)?;
+        if !extension_matches_mime(&source_extension, source_info.mime_type) {
             return Err(MediaStoreError::SignatureMismatch);
         }
+        if source_info.mime_type == "image/avif" {
+            return Err(MediaStoreError::UnsupportedProcessingFormat);
+        }
+        validate_processing_options(&request.processing)?;
+        let source_sha256 = sha256_hex(&request.bytes);
 
         let _guard = self.lock()?;
         let draft_root = self.prepare_draft_root(draft_id)?;
+        self.cleanup_draft_root(&draft_root, draft_id)?;
         if manifest_ids(&draft_root)?.len() >= MAX_STAGED_IMAGES_PER_DRAFT {
             return Err(MediaStoreError::TooManyImages);
         }
+        if self.has_duplicate_source(&draft_root, draft_id, &source_sha256)? {
+            return Err(MediaStoreError::DuplicateImage);
+        }
+
+        let processed = process_image(
+            &request.bytes,
+            source_info,
+            &request.processing,
+            request.purpose,
+        )?;
 
         let image_id = Uuid::new_v4();
-        let staged_name = format!("{image_id}.{extension}");
+        let staged_name = format!("{image_id}.webp");
         let now = OffsetDateTime::now_utc();
         let uploaded_at = now
             .format(&Rfc3339)
             .map_err(|_| MediaStoreError::InvalidImage)?;
-        let target_path = format!(
-            "public/images/uploads/{:04}/{:02}/{staged_name}",
-            now.year(),
-            now.month() as u8,
-        );
+        let target_path = target_path_for(&uploaded_at, &staged_name)?;
+        let original_staged_name = request
+            .processing
+            .preserve_original
+            .then(|| format!("{image_id}.original.{source_extension}"));
+        let thumbnail = match (&processed.thumbnail_bytes, processed.thumbnail_info) {
+            (Some(bytes), Some(info)) => {
+                let thumbnail_name = format!("{image_id}.thumbnail.webp");
+                Some(ImageDerivative {
+                    staged_name: thumbnail_name.clone(),
+                    target_path: target_path_for(&uploaded_at, &thumbnail_name)?,
+                    mime_type: info.mime_type.to_owned(),
+                    bytes: bytes.len() as u64,
+                    width: info.width,
+                    height: info.height,
+                    sha256: sha256_hex(bytes),
+                })
+            }
+            (None, None) => None,
+            _ => return Err(MediaStoreError::InvalidImage),
+        };
         let image = StagedImage {
             format_version: STAGED_MEDIA_FORMAT_VERSION,
             draft_id: draft_id.to_string(),
@@ -198,24 +314,36 @@ impl MediaStore {
             original_name: request.original_name,
             staged_name: staged_name.clone(),
             target_path,
-            mime_type: image_info.mime_type.to_owned(),
-            bytes: request.bytes.len() as u64,
-            width: image_info.width,
-            height: image_info.height,
-            sha256: sha256_hex(&request.bytes),
+            mime_type: processed.primary_info.mime_type.to_owned(),
+            bytes: processed.primary_bytes.len() as u64,
+            width: processed.primary_info.width,
+            height: processed.primary_info.height,
+            sha256: sha256_hex(&processed.primary_bytes),
             uploaded_at,
             purpose: request.purpose,
             metadata: MediaMetadataDraft::default(),
+            processing: Some(ImageProcessingResult {
+                source_sha256,
+                source_mime_type: source_info.mime_type.to_owned(),
+                source_bytes: request.bytes.len() as u64,
+                privacy_metadata_removed: true,
+                original_retained: request.processing.preserve_original,
+                original_staged_name,
+                thumbnail,
+            }),
         };
         validate_staged_image(&image, draft_id, image_id)?;
 
-        let binary_target = draft_root.join(&staged_name);
-        write_file_atomically(&draft_root, &binary_target, &request.bytes, true)?;
-        if let Err(error) = self.write_manifest(&draft_root, &image, true) {
-            let _ = fs::remove_file(&binary_target);
-            let _ = sync_directory(&draft_root);
-            return Err(error);
-        }
+        self.write_new_image(
+            &draft_root,
+            &image,
+            &processed.primary_bytes,
+            processed.thumbnail_bytes.as_deref(),
+            request
+                .processing
+                .preserve_original
+                .then_some(request.bytes.as_slice()),
+        )?;
         Ok(image)
     }
 
@@ -223,6 +351,7 @@ impl MediaStore {
         let draft_id = parse_uuid_v4(draft_id, MediaStoreError::InvalidDraftId)?;
         let _guard = self.lock()?;
         let draft_root = self.prepare_draft_root(draft_id)?;
+        self.cleanup_draft_root(&draft_root, draft_id)?;
         let mut images = manifest_ids(&draft_root)?
             .into_iter()
             .map(|image_id| self.read_image(&draft_root, draft_id, image_id))
@@ -242,6 +371,7 @@ impl MediaStore {
 
         let _guard = self.lock()?;
         let draft_root = self.prepare_draft_root(draft_id)?;
+        self.cleanup_draft_root(&draft_root, draft_id)?;
         let mut image = self.read_image(&draft_root, draft_id, image_id)?;
         image.metadata = request.metadata;
         self.write_manifest(&draft_root, &image, false)?;
@@ -286,10 +416,7 @@ impl MediaStore {
         draft_id: Uuid,
         image_id: Uuid,
     ) -> StoreResult<StagedImage> {
-        let manifest_path = draft_root.join(format!("{image_id}.json"));
-        let manifest = read_limited_file(draft_root, &manifest_path, MAX_MANIFEST_BYTES)?;
-        let image: StagedImage = serde_json::from_slice(&manifest)?;
-        validate_staged_image(&image, draft_id, image_id)?;
+        let image = self.read_manifest(draft_root, draft_id, image_id)?;
 
         let binary_path = draft_root.join(&image.staged_name);
         let bytes = read_limited_file(draft_root, &binary_path, MAX_IMAGE_BYTES as u64)?;
@@ -302,7 +429,165 @@ impl MediaStore {
         {
             return Err(MediaStoreError::InvalidImage);
         }
+        if let Some(processing) = &image.processing {
+            verify_processing_assets(draft_root, processing)?;
+        }
         Ok(image)
+    }
+
+    fn read_manifest(
+        &self,
+        draft_root: &Path,
+        draft_id: Uuid,
+        image_id: Uuid,
+    ) -> StoreResult<StagedImage> {
+        let manifest_path = draft_root.join(format!("{image_id}.json"));
+        let manifest = read_limited_file(draft_root, &manifest_path, MAX_MANIFEST_BYTES)?;
+        let image: StagedImage = serde_json::from_slice(&manifest)?;
+        validate_staged_image(&image, draft_id, image_id)?;
+        Ok(image)
+    }
+
+    fn has_duplicate_source(
+        &self,
+        draft_root: &Path,
+        draft_id: Uuid,
+        source_sha256: &str,
+    ) -> StoreResult<bool> {
+        for image_id in manifest_ids(draft_root)? {
+            let image = self.read_image(draft_root, draft_id, image_id)?;
+            let candidate = image
+                .processing
+                .as_ref()
+                .map(|processing| processing.source_sha256.as_str())
+                .unwrap_or(image.sha256.as_str());
+            if candidate == source_sha256 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn write_new_image(
+        &self,
+        draft_root: &Path,
+        image: &StagedImage,
+        primary_bytes: &[u8],
+        thumbnail_bytes: Option<&[u8]>,
+        original_bytes: Option<&[u8]>,
+    ) -> StoreResult<()> {
+        let processing = image
+            .processing
+            .as_ref()
+            .ok_or(MediaStoreError::InvalidMetadata)?;
+        let mut created = Vec::new();
+        let result = (|| -> StoreResult<()> {
+            let primary_target = draft_root.join(&image.staged_name);
+            write_file_atomically(draft_root, &primary_target, primary_bytes, true)?;
+            created.push(primary_target);
+            self.maybe_fail_after_write()?;
+
+            match (&processing.thumbnail, thumbnail_bytes) {
+                (Some(thumbnail), Some(bytes)) => {
+                    let target = draft_root.join(&thumbnail.staged_name);
+                    write_file_atomically(draft_root, &target, bytes, true)?;
+                    created.push(target);
+                    self.maybe_fail_after_write()?;
+                }
+                (None, None) => {}
+                _ => return Err(MediaStoreError::InvalidMetadata),
+            }
+
+            match (&processing.original_staged_name, original_bytes) {
+                (Some(name), Some(bytes)) => {
+                    let target = draft_root.join(name);
+                    write_file_atomically(draft_root, &target, bytes, true)?;
+                    created.push(target);
+                    self.maybe_fail_after_write()?;
+                }
+                (None, None) => {}
+                _ => return Err(MediaStoreError::InvalidMetadata),
+            }
+
+            self.write_manifest(draft_root, image, true)
+        })();
+        if let Err(error) = result {
+            for target in created.iter().rev() {
+                let _ = remove_managed_file(draft_root, target);
+            }
+            let _ = sync_directory(draft_root);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn cleanup_draft_root(&self, draft_root: &Path, draft_id: Uuid) -> StoreResult<()> {
+        let mut referenced = HashSet::new();
+        for image_id in manifest_ids(draft_root)? {
+            let image = self.read_manifest(draft_root, draft_id, image_id)?;
+            referenced.insert(format!("{image_id}.json"));
+            referenced.insert(image.staged_name);
+            if let Some(processing) = image.processing {
+                if let Some(name) = processing.original_staged_name {
+                    referenced.insert(name);
+                }
+                if let Some(thumbnail) = processing.thumbnail {
+                    referenced.insert(thumbnail.staged_name);
+                }
+            }
+        }
+
+        let mut removed = false;
+        for entry in fs::read_dir(draft_root)? {
+            let entry = entry?;
+            let name = match entry.file_name().to_str() {
+                Some(name) => name.to_owned(),
+                None => continue,
+            };
+            if referenced.contains(&name)
+                || (!is_staging_temporary_name(&name) && !is_managed_binary_name(&name))
+            {
+                continue;
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+                continue;
+            }
+            verify_safe_regular_file(draft_root, &path).map_err(|_| MediaStoreError::UnsafePath)?;
+            fs::remove_file(path)?;
+            removed = true;
+        }
+        if removed {
+            sync_directory(draft_root)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn fail_after_next_write_for_test(&self) {
+        *self
+            .fail_after_next_write
+            .lock()
+            .expect("test media write lock") = true;
+    }
+
+    #[cfg(test)]
+    fn maybe_fail_after_write(&self) -> StoreResult<()> {
+        let mut fail = self
+            .fail_after_next_write
+            .lock()
+            .map_err(|_| MediaStoreError::LockFailed)?;
+        if *fail {
+            *fail = false;
+            return Err(MediaStoreError::InjectedWriteFailure);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn maybe_fail_after_write(&self) -> StoreResult<()> {
+        Ok(())
     }
 
     fn write_manifest(
@@ -405,46 +690,141 @@ fn validate_staged_image(
     expected_draft_id: Uuid,
     expected_image_id: Uuid,
 ) -> StoreResult<()> {
-    if image.format_version != STAGED_MEDIA_FORMAT_VERSION
-        || parse_uuid_v4(&image.draft_id, MediaStoreError::InvalidDraftId)? != expected_draft_id
+    if !matches!(
+        image.format_version,
+        LEGACY_STAGED_MEDIA_FORMAT_VERSION | STAGED_MEDIA_FORMAT_VERSION
+    ) || parse_uuid_v4(&image.draft_id, MediaStoreError::InvalidDraftId)? != expected_draft_id
         || parse_uuid_v4(&image.id, MediaStoreError::InvalidImageId)? != expected_image_id
     {
         return Err(MediaStoreError::InvalidMetadata);
     }
-    validate_original_name(&image.original_name)?;
-    let extension = Path::new(&image.staged_name)
-        .extension()
-        .and_then(|value| value.to_str())
-        .ok_or(MediaStoreError::InvalidMetadata)?;
-    if image.staged_name != format!("{}.{}", image.id, extension)
-        || !extension_matches_mime(extension, &image.mime_type)
-        || image.bytes == 0
+    let original_extension = validate_original_name(&image.original_name)?;
+    if image.bytes == 0
         || image.bytes > MAX_IMAGE_BYTES as u64
-        || image.width == 0
-        || image.height == 0
-        || image.width > MAX_IMAGE_DIMENSION
-        || image.height > MAX_IMAGE_DIMENSION
-        || u64::from(image.width) * u64::from(image.height) > MAX_IMAGE_PIXELS
-        || image.sha256.len() != 64
-        || !image
-            .sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || !valid_dimensions(image.width, image.height)
+        || !is_sha256_hex(&image.sha256)
     {
         return Err(MediaStoreError::InvalidMetadata);
     }
     let uploaded = OffsetDateTime::parse(&image.uploaded_at, &Rfc3339)
         .map_err(|_| MediaStoreError::InvalidMetadata)?;
-    let expected_target = format!(
-        "public/images/uploads/{:04}/{:02}/{}",
-        uploaded.year(),
-        uploaded.month() as u8,
-        image.staged_name,
-    );
+    let expected_target = target_path_for(&image.uploaded_at, &image.staged_name)?;
     if image.target_path != expected_target {
         return Err(MediaStoreError::UnsafePath);
     }
+    match image.format_version {
+        LEGACY_STAGED_MEDIA_FORMAT_VERSION => {
+            let extension = Path::new(&image.staged_name)
+                .extension()
+                .and_then(|value| value.to_str())
+                .ok_or(MediaStoreError::InvalidMetadata)?;
+            if image.staged_name != format!("{}.{}", image.id, extension)
+                || !extension_matches_mime(extension, &image.mime_type)
+                || image.processing.is_some()
+            {
+                return Err(MediaStoreError::InvalidMetadata);
+            }
+        }
+        STAGED_MEDIA_FORMAT_VERSION => {
+            if image.staged_name != format!("{}.webp", image.id) || image.mime_type != "image/webp"
+            {
+                return Err(MediaStoreError::InvalidMetadata);
+            }
+            validate_processing_result(
+                image
+                    .processing
+                    .as_ref()
+                    .ok_or(MediaStoreError::InvalidMetadata)?,
+                image,
+                &original_extension,
+                uploaded,
+            )?;
+        }
+        _ => return Err(MediaStoreError::InvalidMetadata),
+    }
     validate_metadata(&image.metadata)
+}
+
+fn validate_processing_result(
+    processing: &ImageProcessingResult,
+    image: &StagedImage,
+    original_extension: &str,
+    uploaded_at: OffsetDateTime,
+) -> StoreResult<()> {
+    if !is_sha256_hex(&processing.source_sha256)
+        || processing.source_bytes == 0
+        || processing.source_bytes > MAX_IMAGE_BYTES as u64
+        || !extension_matches_mime(original_extension, &processing.source_mime_type)
+        || !processing.privacy_metadata_removed
+    {
+        return Err(MediaStoreError::InvalidMetadata);
+    }
+    match (
+        processing.original_retained,
+        processing.original_staged_name.as_deref(),
+    ) {
+        (true, Some(name)) if name == format!("{}.original.{original_extension}", image.id) => {}
+        (false, None) => {}
+        _ => return Err(MediaStoreError::InvalidMetadata),
+    }
+    match (&image.purpose, &processing.thumbnail) {
+        (MediaPurpose::Cover, Some(thumbnail)) => {
+            validate_derivative(thumbnail, image, uploaded_at)?;
+        }
+        (MediaPurpose::Cover, None) => return Err(MediaStoreError::InvalidMetadata),
+        (_, None) => {}
+        (_, Some(_)) => return Err(MediaStoreError::InvalidMetadata),
+    }
+    Ok(())
+}
+
+fn validate_derivative(
+    derivative: &ImageDerivative,
+    image: &StagedImage,
+    uploaded_at: OffsetDateTime,
+) -> StoreResult<()> {
+    if derivative.staged_name != format!("{}.thumbnail.webp", image.id)
+        || derivative.target_path
+            != format!(
+                "public/images/uploads/{:04}/{:02}/{}",
+                uploaded_at.year(),
+                uploaded_at.month() as u8,
+                derivative.staged_name
+            )
+        || derivative.mime_type != "image/webp"
+        || derivative.bytes == 0
+        || derivative.bytes > MAX_IMAGE_BYTES as u64
+        || !valid_dimensions(derivative.width, derivative.height)
+        || !is_sha256_hex(&derivative.sha256)
+    {
+        return Err(MediaStoreError::InvalidMetadata);
+    }
+    Ok(())
+}
+
+fn target_path_for(uploaded_at: &str, staged_name: &str) -> StoreResult<String> {
+    let uploaded = OffsetDateTime::parse(uploaded_at, &Rfc3339)
+        .map_err(|_| MediaStoreError::InvalidMetadata)?;
+    Ok(format!(
+        "public/images/uploads/{:04}/{:02}/{staged_name}",
+        uploaded.year(),
+        uploaded.month() as u8,
+    ))
+}
+
+fn valid_dimensions(width: u32, height: u32) -> bool {
+    width > 0
+        && height > 0
+        && width <= MAX_IMAGE_DIMENSION
+        && height <= MAX_IMAGE_DIMENSION
+        && u64::from(width) * u64::from(height) <= MAX_IMAGE_PIXELS
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validate_metadata(metadata: &MediaMetadataDraft) -> StoreResult<()> {
@@ -576,6 +956,199 @@ fn read_limited_file(root: &Path, target: &Path, limit: u64) -> StoreResult<Vec<
         return Err(MediaStoreError::InvalidFileSize);
     }
     Ok(bytes)
+}
+
+fn validate_processing_options(options: &ImageProcessingOptions) -> StoreResult<()> {
+    if options.max_width == 0
+        || options.max_height == 0
+        || options.max_width > MAX_IMAGE_DIMENSION
+        || options.max_height > MAX_IMAGE_DIMENSION
+        || u64::from(options.max_width) * u64::from(options.max_height) > MAX_IMAGE_PIXELS
+        || options.max_output_bytes == 0
+        || options.max_output_bytes > MAX_IMAGE_BYTES as u64
+    {
+        return Err(MediaStoreError::InvalidProcessingOptions);
+    }
+    Ok(())
+}
+
+fn process_image(
+    source_bytes: &[u8],
+    source_info: ImageInfo,
+    options: &ImageProcessingOptions,
+    purpose: MediaPurpose,
+) -> StoreResult<ProcessedMedia> {
+    let decoded = decode_image(source_bytes, source_info.mime_type)?;
+    let resized = resize_down_to_fit(decoded, options.max_width, options.max_height);
+    let (primary_image, primary_bytes) = encode_webp_with_limit(resized, options.max_output_bytes)?;
+    let primary_info = inspect_image(&primary_bytes)?;
+    if primary_info.mime_type != "image/webp" {
+        return Err(MediaStoreError::InvalidImage);
+    }
+
+    let (thumbnail_bytes, thumbnail_info) = if purpose == MediaPurpose::Cover {
+        let thumbnail_image = resize_down_to_fit(
+            primary_image,
+            COVER_THUMBNAIL_MAX_DIMENSION,
+            COVER_THUMBNAIL_MAX_DIMENSION,
+        );
+        let (_, bytes) = encode_webp_with_limit(
+            thumbnail_image,
+            options.max_output_bytes.min(COVER_THUMBNAIL_MAX_BYTES),
+        )?;
+        let info = inspect_image(&bytes)?;
+        if info.mime_type != "image/webp" {
+            return Err(MediaStoreError::InvalidImage);
+        }
+        (Some(bytes), Some(info))
+    } else {
+        (None, None)
+    };
+
+    Ok(ProcessedMedia {
+        primary_bytes,
+        primary_info,
+        thumbnail_bytes,
+        thumbnail_info,
+    })
+}
+
+fn decode_image(bytes: &[u8], mime_type: &str) -> StoreResult<DynamicImage> {
+    let format = match mime_type {
+        "image/jpeg" => ImageFormat::Jpeg,
+        "image/png" => ImageFormat::Png,
+        "image/webp" => ImageFormat::WebP,
+        "image/avif" => return Err(MediaStoreError::UnsupportedProcessingFormat),
+        _ => return Err(MediaStoreError::UnsupportedFileType),
+    };
+    let mut decoder = ImageReader::with_format(Cursor::new(bytes), format)
+        .into_decoder()
+        .map_err(|_| MediaStoreError::InvalidImage)?;
+    let orientation = decoder
+        .orientation()
+        .map_err(|_| MediaStoreError::InvalidImage)?;
+    let mut image =
+        DynamicImage::from_decoder(decoder).map_err(|_| MediaStoreError::InvalidImage)?;
+    image.apply_orientation(orientation);
+    if !valid_dimensions(image.width(), image.height()) {
+        return Err(MediaStoreError::InvalidImage);
+    }
+    Ok(image)
+}
+
+fn resize_down_to_fit(image: DynamicImage, max_width: u32, max_height: u32) -> DynamicImage {
+    if image.width() <= max_width && image.height() <= max_height {
+        image
+    } else {
+        image.resize(max_width, max_height, FilterType::Lanczos3)
+    }
+}
+
+fn encode_webp_with_limit(
+    mut image: DynamicImage,
+    max_output_bytes: u64,
+) -> StoreResult<(DynamicImage, Vec<u8>)> {
+    loop {
+        let encoded = encode_webp(&image)?;
+        if encoded.len() as u64 <= max_output_bytes {
+            return Ok((image, encoded));
+        }
+        if image.width() == 1 && image.height() == 1 {
+            return Err(MediaStoreError::OutputTooLarge);
+        }
+        let next_width = (image.width().saturating_mul(3) / 4).max(1);
+        let next_height = (image.height().saturating_mul(3) / 4).max(1);
+        image = image.resize(next_width, next_height, FilterType::Lanczos3);
+    }
+}
+
+fn encode_webp(image: &DynamicImage) -> StoreResult<Vec<u8>> {
+    let rgba = image.to_rgba8();
+    let mut output = Vec::new();
+    WebPEncoder::new_lossless(&mut output)
+        .write_image(
+            rgba.as_raw(),
+            rgba.width(),
+            rgba.height(),
+            ExtendedColorType::Rgba8,
+        )
+        .map_err(|_| MediaStoreError::InvalidImage)?;
+    Ok(output)
+}
+
+fn verify_processing_assets(
+    draft_root: &Path,
+    processing: &ImageProcessingResult,
+) -> StoreResult<()> {
+    if let Some(name) = &processing.original_staged_name {
+        let path = draft_root.join(name);
+        let bytes = read_limited_file(draft_root, &path, MAX_IMAGE_BYTES as u64)?;
+        let info = inspect_image(&bytes)?;
+        if bytes.len() as u64 != processing.source_bytes
+            || sha256_hex(&bytes) != processing.source_sha256
+            || info.mime_type != processing.source_mime_type
+        {
+            return Err(MediaStoreError::InvalidImage);
+        }
+    }
+    if let Some(thumbnail) = &processing.thumbnail {
+        let path = draft_root.join(&thumbnail.staged_name);
+        let bytes = read_limited_file(draft_root, &path, MAX_IMAGE_BYTES as u64)?;
+        let info = inspect_image(&bytes)?;
+        if info.mime_type != thumbnail.mime_type
+            || info.width != thumbnail.width
+            || info.height != thumbnail.height
+            || bytes.len() as u64 != thumbnail.bytes
+            || sha256_hex(&bytes) != thumbnail.sha256
+        {
+            return Err(MediaStoreError::InvalidImage);
+        }
+    }
+    Ok(())
+}
+
+fn remove_managed_file(root: &Path, target: &Path) -> StoreResult<()> {
+    verify_safe_regular_file(root, target).map_err(|_| MediaStoreError::UnsafePath)?;
+    fs::remove_file(target)?;
+    Ok(())
+}
+
+fn is_staging_temporary_name(name: &str) -> bool {
+    let Some(id) = name
+        .strip_prefix('.')
+        .and_then(|value| value.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    is_canonical_v4_uuid(id)
+}
+
+fn is_managed_binary_name(name: &str) -> bool {
+    for suffix in [
+        ".thumbnail.webp",
+        ".original.jpg",
+        ".original.jpeg",
+        ".original.png",
+        ".original.webp",
+        ".original.avif",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".avif",
+    ] {
+        if let Some(id) = name.strip_suffix(suffix) {
+            return is_canonical_v4_uuid(id);
+        }
+    }
+    false
+}
+
+fn is_canonical_v4_uuid(value: &str) -> bool {
+    Uuid::parse_str(value)
+        .ok()
+        .filter(|id| id.get_version() == Some(Version::Random) && id.to_string() == value)
+        .is_some()
 }
 
 fn inspect_image(bytes: &[u8]) -> StoreResult<ImageInfo> {
@@ -1038,32 +1611,56 @@ fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        crc32, inspect_image, sha256_hex, MediaMetadataDraft, MediaPurpose, MediaStore,
-        MediaStoreError, SaveImageMetadataRequest, StageImageRequest,
+        inspect_image, sha256_hex, ImageProcessingOptions, MediaMetadataDraft, MediaPurpose,
+        MediaStore, MediaStoreError, SaveImageMetadataRequest, StageImageRequest, StagedImage,
+    };
+    use image::{
+        codecs::{jpeg::JpegEncoder, png::PngEncoder},
+        ExtendedColorType, ImageEncoder, Rgb, RgbImage, Rgba, RgbaImage,
     };
     use std::fs;
     use tempfile::tempdir;
+    use uuid::Uuid;
 
     const DRAFT_ID: &str = "11111111-1111-4111-8111-111111111111";
 
-    fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
-        let mut chunk = Vec::new();
-        chunk.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        chunk.extend_from_slice(kind);
-        chunk.extend_from_slice(data);
-        chunk.extend_from_slice(&crc32(&[kind.as_slice(), data].concat()).to_be_bytes());
-        chunk
+    fn tiny_png(width: u32, height: u32) -> Vec<u8> {
+        let pixels = RgbaImage::from_pixel(width, height, Rgba([36, 116, 95, 255]));
+        let mut bytes = Vec::new();
+        PngEncoder::new(&mut bytes)
+            .write_image(pixels.as_raw(), width, height, ExtendedColorType::Rgba8)
+            .expect("encodes PNG fixture");
+        bytes
     }
 
-    fn tiny_png(width: u32, height: u32) -> Vec<u8> {
-        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
-        let mut header = Vec::new();
-        header.extend_from_slice(&width.to_be_bytes());
-        header.extend_from_slice(&height.to_be_bytes());
-        header.extend_from_slice(&[8, 6, 0, 0, 0]);
-        bytes.extend(png_chunk(b"IHDR", &header));
-        bytes.extend(png_chunk(b"IDAT", &[0x78, 0x01, 0x00]));
-        bytes.extend(png_chunk(b"IEND", &[]));
+    fn jpeg_with_exif(width: u32, height: u32) -> Vec<u8> {
+        let pixels = RgbImage::from_pixel(width, height, Rgb([42, 96, 158]));
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpeg, 90)
+            .write_image(pixels.as_raw(), width, height, ExtendedColorType::Rgb8)
+            .expect("encodes JPEG fixture");
+
+        let exif = b"Exif\0\0GPSLatitude=25.1234;Model=FictionalCamera";
+        let mut with_exif = jpeg[..2].to_vec();
+        with_exif.extend_from_slice(&[0xff, 0xe1]);
+        with_exif.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        with_exif.extend_from_slice(exif);
+        with_exif.extend_from_slice(&jpeg[2..]);
+        with_exif
+    }
+
+    fn tiny_avif_container(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&20u32.to_be_bytes());
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(b"avif");
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(b"avif");
+        bytes.extend_from_slice(&20u32.to_be_bytes());
+        bytes.extend_from_slice(b"ispe");
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
         bytes
     }
 
@@ -1073,11 +1670,12 @@ mod tests {
             original_name: name.to_owned(),
             purpose: MediaPurpose::Cover,
             bytes,
+            processing: ImageProcessingOptions::default(),
         }
     }
 
     #[test]
-    fn stages_signature_checked_image_with_uuid_target_and_metadata() {
+    fn processes_images_to_webp_with_a_cover_thumbnail_and_metadata() {
         let temporary = tempdir().expect("temporary directory");
         let store = MediaStore::new(temporary.path().join("media-staging").join("v1"));
         let bytes = tiny_png(640, 480);
@@ -1085,13 +1683,22 @@ mod tests {
         let staged = store
             .stage(request("fictional-cover.PNG", bytes.clone()))
             .expect("stages image");
-        assert_eq!(staged.mime_type, "image/png");
+        assert_eq!(staged.format_version, 2);
+        assert_eq!(staged.mime_type, "image/webp");
         assert_eq!((staged.width, staged.height), (640, 480));
-        assert_eq!(staged.bytes, bytes.len() as u64);
-        assert_eq!(staged.sha256, sha256_hex(&bytes));
+        assert_ne!(staged.bytes, bytes.len() as u64);
         assert!(staged.target_path.starts_with("public/images/uploads/"));
-        assert!(staged.target_path.ends_with(&format!("/{}.png", staged.id)));
+        assert!(staged
+            .target_path
+            .ends_with(&format!("/{}.webp", staged.id)));
         assert_eq!(staged.metadata, MediaMetadataDraft::default());
+        let processing = staged.processing.as_ref().expect("processing result");
+        assert_eq!(processing.source_sha256, sha256_hex(&bytes));
+        assert_eq!(processing.source_mime_type, "image/png");
+        assert!(processing.privacy_metadata_removed);
+        assert!(!processing.original_retained);
+        assert!(processing.original_staged_name.is_none());
+        assert!(processing.thumbnail.is_some());
 
         let listed = store.list(DRAFT_ID).expect("lists image");
         assert_eq!(listed, vec![staged.clone()]);
@@ -1102,6 +1709,52 @@ mod tests {
             .join(DRAFT_ID);
         assert!(draft_root.join(&staged.staged_name).is_file());
         assert!(draft_root.join(format!("{}.json", staged.id)).is_file());
+        assert!(draft_root
+            .join(
+                &processing
+                    .thumbnail
+                    .as_ref()
+                    .expect("thumbnail")
+                    .staged_name
+            )
+            .is_file());
+    }
+
+    #[test]
+    fn reads_stage_6a1_manifests_without_reprocessing_them() {
+        let temporary = tempdir().expect("temporary directory");
+        let root = temporary.path().join("media-staging").join("v1");
+        let store = MediaStore::new(root.clone());
+        let draft_root = root.join(DRAFT_ID);
+        fs::create_dir_all(&draft_root).expect("creates legacy staging directory");
+        let image_id = "22222222-2222-4222-8222-222222222222";
+        let bytes = tiny_png(80, 60);
+        let legacy = StagedImage {
+            format_version: 1,
+            draft_id: DRAFT_ID.to_owned(),
+            id: image_id.to_owned(),
+            original_name: "legacy.png".to_owned(),
+            staged_name: format!("{image_id}.png"),
+            target_path: format!("public/images/uploads/2026/07/{image_id}.png"),
+            mime_type: "image/png".to_owned(),
+            bytes: bytes.len() as u64,
+            width: 80,
+            height: 60,
+            sha256: sha256_hex(&bytes),
+            uploaded_at: "2026-07-24T08:00:00Z".to_owned(),
+            purpose: MediaPurpose::Cover,
+            metadata: MediaMetadataDraft::default(),
+            processing: None,
+        };
+        fs::write(draft_root.join(&legacy.staged_name), bytes).expect("writes legacy image");
+        store
+            .write_manifest(&draft_root, &legacy, true)
+            .expect("writes legacy manifest");
+
+        assert_eq!(
+            store.list(DRAFT_ID).expect("lists legacy image"),
+            vec![legacy]
+        );
     }
 
     #[test]
@@ -1128,6 +1781,145 @@ mod tests {
             Err(MediaStoreError::InvalidImage)
         ));
         assert!(!temporary.path().join("outside.png").exists());
+    }
+
+    #[test]
+    fn rejects_new_avif_intake_when_the_safe_decoder_is_unavailable() {
+        let temporary = tempdir().expect("temporary directory");
+        let root = temporary.path().join("media-staging").join("v1");
+        let store = MediaStore::new(root.clone());
+
+        assert!(matches!(
+            store.stage(request("fixture.avif", tiny_avif_container(32, 24))),
+            Err(MediaStoreError::UnsupportedProcessingFormat)
+        ));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn removes_exif_from_web_output_and_retains_the_source_only_when_requested() {
+        let temporary = tempdir().expect("temporary directory");
+        let root = temporary.path().join("media-staging").join("v1");
+        let store = MediaStore::new(root.clone());
+        let source = jpeg_with_exif(96, 64);
+        assert!(source.windows(11).any(|window| window == b"GPSLatitude"));
+        assert!(source.windows(5).any(|window| window == b"Model"));
+
+        let mut stage_request = request("fictional-camera.jpg", source.clone());
+        stage_request.processing.preserve_original = true;
+        let staged = store.stage(stage_request).expect("processes JPEG");
+        let draft_root = root.join(DRAFT_ID);
+        let web_output = fs::read(draft_root.join(&staged.staged_name)).expect("reads WebP");
+        assert!(!web_output.windows(6).any(|window| window == b"Exif\0\0"));
+        assert!(!web_output
+            .windows(11)
+            .any(|window| window == b"GPSLatitude"));
+        assert!(!web_output
+            .windows(15)
+            .any(|window| window == b"FictionalCamera"));
+
+        let processing = staged.processing.expect("processing result");
+        assert!(processing.privacy_metadata_removed);
+        assert!(processing.original_retained);
+        let retained_name = processing
+            .original_staged_name
+            .expect("explicitly retained original");
+        assert_eq!(
+            fs::read(draft_root.join(retained_name)).expect("reads original"),
+            source
+        );
+    }
+
+    #[test]
+    fn obeys_configured_dimensions_and_output_size() {
+        let temporary = tempdir().expect("temporary directory");
+        let store = MediaStore::new(temporary.path().join("media-staging").join("v1"));
+        let mut stage_request = request("large.png", tiny_png(1_600, 1_000));
+        stage_request.processing.max_width = 320;
+        stage_request.processing.max_height = 240;
+        stage_request.processing.max_output_bytes = 32 * 1024;
+
+        let staged = store.stage(stage_request).expect("processes within limits");
+        assert!(staged.width <= 320);
+        assert!(staged.height <= 240);
+        assert!(staged.bytes <= 32 * 1024);
+        let thumbnail = staged
+            .processing
+            .expect("processing result")
+            .thumbnail
+            .expect("cover thumbnail");
+        assert!(thumbnail.width <= 320);
+        assert!(thumbnail.height <= 240);
+        assert!(thumbnail.bytes <= 32 * 1024);
+    }
+
+    #[test]
+    fn rejects_duplicate_source_hash_without_creating_more_files() {
+        let temporary = tempdir().expect("temporary directory");
+        let root = temporary.path().join("media-staging").join("v1");
+        let store = MediaStore::new(root.clone());
+        let source = tiny_png(32, 24);
+        store
+            .stage(request("first.png", source.clone()))
+            .expect("stages first image");
+        let before = fs::read_dir(root.join(DRAFT_ID))
+            .expect("reads staging directory")
+            .count();
+
+        assert!(matches!(
+            store.stage(request("duplicate.png", source)),
+            Err(MediaStoreError::DuplicateImage)
+        ));
+        assert_eq!(store.list(DRAFT_ID).expect("lists one image").len(), 1);
+        assert_eq!(
+            fs::read_dir(root.join(DRAFT_ID))
+                .expect("reads staging directory")
+                .count(),
+            before
+        );
+    }
+
+    #[test]
+    fn rolls_back_written_derivatives_when_staging_fails() {
+        let temporary = tempdir().expect("temporary directory");
+        let root = temporary.path().join("media-staging").join("v1");
+        let store = MediaStore::new(root.clone());
+        store.fail_after_next_write_for_test();
+
+        assert!(matches!(
+            store.stage(request("rollback.png", tiny_png(48, 32))),
+            Err(MediaStoreError::InjectedWriteFailure)
+        ));
+        let draft_root = root.join(DRAFT_ID);
+        assert_eq!(
+            fs::read_dir(&draft_root)
+                .expect("reads staging directory")
+                .count(),
+            0
+        );
+        assert!(store.list(DRAFT_ID).expect("lists no images").is_empty());
+    }
+
+    #[test]
+    fn cleans_managed_orphans_without_touching_unrelated_files() {
+        let temporary = tempdir().expect("temporary directory");
+        let root = temporary.path().join("media-staging").join("v1");
+        let store = MediaStore::new(root.clone());
+        store
+            .stage(request("fixture.png", tiny_png(16, 12)))
+            .expect("stages fixture");
+        let draft_root = root.join(DRAFT_ID);
+        let temporary_name = format!(".{}.tmp", Uuid::new_v4());
+        let orphan_name = format!("{}.webp", Uuid::new_v4());
+        let unrelated_name = "operator-note.txt";
+        fs::write(draft_root.join(&temporary_name), b"temporary").expect("writes temporary");
+        fs::write(draft_root.join(&orphan_name), b"orphan").expect("writes orphan");
+        fs::write(draft_root.join(unrelated_name), b"keep").expect("writes unrelated file");
+
+        assert_eq!(store.list(DRAFT_ID).expect("cleans and lists").len(), 1);
+        assert!(!draft_root.join(temporary_name).exists());
+        assert!(!draft_root.join(orphan_name).exists());
+        assert!(draft_root.join(unrelated_name).is_file());
     }
 
     #[test]

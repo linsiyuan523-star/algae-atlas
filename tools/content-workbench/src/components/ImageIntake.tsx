@@ -10,6 +10,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent, KeyboardEvent } from "react";
 import {
+  DEFAULT_IMAGE_PROCESSING_OPTIONS,
   imagePublicationIssues,
   licenseOptions,
   mediaPurposeOptions,
@@ -19,6 +20,7 @@ import type {
   ImageMetadataDraft,
   MediaApi,
   MediaPurpose,
+  ImageProcessingOptions,
   StagedImage,
 } from "../media";
 
@@ -51,6 +53,9 @@ export function ImageIntake({
   const [purpose, setPurpose] = useState<MediaPurpose>(
     contentType === "team-member" ? "portrait" : "cover",
   );
+  const [processing, setProcessing] = useState<ImageProcessingOptions>(() => ({
+    ...DEFAULT_IMAGE_PROCESSING_OPTIONS,
+  }));
   const [isDragging, setIsDragging] = useState(false);
   const [isStaging, setIsStaging] = useState(false);
   const [stagingMessage, setStagingMessage] = useState<string | null>(null);
@@ -74,7 +79,13 @@ export function ImageIntake({
     const errors: string[] = [];
     for (const file of files) {
       try {
-        const staged = await stageSelectedFile(api, draftId, purpose, file);
+        const staged = await stageSelectedFile(
+          api,
+          draftId,
+          purpose,
+          file,
+          processing,
+        );
         onStaged(staged);
         accepted += 1;
       } catch (caught) {
@@ -162,7 +173,8 @@ export function ImageIntake({
           <h4 id="image-intake-title">图片接收与许可</h4>
           <span>{images.length} 张已暂存图片</span>
         </div>
-        <div className="image-purpose-control">
+        <div className="image-intake-controls">
+          <div className="image-purpose-control">
           <label htmlFor="image-purpose">图片用途</label>
           <select
             id="image-purpose"
@@ -178,6 +190,62 @@ export function ImageIntake({
               </option>
             ))}
           </select>
+          </div>
+          <div className="image-processing-control">
+            <label htmlFor="image-max-dimension">最大边长</label>
+            <select
+              id="image-max-dimension"
+              value={processing.maxWidth}
+              disabled={disabled || isStaging}
+              onChange={(event) => {
+                const maxDimension = Number(event.target.value);
+                setProcessing((current) => ({
+                  ...current,
+                  maxWidth: maxDimension,
+                  maxHeight: maxDimension,
+                }));
+              }}
+            >
+              <option value={1600}>1600 px</option>
+              <option value={2048}>2048 px</option>
+              <option value={2560}>2560 px</option>
+              <option value={4096}>4096 px</option>
+            </select>
+          </div>
+          <div className="image-processing-control">
+            <label htmlFor="image-max-output">输出上限</label>
+            <select
+              id="image-max-output"
+              value={processing.maxOutputBytes}
+              disabled={disabled || isStaging}
+              onChange={(event) =>
+                setProcessing((current) => ({
+                  ...current,
+                  maxOutputBytes: Number(event.target.value),
+                }))
+              }
+            >
+              <option value={512 * 1024}>512 KiB</option>
+              <option value={1024 * 1024}>1 MiB</option>
+              <option value={2 * 1024 * 1024}>2 MiB</option>
+              <option value={4 * 1024 * 1024}>4 MiB</option>
+            </select>
+          </div>
+          <label className="image-original-option" htmlFor="image-preserve-original">
+            <input
+              id="image-preserve-original"
+              type="checkbox"
+              checked={processing.preserveOriginal}
+              disabled={disabled || isStaging}
+              onChange={(event) =>
+                setProcessing((current) => ({
+                  ...current,
+                  preserveOriginal: event.target.checked,
+                }))
+              }
+            />
+            <span>保留原图（仅本地）</span>
+          </label>
         </div>
       </header>
 
@@ -211,7 +279,7 @@ export function ImageIntake({
           ref={fileInputRef}
           className="visually-hidden"
           type="file"
-          accept=".jpg,.jpeg,.png,.webp,.avif,image/jpeg,image/png,image/webp,image/avif"
+          accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
           multiple
           disabled={disabled || isStaging}
           aria-label="选择图片文件"
@@ -316,6 +384,29 @@ function StagedImageEditor({
             <code>{image.targetPath}</code>
           </dd>
         </div>
+        {image.processing ? (
+          <>
+            <div>
+              <dt>处理结果</dt>
+              <dd>
+                WebP · {image.processing.privacyMetadataRemoved ? "隐私元数据已清除" : "待核对"}
+              </dd>
+            </div>
+            {image.processing.thumbnail ? (
+              <div>
+                <dt>封面缩略图</dt>
+                <dd>
+                  {image.processing.thumbnail.width} × {image.processing.thumbnail.height} ·{" "}
+                  {formatBytes(image.processing.thumbnail.bytes)}
+                </dd>
+              </div>
+            ) : null}
+            <div>
+              <dt>原图</dt>
+              <dd>{image.processing.originalRetained ? "仅本地保留" : "不保留"}</dd>
+            </div>
+          </>
+        ) : null}
       </dl>
 
       <div className="media-candidate-grid">

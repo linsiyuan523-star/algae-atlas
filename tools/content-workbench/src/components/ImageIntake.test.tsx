@@ -82,6 +82,10 @@ test("selects an image, previews its UUID target, and saves rights metadata", as
   const api = createApi();
   render(<Harness api={api} />);
 
+  await user.selectOptions(screen.getByLabelText("最大边长"), "1600");
+  await user.selectOptions(screen.getByLabelText("输出上限"), String(1024 * 1024));
+  await user.click(screen.getByLabelText("保留原图（仅本地）"));
+
   const file = new File([new Uint8Array([1, 2, 3, 4])], "fictional.png", {
     type: "image/png",
   });
@@ -93,6 +97,12 @@ test("selects an image, previews its UUID target, and saves rights metadata", as
       originalName: "fictional.png",
       purpose: "cover",
       bytes: [1, 2, 3, 4],
+      processing: {
+        maxWidth: 1600,
+        maxHeight: 1600,
+        maxOutputBytes: 1024 * 1024,
+        preserveOriginal: true,
+      },
     }),
   );
   expect(await screen.findByText(staged.targetPath)).toBeVisible();

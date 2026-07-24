@@ -1087,10 +1087,44 @@ button:disabled {
   gap: 5px;
 }
 
-.image-purpose-control label {
+.image-intake-controls {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: end;
+  gap: 10px;
+}
+
+.image-purpose-control label,
+.image-processing-control label {
   color: #52665e;
   font-size: 12px;
   font-weight: 600;
+}
+
+.image-processing-control {
+  min-width: 118px;
+  display: grid;
+  gap: 5px;
+}
+
+.image-original-option {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #52665e;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.image-original-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #356b59;
 }
 
 .image-drop-zone {
@@ -1535,6 +1569,15 @@ button:disabled {
 
   .image-purpose-control {
     width: 100%;
+  }
+
+  .image-intake-controls {
+    width: 100%;
+    justify-content: start;
+  }
+
+  .image-processing-control {
+    flex: 1 1 130px;
   }
 
   .danger-button {
