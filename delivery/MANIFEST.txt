@@ -1,31 +1,27 @@
-Stage=Stage-07A3
-Name=Verified Bundle Export and Stage 7A Checkpoint
-Status=READY_FOR_POST_COMMIT_BUNDLE
-Branch=local/stage-07a3-bundle-export
-BaselineCommit=f41cc9e6082e2a7c34792b3572520c849b3794c5
-PredecessorStage=Stage-07A2
-PredecessorBundle=NOT_AVAILABLE_SAME_WORKER_CLEAN_BRANCH_TIP_USED
-PredecessorCommit=f41cc9e6082e2a7c34792b3572520c849b3794c5
-ImplementationCommit=8760329
+Stage=Stage-08C
+Name=End-to-End Acceptance and Documentation
+Status=READY_FOR_FINAL_INTEGRATION_WITH_DOCUMENTED_LIMITATIONS
+Branch=local/stage-08c-acceptance
+StartCommit=485088f5058f71128cafa6d5b4d6c316439d037c
+AcceptanceCommit=4980964
+DocumentationCommit=f4656a8
 FinalCommit=BRANCH_TIP_AT_DELIVERY
-FinalCommitResolution=Exact SHA will be written to the external USB manifest and verified Bundle head after the final commit
-ContentSchemaVersion=1
-RepositoryDryRunApiVersion=1
-RepositoryLocalCommitApiVersion=1
-RepositoryBundleApiVersion=1
-DesktopCommandApiVersion=1
-MediaMetadataVersion=1
-GitPublishPlanVersion=1
-MigrationLedgerVersion=1
-BundleName=stage-07a3-bundle-export-v1.bundle
-BundleSha256=TO_BE_GENERATED_AFTER_FINAL_COMMIT
-BundleHistory=complete
-ExpectedUsbDirectory=E:\stage-07a3-bundle-export
-RepositoryFiles=See delivery/CHANGED-FILES.txt
-ExternalArtifacts:
-stage-07a3-bundle-export-v1.bundle
-stage-07a3-bundle-export-v1.bundle.sha256.txt
+PredecessorStage=Stage-08B
+PredecessorBundle=stage-08b-windows-package-v1.bundle
+PredecessorBundleSHA256=1F3A3A4F3373B260A1DF4EBB29ADAB264158C374DA326BFD83DBB40011C2B729
+PredecessorCommit=485088f5058f71128cafa6d5b4d6c316439d037c
+CandidateFile=content-workbench_0.1.0_x64-setup.exe
+CandidateSHA256=51227623E19C502233B1954A46E2F2DF0669D7DDA48A07DF2E501B1278A22602
+CandidateSigning=NotSigned
+StageBundleFile=stage-08c-acceptance-v1.bundle
+StageBundleSHA256=GENERATED_AFTER_FINAL_COMMIT
+StageBundleHistory=complete
+NextInstruction=35_最终集成主机_汇总与DraftPR.md
+Files:
+stage-08c-acceptance-v1.bundle
+stage-08c-acceptance-v1.bundle.sha256.txt
 HANDOFF.md
-MANIFEST.txt
 TEST-SUMMARY.txt
 CHANGED-FILES.txt
+MANIFEST.txt
+ACCEPTANCE-REPORT.md

@@ -1,48 +1,52 @@
-# Stage 8B Handoff
+# Stage 8C Handoff
 
-- Stage: Stage-08B - Windows Installation Candidate
-- Start commit: `4d74c25739ede050d740247c82fce2907da934cd`
-- Implementation commit: `c3a0b0023f1783b8e8e54b0d469bfa8a24939ed4`
-- Delivery commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the clean Stage-08B branch tip)
+- Stage: Stage-08C - End-to-End Acceptance and Documentation
+- Start commit: `485088f5058f71128cafa6d5b4d6c316439d037c`
+- Acceptance commit: `4980964`
+- Documentation commit: `f4656a8`
+- End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the clean Stage-08C branch tip)
 
 ## Completed
 
-- Fixed the candidate version at `0.1.0` across the existing Tauri, npm, and Cargo metadata.
-- Enabled an unsigned x64 NSIS bundle with current-user installation, downgrade blocking, local pinned tools, and no installer-time network dependency.
-- Added a Windows candidate build script that rejects version drift and remaps workspace/user source paths before compiling.
-- Generated `content-workbench_0.1.0_x64-setup.exe` with SHA-256 `51227623E19C502233B1954A46E2F2DF0669D7DDA48A07DF2E501B1278A22602`.
-- Verified fresh install, application launch, `0.0.9` to `0.1.0` overwrite upgrade, clean exit, default uninstall, and draft retention.
+- Added a schema-to-preview acceptance test for Chinese team news with English `missing`.
+- Covered cover and body images, a cover thumbnail, author, license, attribution, and Chinese alt text.
+- Added a native Git acceptance test that creates one content branch and commit with seven exact files.
+- Verified a complete bundle, SHA256 sidecar, and import into a second repository without changing its current branch or HEAD.
+- Verified the Stage-08B installer SHA256, installed `0.1.0`, and opened the first-run diagnostics page.
+- Added concise quick-start, troubleshooting, backup/recovery, administrator security, and acceptance documents.
+- Updated the stale desktop scaffold assertions to the approved Stage-08B NSIS packaging contract.
 
 ## Not Completed
 
-- Code signing was not performed because no external signing certificate was supplied.
-- A separate clean Windows VM was unavailable; installation was rehearsed from a current-user state with no existing product installation or uninstall registration.
-- End-to-end content publication acceptance remains owned by Stage 8C.
+- No remote Git, Draft PR, merge, tag, release, signing, or deployment was performed.
+- No separate clean Windows VM was available.
+- Direct Windows UI automation could read the candidate window but could not inject input; component and native acceptance tests covered the workflow instead.
 
 ## Test Summary
 
-- Locked dependency install and production Tauri/NSIS build: PASS.
-- Installed application version, window title, launch, and graceful close: PASS.
-- Application process tree established TCP connections during launch observation: `0`.
-- Upgrade registration changed from `0.0.9` to `0.1.0`: PASS.
-- Default uninstall removed installed files and registration while retaining a marker in the default drafts directory: PASS.
-- Local-path and credential-shape scans of the final application and installer: PASS.
-- Tauri capability has no permissions; packaged CSP allows only local content and Tauri IPC: PASS.
+- `npm run check`: PASS.
+- `npm test` constituent suites after the packaging-guard correction: PASS.
+- Schema: 58; desktop Vitest: 159; rendered HTML: 25; IndexNow: 1; all PASS.
+- `npm run build:next`: PASS; 97 static pages generated.
+- Rust: 37/37 PASS, including the Stage-08C offline Git flow.
+- Installer SHA256: PASS (`51227623E19C502233B1954A46E2F2DF0669D7DDA48A07DF2E501B1278A22602`).
 
 ## Known Issues
 
-- The installer is unsigned and may trigger a Windows reputation warning.
-- The candidate uses the supported host's installed WebView2 runtime; version `150.0.4078.83` was verified on the rehearsal host.
-- The existing Vite chunk-size warning remains non-blocking.
+- Candidate is unsigned and may show a Windows reputation warning.
+- Actual first-run diagnostics reported MSVC and WebView2 as missing although Rust builds and the WebView window work on this host.
+- The Windows automation runtime rejected click and value injection after returning the complete accessibility tree.
+- Existing Vite chunk-size warning remains non-blocking.
 
 ## Next Stage Exact Start
 
-- Start from the clean Stage-08B branch tip after resolving `BRANCH_TIP_AT_DELIVERY`.
-- Verify the candidate against `delivery/WINDOWS-CANDIDATE.sha256.txt`.
-- Execute `34_Stage8C_端到端验收与文档.md`.
+- Start from the clean Stage-08C branch tip recorded in the USB `MANIFEST.txt`.
+- Verify and import `stage-08c-acceptance-v1.bundle` under a namespaced local ref.
+- Execute `35_最终集成主机_汇总与DraftPR.md` only on the authorized integration host.
 
 ## Do Not Repeat
 
-- Do not use the discarded pre-remap candidate hash `11C3195711483E1D2234419B830A78645794C61C152BAB9C8FFECFDD5BBDCF10`.
-- Do not retry the timed-out direct NSIS plugin download; the official Releases API asset and recorded hashes were verified.
-- Do not add remote Git, GitHub release, signing credentials, deployment, or production content to this worker.
+- Do not retry the rejected Computer Use click or `set_value` paths on this worker.
+- Do not restore the obsolete `bundle.active=false` scaffold expectation.
+- Do not use a level-one heading in managed Markdown bodies.
+- Do not push, merge, sign, release, or deploy from this worker.

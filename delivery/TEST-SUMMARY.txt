@@ -1,57 +1,50 @@
-Stage: Stage-08B
+Stage: Stage-08C
 Status: PASS_WITH_LIMITATIONS
-ValidatedAt: 2026-07-24T19:30:50+08:00
-Branch: local/stage-08b-package
-StartCommit: 4d74c25739ede050d740247c82fce2907da934cd
-ImplementationCommit: c3a0b0023f1783b8e8e54b0d469bfa8a24939ed4
+ValidatedAt: 2026-07-24T21:00:00+08:00
+Branch: local/stage-08c-acceptance
+StartCommit: 485088f5058f71128cafa6d5b4d6c316439d037c
+AcceptanceCommit: 4980964
+DocumentationCommit: f4656a8
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
-Build:
-- npm.cmd ci --no-audit --no-fund: PASS; root package-lock used
-- npm.cmd run desktop:build: PASS
-- Frontend typecheck and Vite production build: PASS; 1,956 modules transformed
-- Rust 1.97.1 x86_64-pc-windows-msvc release build: PASS
-- NSIS 3.11 x64 current-user candidate build: PASS
-- PowerShell candidate-build script parse: PASS
-- git diff --check: PASS
+Acceptance scenario:
+- Chinese team-news candidate with reviewed approval state: PASS
+- English state missing and no en.md export target: PASS
+- Cover image, cover thumbnail, and body image: PASS
+- Author/provider, license, attribution, public-site scope, rights approval, and Chinese alt: PASS
+- Desktop/mobile preview and explicit English-missing view: PASS
+- Native local content branch with one commit and seven exact files: PASS
+- Complete bundle, SHA256 sidecar, and second-repository import: PASS
+- Imported repository current branch/HEAD unchanged: PASS
 
-Candidate:
+Required checks:
+- npm.cmd run check: PASS
+- npm.cmd test: initially stopped on stale Stage-04 bundle assertions after 58 Schema tests and browser contract passed
+- Corrected scaffold guard to assert the approved Stage-08B NSIS packaging contract
+- Remaining npm test constituents: PASS without repeating unrelated passed suites
+- npm.cmd run build:next: PASS; 97 static pages generated
+
+Detailed counts:
+- Schema Node tests: 58 passed
+- Schema browser contract: PASS
+- Desktop scaffold: 1 passed
+- Desktop Vitest: 23 files, 159 tests passed
+- Vinext build: PASS
+- Rendered HTML: 25 passed
+- IndexNow: 1 passed
+- Rust: 37 passed
+- Rust formatter: PASS
+
+Windows candidate:
 - File: content-workbench_0.1.0_x64-setup.exe
-- Size: 2627443 bytes
 - SHA256: 51227623E19C502233B1954A46E2F2DF0669D7DDA48A07DF2E501B1278A22602
-- Authenticode: NotSigned (expected rehearsal status; no certificate supplied)
-
-Install and lifecycle:
-- No existing product install/uninstall registration before rehearsal: PASS
 - Silent current-user install exit code: 0
-- Installed registry and executable version: 0.1.0
-- Main window title and nonzero window handle: PASS
-- Graceful application close: PASS
-- Established TCP connections for application/WebView process tree during observation: 0
-- Baseline 0.0.9 to candidate 0.1.0 overwrite upgrade: PASS
-- Silent default uninstall exit code: 0
-- Install directory and uninstall registration removed: PASS
-- Marker in default drafts directory retained after default uninstall: PASS
+- First-run window and local diagnostics page: PASS
+- Signing: NotSigned
 
-Security and packaging boundaries:
-- Candidate/application scan for host workspace, user profile, USB path, private-key headers, and GitHub token shapes: PASS; no matches
-- Rust source paths remapped to generic workspace/user-home prefixes: PASS
-- Tauri capability main-local: local Windows main window, no permissions
-- Packaged CSP: self-only resources; connect-src limited to ipc and http://ipc.localhost
-- Installer contains no PDB, draft fixture, token, signing key, or environment file
-- Downgrades blocked; installer requires no administrator privilege
-- WebView2 installer download disabled; installed supported runtime is required
-
-Dependency metadata:
-- Root npm lock third-party packages: 862; missing license metadata: 0
-- Cargo metadata third-party packages: 473; missing license/license-file metadata: 0
-
-Key resolved failure:
-- First bundle attempt timed out downloading Tauri's fixed NSIS archive from GitHub.
-- NSIS 3.11 and nsis_tauri_utils 0.5.3 were fetched through official release endpoints, hash-verified, and cached locally.
-
-Limitations and notices:
-- Separate clean Windows VM/Sandbox was unavailable; tested a clean product-install state on Windows 10 Pro 19045 x64.
-- Candidate is unsigned and may trigger a Windows reputation warning.
+Limitations:
+- No separate clean Windows VM was available.
+- Windows automation read the full candidate accessibility tree but rejected click and set_value input.
+- Actual onboarding diagnostics falsely reported MSVC and WebView2 missing on this host.
 - Existing Vite chunk-size warning remains non-blocking.
-- Remote Git, GitHub release, merge, tag, signing, and deployment: NOT RUN.
+- Remote Git, Draft PR, merge, tag, release, signing, and deployment: NOT RUN.

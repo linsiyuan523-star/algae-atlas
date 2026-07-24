@@ -1,9 +1,17 @@
+Stage-08C changed files relative to 485088f5058f71128cafa6d5b4d6c316439d037c:
+
+docs/content-workbench/ACCEPTANCE-REPORT.md
+docs/content-workbench/ADMIN-SECURITY.md
+docs/content-workbench/BACKUP-RECOVERY.md
 docs/content-workbench/HANDOFF.md
-delivery/BUILD-ENVIRONMENT.txt
+docs/content-workbench/QUICKSTART.md
+docs/content-workbench/TROUBLESHOOTING.md
 delivery/CHANGED-FILES.txt
 delivery/HANDOFF.md
+delivery/MANIFEST.txt
 delivery/TEST-SUMMARY.txt
-delivery/WINDOWS-CANDIDATE.sha256.txt
-scripts/build-windows-candidate.ps1
-tools/content-workbench/package.json
-tools/content-workbench/src-tauri/tauri.conf.json
+tests/content-workbench-scaffold.test.mjs
+tools/content-workbench/src/offline-acceptance.test.tsx
+tools/content-workbench/src-tauri/src/repository.rs
+
+Generated build output, dependencies, temporary repositories, installers, and bundles are excluded from Git.

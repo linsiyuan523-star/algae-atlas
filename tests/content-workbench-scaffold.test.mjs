@@ -89,7 +89,12 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   assert.equal(packageLock.packages[workspaceVitePath].version, "8.0.16");
   assert.equal(packageLock.packages["node_modules/vite"].version, "8.0.13");
 
-  assert.equal(tauriConfig.bundle.active, false);
+  assert.equal(tauriConfig.bundle.active, true);
+  assert.equal(tauriConfig.bundle.useLocalToolsDir, true);
+  assert.deepEqual(tauriConfig.bundle.targets, ["nsis"]);
+  assert.equal(tauriConfig.bundle.windows.allowDowngrades, false);
+  assert.deepEqual(tauriConfig.bundle.windows.webviewInstallMode, { type: "skip" });
+  assert.equal(tauriConfig.bundle.windows.nsis.installMode, "currentUser");
   assert.equal(tauriConfig.build.frontendDist, "../dist");
   assert.equal(tauriConfig.build.devUrl, "http://localhost:1420");
   assert.match(viteConfig, /port:\s*1420/);
@@ -152,7 +157,14 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   assert.match(toolchain, /"rustfmt"/);
   assert.match(toolchain, /"clippy"/);
   assert.match(toolchain, /"x86_64-pc-windows-msvc"/);
-  assert.equal(workspacePackage.scripts["tauri:build"], "tauri build --debug --no-bundle");
+  assert.equal(
+    workspacePackage.scripts["tauri:build"],
+    "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/build-windows-candidate.ps1",
+  );
+  assert.equal(
+    workspacePackage.scripts["tauri:build:debug"],
+    "tauri build --debug --no-bundle",
+  );
 
   const forbiddenDependencyNames = new Set([
     "fs",
