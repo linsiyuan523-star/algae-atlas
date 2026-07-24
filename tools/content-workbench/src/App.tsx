@@ -8,10 +8,13 @@ import {
   Settings,
   X,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { DraftsPage, NewDraftPage } from "./components/DraftPages";
 import { inspectDraft, tauriDraftApi } from "./drafts";
 import type { Draft, DraftApi } from "./drafts";
+import { tauriMediaApi, unavailableMediaApi } from "./media";
+import type { MediaApi } from "./media";
 
 const APP_VERSION = "0.1.0";
 
@@ -56,6 +59,7 @@ const staticEmptyStates: Partial<Record<SectionId, string>> = {
 
 type AppProps = {
   draftApi?: DraftApi;
+  mediaApi?: MediaApi;
 };
 
 const recoveryRequests = new WeakMap<DraftApi, Promise<Draft | null>>();
@@ -70,7 +74,9 @@ function takeRecoveryDraftOnce(draftApi: DraftApi) {
   return request;
 }
 
-export default function App({ draftApi = tauriDraftApi }: AppProps) {
+export default function App({ draftApi = tauriDraftApi, mediaApi }: AppProps) {
+  const activeMediaApi =
+    mediaApi ?? (isTauri() ? tauriMediaApi : unavailableMediaApi);
   const [activeSection, setActiveSection] = useState<SectionId>("new-content");
   const [initialDraft, setInitialDraft] = useState<Draft | null>(null);
   const [recoveryDraft, setRecoveryDraft] = useState<Draft | null>(null);
@@ -182,7 +188,11 @@ export default function App({ draftApi = tauriDraftApi }: AppProps) {
           {activeSection === "new-content" ? (
             <NewDraftPage api={draftApi} onCreated={handleDraftCreated} />
           ) : activeSection === "drafts" ? (
-            <DraftsPage api={draftApi} initialDraft={initialDraft} />
+            <DraftsPage
+              api={draftApi}
+              mediaApi={activeMediaApi}
+              initialDraft={initialDraft}
+            />
           ) : (
             <div className="empty-state" role="status">
               <Inbox aria-hidden="true" size={28} strokeWidth={1.6} />

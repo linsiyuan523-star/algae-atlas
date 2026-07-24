@@ -57,7 +57,16 @@ import type {
   LocaleWorkflowErrors,
   LocaleWorkflowInput,
 } from "../locale-workflow";
+import {
+  allImagesPublicationIssues,
+  appendBodyImage,
+  attachImageReference,
+  recordMediaIds,
+  unavailableMediaApi,
+} from "../media";
+import type { MediaApi, StagedImage } from "../media";
 import { ArticleEditor } from "./ArticleEditor";
+import { ImageIntake } from "./ImageIntake";
 import { LocaleWorkflowFields } from "./LocaleWorkflowFields";
 import { SchemaForm } from "./SchemaForm";
 
@@ -177,10 +186,15 @@ export function NewDraftPage({ api, onCreated }: NewDraftPageProps) {
 
 type DraftsPageProps = {
   api: DraftApi;
+  mediaApi?: MediaApi;
   initialDraft?: Draft | null;
 };
 
-export function DraftsPage({ api, initialDraft = null }: DraftsPageProps) {
+export function DraftsPage({
+  api,
+  mediaApi = unavailableMediaApi,
+  initialDraft = null,
+}: DraftsPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>(initialDraft ? [initialDraft] : []);
   const [selectedDraft, setSelectedDraft] = useState<Draft | null>(initialDraft);
   const [pendingAction, setPendingAction] = useState<string | null>("refresh");
@@ -335,6 +349,7 @@ export function DraftsPage({ api, initialDraft = null }: DraftsPageProps) {
               <DraftEditor
                 key={selectedDraft.draftId}
                 api={api}
+                mediaApi={mediaApi}
                 draft={selectedDraft}
                 onSaved={handleSaved}
                 onDeleted={handleDeleted}
@@ -354,6 +369,7 @@ export function DraftsPage({ api, initialDraft = null }: DraftsPageProps) {
 
 type DraftEditorProps = {
   api: DraftApi;
+  mediaApi: MediaApi;
   draft: Draft;
   onSaved: (draft: Draft) => void;
   onDeleted: (draftId: string) => void;
@@ -367,10 +383,17 @@ type EditorInput = {
   bodyEn: string;
   zhWorkflow: LocaleWorkflowInput;
   enWorkflow: LocaleWorkflowInput | null;
+  mediaIds: string[];
   parkedEnglishLocale?: unknown;
 };
 
-function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
+function DraftEditor({
+  api,
+  mediaApi,
+  draft,
+  onSaved,
+  onDeleted,
+}: DraftEditorProps) {
   const initialInspection = inspectDraft(draft);
   const initialFormInspection = getContentFormAdapter(initialInspection.fields.contentType)
     ?.inspect(draft.recordDraft) ?? { values: {}, errors: {} };
@@ -396,11 +419,21 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"delete" | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [stagedImages, setStagedImages] = useState<StagedImage[]>([]);
+  const [mediaLoadPending, setMediaLoadPending] = useState(true);
+  const [mediaLoadError, setMediaLoadError] = useState<string | null>(null);
+  const [hasDirtyMedia, setHasDirtyMedia] = useState(false);
   const editorInputRef = useRef(editorInput);
   const recordDraftRef = useRef(draft.recordDraft);
   const saveInFlightRef = useRef(false);
   const mountedRef = useRef(true);
-  const isDirty = !sameEditorInput(editorInput, savedInput);
+  const stagedImagesRef = useRef<StagedImage[]>([]);
+  const dirtyImageIdsRef = useRef<Set<string>>(new Set());
+  const mediaLoadPendingRef = useRef(true);
+  const mediaLoadErrorRef = useRef<string | null>(null);
+  const isDirty =
+    !sameEditorInput(editorInput, savedInput) ||
+    hasDirtyMedia;
   useUnsavedCloseWarning(isDirty || saveStatus === "saving");
 
   useEffect(() => {
@@ -413,6 +446,72 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
   useEffect(() => {
     recordDraftRef.current = draft.recordDraft;
   }, [draft.recordDraft]);
+
+  useEffect(() => {
+    let isCurrent = true;
+    mediaLoadPendingRef.current = true;
+    mediaLoadErrorRef.current = null;
+    mediaApi
+      .listImages(draft.draftId)
+      .then((images) => {
+        if (!isCurrent) {
+          return;
+        }
+        stagedImagesRef.current = images;
+        setStagedImages(images);
+        let restoredRecordDraft = recordDraftRef.current;
+        for (const image of images) {
+          restoredRecordDraft = attachImageReference(restoredRecordDraft, image);
+        }
+        const restoredMediaIds = recordMediaIds(restoredRecordDraft);
+        const current = editorInputRef.current;
+        if (JSON.stringify(restoredMediaIds) !== JSON.stringify(current.mediaIds)) {
+          recordDraftRef.current = restoredRecordDraft;
+          const now = new Date().toISOString();
+          const restoredInput: EditorInput = {
+            ...current,
+            mediaIds: restoredMediaIds,
+            zhWorkflow: markLocaleContentEdited(current.zhWorkflow, now),
+            enWorkflow: current.enWorkflow
+              ? markLocaleContentEdited(current.enWorkflow, now)
+              : null,
+          };
+          editorInputRef.current = restoredInput;
+          setEditorInput(restoredInput);
+          setSaveStatus("pending");
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!isCurrent) {
+          return;
+        }
+        const message = describeError(caught);
+        mediaLoadErrorRef.current = message;
+        setMediaLoadError(message);
+      })
+      .finally(() => {
+        if (isCurrent) {
+          mediaLoadPendingRef.current = false;
+          setMediaLoadPending(false);
+        }
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, [draft.draftId, mediaApi]);
+
+  const mediaCandidateError = useCallback((locale: "zh" | "en") => {
+    if (mediaLoadPendingRef.current) {
+      return "正在核对图片许可，请稍后重试。";
+    }
+    if (mediaLoadErrorRef.current) {
+      return `无法核对图片许可：${mediaLoadErrorRef.current}`;
+    }
+    if (dirtyImageIdsRef.current.size > 0) {
+      return "请先保存全部图片元数据。";
+    }
+    return allImagesPublicationIssues(stagedImagesRef.current, locale)[0];
+  }, []);
 
   const persist = useCallback(
     async (snapshot: EditorInput) => {
@@ -432,11 +531,27 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         setSaveStatus("failed");
         return;
       }
+      let preparedRecordDraft = prepared.recordDraft;
+      for (const image of stagedImagesRef.current) {
+        preparedRecordDraft = attachImageReference(preparedRecordDraft, image);
+      }
 
       const zhWorkflowValidation = validateLocaleWorkflow(snapshot.zhWorkflow);
       if (Object.values(zhWorkflowValidation).some(Boolean)) {
         setZhWorkflowErrors(zhWorkflowValidation);
         setSaveError("请修正中文语言状态后重试。");
+        setSaveStatus("failed");
+        return;
+      }
+      const zhMediaError =
+        snapshot.zhWorkflow.state === "approved" ||
+        snapshot.zhWorkflow.state === "published"
+          ? mediaCandidateError("zh")
+          : undefined;
+      if (zhMediaError) {
+        const error = zhMediaError;
+        setZhWorkflowErrors((current) => ({ ...current, state: error }));
+        setSaveError(`中文发布候选受图片元数据阻止：${error}`);
         setSaveStatus("failed");
         return;
       }
@@ -450,7 +565,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       }
 
       let nextRecordDraft = applyLocaleWorkflow(
-        prepared.recordDraft,
+        preparedRecordDraft,
         "zh",
         snapshot.zhWorkflow,
         now,
@@ -504,6 +619,19 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         if (Object.values(englishWorkflowValidation).some(Boolean)) {
           setEnWorkflowErrors(englishWorkflowValidation);
           setSaveError("请修正英文语言状态后重试。");
+          setSaveStatus("failed");
+          return;
+        }
+
+        const enMediaError =
+          snapshot.enWorkflow.state === "approved" ||
+          snapshot.enWorkflow.state === "published"
+            ? mediaCandidateError("en")
+            : undefined;
+        if (enMediaError) {
+          const error = enMediaError;
+          setEnWorkflowErrors((current) => ({ ...current, state: error }));
+          setSaveError(`英文发布候选受图片元数据阻止：${error}`);
           setSaveStatus("failed");
           return;
         }
@@ -618,7 +746,7 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         saveInFlightRef.current = false;
       }
     },
-    [api, draft.draftId, onSaved],
+    [api, draft.draftId, mediaCandidateError, onSaved],
   );
 
   useEffect(() => {
@@ -792,6 +920,42 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
     );
   }
 
+  function handleImageStaged(image: StagedImage) {
+    const images = [...stagedImagesRef.current, image];
+    stagedImagesRef.current = images;
+    setStagedImages(images);
+    const nextRecordDraft = attachImageReference(recordDraftRef.current, image);
+    recordDraftRef.current = nextRecordDraft;
+    const current = editorInputRef.current;
+    const now = new Date().toISOString();
+    commitEditorInput({
+      ...current,
+      mediaIds: recordMediaIds(nextRecordDraft),
+      zhWorkflow: markLocaleContentEdited(current.zhWorkflow, now),
+      enWorkflow: current.enWorkflow
+        ? markLocaleContentEdited(current.enWorkflow, now)
+        : null,
+    });
+  }
+
+  function handleImageUpdated(image: StagedImage, persisted: boolean) {
+    const images = stagedImagesRef.current.map((current) =>
+      current.id === image.id ? image : current,
+    );
+    stagedImagesRef.current = images;
+    setStagedImages(images);
+    if (persisted) {
+      dirtyImageIdsRef.current.delete(image.id);
+    } else {
+      dirtyImageIdsRef.current.add(image.id);
+    }
+    setHasDirtyMedia(dirtyImageIdsRef.current.size > 0);
+  }
+
+  function handleInsertBodyImage(image: StagedImage) {
+    updateBody(appendBodyImage(editorInputRef.current.bodyZh, image));
+  }
+
   function updateWorkflowField<Key extends keyof LocaleWorkflowInput>(
     locale: "zh" | "en",
     field: Key,
@@ -803,18 +967,27 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
       return;
     }
     if (field === "state") {
+      const requestedState = value as LocaleWorkflowInput["state"];
       const request = requestLocaleState(
         locale,
         workflow,
-        value as LocaleWorkflowInput["state"],
+        requestedState,
       );
       if (!request.allowed) {
         const setErrors = locale === "zh" ? setZhWorkflowErrors : setEnWorkflowErrors;
         setErrors((errors) => ({ ...errors, state: request.error }));
         return;
       }
+      if (requestedState === "approved" || requestedState === "published") {
+        const imageError = mediaCandidateError(locale);
+        if (imageError) {
+          const setErrors = locale === "zh" ? setZhWorkflowErrors : setEnWorkflowErrors;
+          setErrors((errors) => ({ ...errors, state: imageError }));
+          return;
+        }
+      }
       if (
-        value === "published" &&
+        requestedState === "published" &&
         !window.confirm(`确认将${locale === "zh" ? "中文" : "英文"}版本标记为已发布？`)
       ) {
         return;
@@ -1089,6 +1262,19 @@ function DraftEditor({ api, draft, onSaved, onDeleted }: DraftEditorProps) {
         onChange={updateBody}
       />
 
+      <ImageIntake
+        api={mediaApi}
+        draftId={draft.draftId}
+        contentType={fields.contentType}
+        images={stagedImages}
+        englishEnabled={Boolean(editorInput.enWorkflow)}
+        disabled={isBusy || mediaLoadPending || Boolean(mediaLoadError)}
+        loadError={mediaLoadError}
+        onStaged={handleImageStaged}
+        onUpdated={handleImageUpdated}
+        onInsertBody={handleInsertBodyImage}
+      />
+
       {editorInput.enWorkflow && activeEnglishAdapter ? (
         <section className="english-editor-section" aria-labelledby="english-editor-title">
           <header className="english-editor-heading">
@@ -1278,6 +1464,7 @@ function editorInputFromDraft(draft: Draft): EditorInput {
       "en",
       draft.updatedAt,
     ),
+    mediaIds: recordMediaIds(draft.recordDraft),
     ...(draft.parkedEnglishLocale !== undefined
       ? { parkedEnglishLocale: draft.parkedEnglishLocale }
       : {}),
@@ -1347,6 +1534,7 @@ function sameEditorInput(left: EditorInput, right: EditorInput) {
   if (
     left.bodyZh !== right.bodyZh ||
     left.bodyEn !== right.bodyEn ||
+    JSON.stringify(left.mediaIds) !== JSON.stringify(right.mediaIds) ||
     JSON.stringify(left.zhWorkflow) !== JSON.stringify(right.zhWorkflow) ||
     JSON.stringify(left.enWorkflow) !== JSON.stringify(right.enWorkflow) ||
     JSON.stringify(left.parkedEnglishLocale) !==

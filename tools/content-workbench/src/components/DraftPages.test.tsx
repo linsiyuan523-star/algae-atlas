@@ -13,6 +13,7 @@ import {
   validateTeamNewsRecordDraft,
 } from "../forms/team-news";
 import { batchOneFormAdapters } from "../forms/batch-one";
+import type { MediaApi, StagedImage } from "../media";
 
 function makeDraft(titleZh = "初始标题"): Draft {
   const prepared = createSharedRecordDraft(
@@ -136,6 +137,54 @@ function createApi(): DraftApi {
   };
 }
 
+function makeStagedImage(): StagedImage {
+  return {
+    formatVersion: 1,
+    draftId: draft.draftId,
+    id: "22222222-2222-4222-8222-222222222222",
+    originalName: "fictional-cover.png",
+    stagedName: "22222222-2222-4222-8222-222222222222.png",
+    targetPath:
+      "public/images/uploads/2026/07/22222222-2222-4222-8222-222222222222.png",
+    mimeType: "image/png",
+    bytes: 1024,
+    width: 640,
+    height: 480,
+    sha256: "a".repeat(64),
+    uploadedAt: "2026-07-24T08:00:00Z",
+    purpose: "cover",
+    metadata: {
+      creatorOrProvider: "",
+      sourceUrl: "",
+      licenseIdentifier: "",
+      licenseName: "",
+      licenseUrl: "",
+      attribution: "",
+      usageScope: "internal-only",
+      rightsStatus: "pending",
+      identificationStatus: "not-applicable",
+      identifiablePeople: false,
+      consentState: "not-applicable",
+      consentReference: "",
+      altZh: "",
+      altEn: "",
+      captionZh: "",
+      captionEn: "",
+    },
+  };
+}
+
+function createMediaApi(images: StagedImage[] = []): MediaApi {
+  return {
+    stageImage: vi.fn(async () => images[0] ?? makeStagedImage()),
+    listImages: vi.fn(async () => images),
+    saveMetadata: vi.fn(async (_draftId, imageId, metadata) => ({
+      ...(images.find((image) => image.id === imageId) ?? makeStagedImage()),
+      metadata,
+    })),
+  };
+}
+
 test("creates a draft from the shared content registry after field validation", async () => {
   const user = userEvent.setup();
   const api = createApi();
@@ -220,6 +269,25 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
   expect(window.confirm).toHaveBeenCalledWith("确定删除“虚构文章”？");
   expect(api.deleteDraft).toHaveBeenCalledWith(draft.draftId);
   expect(await screen.findByText("目前没有草稿。")).toBeVisible();
+});
+
+test("reattaches a safely staged image after an interrupted draft autosave", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const image = makeStagedImage();
+  render(<DraftsPage api={api} mediaApi={createMediaApi([image])} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 初始标题" }));
+  expect(await screen.findByText("1 张已暂存图片")).toBeVisible();
+  expect(screen.getByText("等待自动保存")).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  const saved = vi.mocked(api.saveDraft).mock.calls[0]?.[0];
+  expect(saved?.recordDraft).toMatchObject({
+    media: [image.id],
+    shared: { coverMediaId: image.id },
+  });
 });
 
 test("warns before discarding type-specific fields during a type switch", async () => {

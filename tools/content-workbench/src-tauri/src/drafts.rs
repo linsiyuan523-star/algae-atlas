@@ -603,6 +603,11 @@ fn ensure_safe_regular_file(root: &Path, target: &Path) -> StoreResult<()> {
     Ok(())
 }
 
+pub(crate) fn verify_safe_regular_file(root: &Path, target: &Path) -> std::io::Result<()> {
+    ensure_safe_regular_file(root, target)
+        .map_err(|_| std::io::Error::other("file path is outside the approved directory"))
+}
+
 #[cfg(windows)]
 fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -618,7 +623,11 @@ fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(windows)]
-fn install_atomically(temporary: &Path, target: &Path, create_new: bool) -> std::io::Result<()> {
+pub(crate) fn install_atomically(
+    temporary: &Path,
+    target: &Path,
+    create_new: bool,
+) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, ReplaceFileW};
 
@@ -645,7 +654,11 @@ fn install_atomically(temporary: &Path, target: &Path, create_new: bool) -> std:
 }
 
 #[cfg(not(windows))]
-fn install_atomically(temporary: &Path, target: &Path, create_new: bool) -> std::io::Result<()> {
+pub(crate) fn install_atomically(
+    temporary: &Path,
+    target: &Path,
+    create_new: bool,
+) -> std::io::Result<()> {
     if create_new {
         fs::hard_link(temporary, target)?;
         fs::remove_file(temporary)
@@ -655,12 +668,12 @@ fn install_atomically(temporary: &Path, target: &Path, create_new: bool) -> std:
 }
 
 #[cfg(windows)]
-fn sync_directory(_path: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
 #[cfg(not(windows))]
-fn sync_directory(path: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_directory(path: &Path) -> std::io::Result<()> {
     File::open(path)?.sync_all()
 }
 

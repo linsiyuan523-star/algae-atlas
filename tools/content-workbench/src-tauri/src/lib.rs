@@ -1,4 +1,5 @@
 mod drafts;
+mod media;
 mod session;
 
 use tauri::Manager;
@@ -9,8 +10,10 @@ pub fn run() {
         .setup(|app| {
             let app_data_root = app.path().app_data_dir()?;
             let drafts_root = app_data_root.join("drafts").join("v1");
+            let media_root = app_data_root.join("media-staging").join("v1");
             let session_root = app_data_root.join("session");
             app.manage(drafts::DraftStore::new(drafts_root));
+            app.manage(media::MediaStore::new(media_root));
             app.manage(session::SessionState::begin(session_root)?);
             Ok(())
         })
@@ -27,6 +30,9 @@ pub fn run() {
             drafts::open_draft,
             drafts::save_draft,
             drafts::delete_draft,
+            media::stage_image,
+            media::list_staged_images,
+            media::save_image_metadata,
             session::take_recovery_draft,
         ])
         .build(tauri::generate_context!())
