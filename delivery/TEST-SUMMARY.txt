@@ -1,45 +1,46 @@
-Stage: Stage-05B2
+Stage: Stage-06B1
 Status: PASS
 ValidatedAt: 2026-07-24
-Branch: local/stage-05b2-bilingual
-StartCommit: fcddeff963e96d4393e1fb5298f63c3b27b596b2
-FeatureCommit: 548af1556b55748b1c7c965fb8e4195dcaf6363e
+Branch: local/stage-06b1-detail-preview
+StartCommit: 2beb9506506387e6579515d214ae40dd195eca01
+FeatureCommit: 048c0b8a722eb18037abfa63c5a90e6fe9784806
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
-- Target: Windows x64 MSVC
+- Target: Windows desktop
 - Node.js: v22.23.1
 - npm: 10.9.8; commands used npm.cmd because PowerShell blocks npm.ps1
-- Cargo/Rust: 1.97.1
 
 Setup:
 - npm.cmd ci --offline --ignore-scripts: PASS
   - 662 packages, 0 vulnerabilities
 
 Required checks:
-- npm.cmd run desktop:check: PASS
-  - Desktop TypeScript and ESLint passed
+- npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
+  - TypeScript and ESLint passed
   - Existing non-fatal missing Next.js pages notice printed
-- npm.cmd run desktop:test: PASS
-  - Desktop scaffold: 1 test passed
-  - Vitest: 13 files, 123 tests passed
-- Focused bilingual workflow/editor suite: PASS
-  - 5 files, 58 tests passed
-  - Locale state, English forms, component interaction, Markdown/image-alt behavior, persistence, and migration passed
-- npm.cmd run desktop:rust:test: PASS; 9 tests
-  - CRUD, v1-v3 migration, bilingual body storage, parked locale storage, path validation, quarantine, recovery, and atomic replacement passed
-- npm.cmd run desktop:rust:fmt: PASS
-- npm.cmd run desktop:rust:check: PASS
-- npm.cmd run desktop:rust:clippy: PASS with warnings denied
-- npm.cmd run desktop:frontend:build: PASS
-  - 1,946 modules transformed
+- npm.cmd run test --workspace @algae-atlas/content-workbench: PASS
+  - 14 files, 127 tests passed
+- Focused preview and DraftPages suite: PASS
+  - 2 files, 17 tests passed
+  - Localized rendering, safe Markdown, image/credit handling, English missing, and editor integration passed
+- npm.cmd run build --workspace @algae-atlas/content-workbench: PASS
+  - 1,947 modules transformed
   - Existing non-fatal chunk-size warning printed
+- Browser visual and interaction smoke: PASS
+  - Tauri default viewport 1280x800
+  - No document horizontal overflow, toolbar overflow, or title overflow
+  - Resolved image loaded at 1796x1180 intrinsic size
+  - English missing state switched correctly
+  - Browser console errors/warnings: 0
 - git diff --check: PASS
 
 Boundary:
-- Root npm run check/test/build: NOT RUN; no shared Schema or website file changed
-- Native Tauri build/smoke: NOT RUN by instruction
+- Root npm check/test/build: NOT RUN; no shared Schema or website file changed
+- Rust and native Tauri suites: NOT RUN; no Rust/storage/config file changed
+- Mobile/card/home preview: NOT RUN; explicitly deferred to Stage-06B2
 - Git remote writes, PR, merge, tag, release, deployment: NONE
 
-Resolved attempt:
-- One parallel desktop/Rust run caused an interaction test to exceed 5 seconds by 0.037 seconds under contention. The serial full desktop run passed; do not raise the timeout or repeat parallel execution.
+Resolved attempts:
+- Replaced an unscoped status assertion after save and missing-language status regions collided in one integration test.
+- Replaced repository-path URL inference after visual smoke exposed that desktop Vite does not serve root public images; preview now requires an explicit validated source.
