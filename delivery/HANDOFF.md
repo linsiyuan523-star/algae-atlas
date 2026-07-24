@@ -1,37 +1,39 @@
-# Stage 7A2 Delivery Handoff
+# Stage 7A3 Delivery Handoff
 
-- Stage: Stage-07A2 - Safe Local Branch Write and Commit
-- Start commit: `f745c49ce54cb77dec23d5856c4bdd0a34251afe`
-- Feature commit: `e632f4f`
+- Stage: Stage-07A3 - Verified Bundle Export and Stage 7A Checkpoint
+- Start commit: `f41cc9e6082e2a7c34792b3572520c849b3794c5`
+- Feature commit: `8760329`
 - End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the clean branch tip)
 
 ## Completed
 
-- Added deterministic publication files and explicit operator confirmation after a successful dry-run.
-- Added application-data staging, repository-state revalidation, new content branch creation, atomic new-file installation, exact staging/blob checks, controlled local commit, and post-commit verification.
-- Blocked remotes, protected target branches, dirty worktrees, existing/case-conflicting targets, links/reparse points, unexpected staged paths, Git filters, hooks, and stale dry-run state.
-- Added exact-path rollback and verified success/conflict/failure/`main` behavior in disposable repositories.
+- Added restart-safe preflight and confirmed export for complete local content-branch Bundles.
+- Added exact branch/HEAD, clean worktree, remote, operation, commit-path, sensitive-path, generated-artifact, destination, and stale-snapshot gates.
+- Added staged Bundle creation, `git bundle verify`, exact-head/complete-history checks, SHA-256, verified destination copy, and atomic new-directory publication.
+- Added Bundle sidecar, MANIFEST, HANDOFF, TEST-SUMMARY, CHANGED-FILES, and a PowerShell importer limited to a new `import/...` branch.
+- Proved the generated importer leaves the checked-out branch, HEAD, and worktree unchanged.
 
 ## Not Completed
 
-- Existing targets are not updated.
-- No bundle, remote action, GitHub action, PR, merge, tag, release, deployment, or full website build was performed.
+- Existing destinations are not replaced.
+- No remote action, GitHub action, PR, merge, tag, release, installer, or deployment was performed.
 
 ## Test Summary
 
-- Desktop check, scaffold, full Vitest, full Rust tests, Rust format/Clippy, desktop frontend build, Browser layout smoke, and Git whitespace check: PASS.
-- Failure injection restored original branch, HEAD, index, files, and clean status.
+- Root check, full test suite, Next production build, desktop check/test/build, Rust tests/format/Clippy, Browser desktop/mobile layout, Git whitespace, and offline Bundle round trip: PASS.
+- Generated PowerShell importer created only the expected temporary import branch: PASS.
 
 ## Known Issues
 
-- Browser-only Vite cannot exercise native commit commands.
+- Stage-07A2 had no separate Bundle; the verified clean same-worker branch tip was used.
+- Browser-only Vite cannot execute native Bundle commands.
 - Existing non-fatal chunk-size, missing-pages, and Windows linker notices remain.
 
 ## Next Stage Exact Start
 
-- Execute `30_Stage7A3_Bundle导出与Stage7A检查点.md` from the clean Stage-07A2 branch tip.
+- Execute `31_Stage7B1_GitHub_DraftPR_Mock.md` from the verified Stage-07A3 Bundle head.
 
 ## Do Not Repeat
 
-- Do not use destructive Git recovery or broad staging.
-- Do not generate a bundle or access a remote in this stage.
+- Do not overwrite delivery directories or import branches.
+- Do not add checkout, merge, or remote behavior to the importer.

@@ -1,15 +1,15 @@
-Stage: Stage-07A2
+Stage: Stage-07A3
 Status: PASS
 ValidatedAt: 2026-07-24
-Branch: local/stage-07a2-local-commit
-StartCommit: f745c49ce54cb77dec23d5856c4bdd0a34251afe
-FeatureCommit: e632f4f
+Branch: local/stage-07a3-bundle-export
+StartCommit: f41cc9e6082e2a7c34792b3572520c849b3794c5
+FeatureCommit: 8760329
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Prerequisite:
-- Stage-07A1 USB bundle SHA256: PASS
-- Stage-07A1 bundle verify: PASS; complete history
-- Stage-07A1 bundle head: f745c49ce54cb77dec23d5856c4bdd0a34251afe
+- Stage-07A2 clean branch tip: PASS; f41cc9e6082e2a7c34792b3572520c849b3794c5
+- Stage-07A2 handoff: PASS
+- Separate Stage-07A2 Bundle: NOT AVAILABLE; same-worker verified branch continuation used
 - Worker remotes: NONE
 
 Environment:
@@ -19,37 +19,39 @@ Environment:
 - Rust/Cargo: 1.97.1
 - npm.cmd ci --prefer-offline --no-audit --no-fund: PASS; 659 packages
 
-Required checks:
+Required checkpoint:
+- npm.cmd run check: PASS
+- npm.cmd test: PASS
+- npm.cmd run build:next: PASS; 97 static pages
 - npm.cmd run desktop:check: PASS
-- Focused Stage-07A2 Vitest: PASS; 2 files, 6 tests
-- npm.cmd run desktop:test: PASS; scaffold 1 test; Vitest 19 files, 144 tests
-- Focused repository Rust tests: PASS; 9 tests
-- cargo test --locked --all-targets: PASS; 30 tests
+- npm.cmd run desktop:test: PASS; scaffold 1 test; Vitest 19 files, 146 tests
+- Focused Stage-07A3 Vitest: PASS; 2 files, 8 tests
+- cargo test --locked --all-targets: PASS; 33 tests
+- Focused Bundle Rust tests: PASS; 3 tests
 - cargo fmt --check: PASS
 - cargo clippy --all-targets -- -D warnings: PASS
 - npm.cmd run desktop:frontend:build: PASS
 - git diff --check: PASS
 
-Transactional evidence:
-- Success: one content branch and one content commit; main remained at the original SHA
-- Exact planned files only: PASS; every staged blob matched prepared bytes
-- Existing target conflict: PASS; full repository snapshot unchanged
-- Injected failure after staging: PASS; original branch, HEAD, index, files, and clean status restored
-- Operation-created branch and application staging directory removed after failure: PASS
-- Protected main target: PASS; rejected before any write
-- Worker remote block and post-commit remote recheck: PASS
-- Git clean filters rejected; hooks and commit signing disabled for the controlled commit
+Offline Bundle evidence:
+- Complete single-ref Bundle create: PASS
+- git bundle verify and exact head: PASS
+- No Bundle prerequisites: PASS
+- SHA-256 sidecar: PASS
+- Destination copy size/hash/artifact set: PASS
+- Existing destination, dirty worktree, remote, and stale snapshot blocks: PASS
+- Generated Import-Bundle.ps1 execution: PASS
+- Import target limited to a new import/... branch: PASS
+- Import preserved current branch, HEAD, index, files, and clean status: PASS
 
 UI smoke:
-- In-app Browser desktop width 1280: PASS; no horizontal overflow
-- In-app Browser mobile width 390: PASS; all five navigation items inside viewport
+- In-app Browser desktop width 1280: PASS; no horizontal overflow or overlap
+- In-app Browser mobile width 390: PASS; no horizontal overflow or overlap
 - Browser console warnings/errors: NONE
-- Native confirmation and commit result: PASS via component and disposable-repository tests
+- Native success and blocked states: PASS via component and disposable-repository tests
 
 Boundary:
-- Root website checks and website production build: NOT RUN
-- Content bundle export: NOT RUN; belongs to Stage-07A3
-- Remote Git, GitHub, PR, merge, tag, release, and deployment: NOT RUN
+- Remote Git, GitHub, PR, merge, tag, release, installer, and deployment: NOT RUN
 
 Known non-blocking notices:
 - Existing Vite chunk-size warning

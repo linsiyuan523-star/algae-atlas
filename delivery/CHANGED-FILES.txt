@@ -1,19 +1,13 @@
-Stage-07A2 changed files
-
-Native repository transaction:
-- tools/content-workbench/src-tauri/src/lib.rs
-- tools/content-workbench/src-tauri/src/media.rs
-- tools/content-workbench/src-tauri/src/repository.rs
-
-Frontend publication and confirmation:
-- tools/content-workbench/src/repository.ts
-- tools/content-workbench/src/repository.test.ts
-- tools/content-workbench/src/components/RepositoryExportPage.tsx
-- tools/content-workbench/src/components/RepositoryExportPage.test.tsx
-- tools/content-workbench/src/styles/app.css
-
-Delivery records:
-- docs/content-workbench/HANDOFF.md
-- delivery/HANDOFF.md
-- delivery/TEST-SUMMARY.txt
-- delivery/CHANGED-FILES.txt
+delivery/CHANGED-FILES.txt
+delivery/HANDOFF.md
+delivery/MANIFEST.txt
+delivery/TEST-SUMMARY.txt
+docs/content-workbench/HANDOFF.md
+tools/content-workbench/src-tauri/src/lib.rs
+tools/content-workbench/src-tauri/src/media.rs
+tools/content-workbench/src-tauri/src/repository.rs
+tools/content-workbench/src/components/RepositoryExportPage.test.tsx
+tools/content-workbench/src/components/RepositoryExportPage.tsx
+tools/content-workbench/src/repository.test.ts
+tools/content-workbench/src/repository.ts
+tools/content-workbench/src/styles/app.css
