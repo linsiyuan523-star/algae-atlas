@@ -135,6 +135,7 @@ test("content workbench scaffold has the local-only desktop contract", () => {
     'uuid = { version = "=1.24.0", features = ["v4"] }',
     'time = { version = "=0.3.54", features = ["formatting", "parsing"] }',
     'thiserror = "=2.0.19"',
+    'image = { version = "=0.25.9", default-features = false, features = ["jpeg", "png", "webp"] }',
     "[target.'cfg(windows)'.dependencies]",
     'windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }',
     "[dev-dependencies]",

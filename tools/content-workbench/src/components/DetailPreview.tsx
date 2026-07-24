@@ -452,7 +452,7 @@ function renderPreviewMedia(
   );
 }
 
-function safePreviewSource(value: string | undefined) {
+export function safePreviewSource(value: string | undefined) {
   if (!value) {
     return null;
   }

@@ -69,8 +69,8 @@ import {
 } from "../media";
 import type { MediaApi, StagedImage } from "../media";
 import { ArticleEditor } from "./ArticleEditor";
-import { DetailPreview } from "./DetailPreview";
-import type { DetailPreviewValue } from "./DetailPreview";
+import { ContentPreview } from "./ContentPreview";
+import type { DetailPreviewMedia, DetailPreviewValue } from "./DetailPreview";
 import { ImageIntake } from "./ImageIntake";
 import { LocaleWorkflowFields } from "./LocaleWorkflowFields";
 import { SchemaForm } from "./SchemaForm";
@@ -1179,6 +1179,7 @@ function DraftEditor({
         : null,
     },
   };
+  const previewMedia = stagedImages.map(stagedImageToPreviewMedia);
 
   return (
     <form className="draft-editor" onSubmit={(event) => void handleSave(event)}>
@@ -1386,7 +1387,7 @@ function DraftEditor({
       ) : null}
         </>
       ) : (
-        <DetailPreview value={previewValue} />
+        <ContentPreview value={previewValue} media={previewMedia} />
       )}
 
       <dl className="draft-metadata">
@@ -1618,6 +1619,68 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function stagedImageToPreviewMedia(image: StagedImage): DetailPreviewMedia {
+  const metadata = image.metadata;
+  const caption = metadata.captionZh.trim() || metadata.captionEn.trim()
+    ? {
+        zh: metadata.captionZh.trim(),
+        ...(metadata.captionEn.trim() ? { en: metadata.captionEn.trim() } : {}),
+      }
+    : undefined;
+
+  return {
+    schemaVersion: 1,
+    id: image.id,
+    filePath: image.targetPath,
+    sha256: image.sha256,
+    mimeType: image.mimeType,
+    bytes: image.bytes,
+    width: image.width,
+    height: image.height,
+    uploadedAt: image.uploadedAt,
+    creatorOrProvider: metadata.creatorOrProvider.trim(),
+    ...(metadata.sourceUrl.trim() ? { sourceUrl: metadata.sourceUrl.trim() } : {}),
+    license: {
+      identifier: previewLicenseIdentifier(metadata.licenseIdentifier),
+      name: metadata.licenseName.trim(),
+      ...(metadata.licenseUrl.trim() ? { href: metadata.licenseUrl.trim() } : {}),
+      attribution: metadata.attribution.trim(),
+      usageScope: metadata.usageScope,
+    },
+    rightsStatus: metadata.rightsStatus,
+    identificationStatus: metadata.identificationStatus,
+    identifiablePeople: metadata.identifiablePeople,
+    consentState: metadata.consentState,
+    ...(metadata.consentReference.trim()
+      ? { consentReference: metadata.consentReference.trim() }
+      : {}),
+    alt: {
+      zh: metadata.altZh.trim(),
+      ...(metadata.altEn.trim() ? { en: metadata.altEn.trim() } : {}),
+    },
+    ...(caption ? { caption } : {}),
+    relatedContentIds: [],
+    legacy: false,
+  };
+}
+
+function previewLicenseIdentifier(
+  value: string,
+): DetailPreviewMedia["license"]["identifier"] {
+  switch (value) {
+    case "cc0-1.0":
+    case "cc-by-4.0":
+    case "cc-by-sa-4.0":
+    case "public-domain":
+    case "team-owned":
+    case "permission-granted":
+    case "other":
+      return value;
+    default:
+      return "other";
+  }
 }
 
 function sameSaveInput(left: DraftFields, right: DraftFields) {
