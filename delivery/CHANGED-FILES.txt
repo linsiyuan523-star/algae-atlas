@@ -1,11 +1,4 @@
-M docs/content-workbench/HANDOFF.md
-M delivery/CHANGED-FILES.txt
-M delivery/HANDOFF.md
-M delivery/TEST-SUMMARY.txt
-M tools/content-workbench/src-tauri/Cargo.lock
-M tools/content-workbench/src-tauri/Cargo.toml
-M tools/content-workbench/src-tauri/src/media.rs
-M tools/content-workbench/src/components/ImageIntake.test.tsx
-M tools/content-workbench/src/components/ImageIntake.tsx
-M tools/content-workbench/src/media.ts
-M tools/content-workbench/src/styles/app.css
+Stage-06B2 integration merge
+
+Integrated Stage-06A2 image processing and Stage-06B1 detail preview.
+The final Stage-06B2 file inventory will be written after implementation and validation.

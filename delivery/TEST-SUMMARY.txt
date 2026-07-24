@@ -1,44 +1,6 @@
-Stage: Stage-06A2
-Status: PASS
-ValidatedAt: 2026-07-24
-Branch: local/stage-06a2-image-processing
-StartCommit: 1a24bd6c5c08eb6a5517be2402f78bb0165da4f9
-FeatureCommit: be3d1dc2518fcf70236058557fe4ee7bc069a2ed
-FinalCommit: BRANCH_TIP_AT_DELIVERY
+Stage 6 integration merge
 
-Environment:
-- Target: Windows x64 MSVC
-- Node.js: v22.23.1
-- npm: 10.9.8; commands used npm.cmd
-- Cargo/Rust: 1.97.1
-
-Required checks:
-- npm.cmd ci --offline --ignore-scripts: PASS; 659 packages, 0 vulnerabilities
-- npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
-- Focused Vitest (media and ImageIntake): PASS; 2 files, 7 tests
-- cargo +1.97.1 test --locked --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all-targets media::tests: PASS; 12 tests
-- cargo +1.97.1 fmt --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all -- --check: PASS
-- cargo +1.97.1 clippy --locked --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all-targets -- -D warnings: PASS
-- git diff --check: PASS
-
-Covered behavior:
-- JPEG/PNG/WebP fixtures produce bounded WebP output without upscaling
-- JPEG EXIF GPS/device strings are absent from generated WebP
-- Cover thumbnail generation and integrity metadata
-- Configurable dimensions and output-byte limits
-- Source SHA-256 duplicate rejection before writes
-- Injected failure rollback leaves no derivative or manifest
-- Managed temporary/orphan cleanup preserves unrelated files
-- Explicit local original retention and Stage-06A1 v1 compatibility
-- New AVIF intake fails closed when the privacy-safe decoder is unavailable
-
-Boundary:
-- Root website check/test/build: NOT RUN; no shared Schema or website file changed
-- Website production build: NOT RUN by Stage-06A2 instruction
-- Native Tauri visual smoke: NOT RUN; browser-only Vite has no Tauri IPC
-- Git remote writes, PR, merge, tag, release, deployment: NONE
-
-Informational notices:
-- ESLint reports the existing missing Next.js pages directory notice.
-- Rust test linking reports the existing MSVC linker-message warning.
-- `avif-native` was not retained because Windows lacks packaged dav1d/pkg-config.
+- Stage-06A2 delivery bundle: verified SHA-256 and complete history.
+- Stage-06B1 delivery bundle: verified SHA-256 and complete history.
+- Parent tests: recorded as passing in each verified delivery handoff.
+- Post-merge checks: pending Stage-06B2 implementation.

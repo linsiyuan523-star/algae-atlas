@@ -309,6 +309,23 @@ test("warns before discarding type-specific fields during a type switch", async 
   expect(screen.getByRole("heading", { name: "实验学习资源字段" })).toBeVisible();
 });
 
+test("opens a live localized detail preview from the draft editor", async () => {
+  const user = userEvent.setup();
+  render(<DraftsPage api={createApi()} initialDraft={draft} />);
+
+  await user.click(screen.getByRole("button", { name: "预览详情页" }));
+  expect(screen.getByRole("heading", { name: "初始标题", level: 1 })).toBeVisible();
+  expect(screen.getByText("仅用于组件测试的虚构摘要。")).toBeVisible();
+  expect(screen.queryByRole("textbox", { name: "中文正文编辑区" })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "English" }));
+  expect(
+    screen.getByText("英文版本缺失").closest('[role="status"]'),
+  ).toHaveTextContent("不会生成英文详情页");
+  await user.click(screen.getByRole("button", { name: "返回编辑" }));
+  expect(await screen.findByRole("textbox", { name: "中文正文编辑区" })).toBeVisible();
+});
+
 test("validates and serializes the team-news pilot before saving", async () => {
   const user = userEvent.setup();
   const api = createApi();
