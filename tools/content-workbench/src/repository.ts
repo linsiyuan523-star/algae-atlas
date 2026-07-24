@@ -107,6 +107,44 @@ export type RepositoryLocalCommitResult = {
   committedPaths: string[];
 };
 
+export type RepositoryBundlePreflightRequest = {
+  repositoryPath: string;
+  destinationDirectory: string;
+};
+
+export type RepositoryBundlePreflightResult = {
+  repositoryPath: string;
+  canonicalRepositoryPath?: string;
+  destinationDirectory: string;
+  branchName?: string;
+  headSha?: string;
+  baseCommitSha?: string;
+  bundleFileName?: string;
+  importBranchName?: string;
+  changedFiles: string[];
+  conflicts: DryRunConflict[];
+  ready: boolean;
+};
+
+export type RepositoryBundleExportRequest = {
+  repositoryPath: string;
+  destinationDirectory: string;
+  expectedBranchName: string;
+  expectedHeadSha: string;
+  confirmed: boolean;
+};
+
+export type RepositoryBundleExportResult = {
+  branchName: string;
+  headSha: string;
+  destinationDirectory: string;
+  bundleFileName: string;
+  bundleSizeBytes: number;
+  sha256: string;
+  importBranchName: string;
+  artifactNames: string[];
+};
+
 export type ExportSchemaResult = {
   valid: boolean;
   issues: ValidationIssue[];
@@ -122,6 +160,12 @@ export type RepositoryApi = {
   commit: (
     request: RepositoryLocalCommitRequest,
   ) => Promise<RepositoryLocalCommitResult>;
+  bundlePreflight: (
+    request: RepositoryBundlePreflightRequest,
+  ) => Promise<RepositoryBundlePreflightResult>;
+  exportBundle: (
+    request: RepositoryBundleExportRequest,
+  ) => Promise<RepositoryBundleExportResult>;
 };
 
 export const tauriRepositoryApi: RepositoryApi = {
@@ -129,6 +173,10 @@ export const tauriRepositoryApi: RepositoryApi = {
     invoke<RepositoryDryRunResult>("repository_export_dry_run", { request }),
   commit: (request) =>
     invoke<RepositoryLocalCommitResult>("repository_local_commit", { request }),
+  bundlePreflight: (request) =>
+    invoke<RepositoryBundlePreflightResult>("repository_bundle_preflight", { request }),
+  exportBundle: (request) =>
+    invoke<RepositoryBundleExportResult>("repository_export_bundle", { request }),
 };
 
 export const unavailableRepositoryApi: RepositoryApi = {
@@ -137,6 +185,12 @@ export const unavailableRepositoryApi: RepositoryApi = {
   },
   commit: async () => {
     throw new Error("本地内容提交仅在桌面应用中可用。");
+  },
+  bundlePreflight: async () => {
+    throw new Error("离线 Bundle 预检仅在桌面应用中可用。");
+  },
+  exportBundle: async () => {
+    throw new Error("离线 Bundle 导出仅在桌面应用中可用。");
   },
 };
 
@@ -206,6 +260,45 @@ export async function runRepositoryLocalCommit(
     draftId: plan.draftId,
     textFiles: plan.textFiles,
     imageFiles: plan.imageFiles,
+    confirmed: true,
+  });
+}
+
+export async function runRepositoryBundlePreflight(
+  api: RepositoryApi,
+  repositoryPath: string,
+  destinationDirectory: string,
+): Promise<RepositoryBundlePreflightResult> {
+  return api.bundlePreflight({
+    repositoryPath,
+    destinationDirectory,
+  });
+}
+
+export async function runRepositoryBundleExport(
+  api: RepositoryApi,
+  preflight: RepositoryBundlePreflightResult,
+  repositoryPath: string,
+  destinationDirectory: string,
+): Promise<RepositoryBundleExportResult> {
+  const expectedBranchName = preflight.branchName;
+  const expectedHeadSha = preflight.headSha;
+  if (
+    !preflight.ready ||
+    !preflight.canonicalRepositoryPath ||
+    !expectedBranchName ||
+    !expectedHeadSha ||
+    repositoryPath.trim() !== preflight.repositoryPath ||
+    destinationDirectory.trim() !== preflight.destinationDirectory
+  ) {
+    throw new Error("Bundle 预检结果已失效，请重新预检后再导出。");
+  }
+
+  return api.exportBundle({
+    repositoryPath: preflight.canonicalRepositoryPath,
+    destinationDirectory: preflight.destinationDirectory,
+    expectedBranchName,
+    expectedHeadSha,
     confirmed: true,
   });
 }

@@ -96,6 +96,17 @@ function draftApi(draft: Draft): DraftApi {
   };
 }
 
+function emptyDraftApi(): DraftApi {
+  return {
+    createDraft: vi.fn(),
+    listDrafts: vi.fn(async () => []),
+    openDraft: vi.fn(),
+    saveDraft: vi.fn(),
+    deleteDraft: vi.fn(),
+    takeRecoveryDraft: vi.fn(async () => null),
+  };
+}
+
 function mediaApi(image: StagedImage): MediaApi {
   return {
     stageImage: vi.fn(),
@@ -166,6 +177,8 @@ test("selects a draft and renders repository, target, Schema and Git dry-run out
   const repositoryApi: RepositoryApi = {
     dryRun: vi.fn(async (request) => backendResult(request)),
     commit,
+    bundlePreflight: vi.fn(),
+    exportBundle: vi.fn(),
   };
   render(
     <RepositoryExportPage
@@ -224,6 +237,8 @@ test("shows repository conflicts as a blocked dry-run", async () => {
   const repositoryApi: RepositoryApi = {
     dryRun: vi.fn(async (request) => backendResult(request, true)),
     commit: vi.fn(),
+    bundlePreflight: vi.fn(),
+    exportBundle: vi.fn(),
   };
   render(
     <RepositoryExportPage
@@ -241,4 +256,84 @@ test("shows repository conflicts as a blocked dry-run", async () => {
   expect(await screen.findByText("预演被阻止")).toBeVisible();
   expect(screen.getByText("WORKTREE_DIRTY")).toBeVisible();
   expect(screen.getByText("?? operator-note.txt")).toBeVisible();
+});
+
+test("preflights and exports an offline bundle after restart without a draft", async () => {
+  const user = userEvent.setup();
+  const branchName = `content/20260724-${RECORD_ID}`;
+  const headSha = "c".repeat(40);
+  const bundlePreflight = vi.fn(
+    async (request: Parameters<RepositoryApi["bundlePreflight"]>[0]) => ({
+      repositoryPath: request.repositoryPath,
+      canonicalRepositoryPath: request.repositoryPath,
+      destinationDirectory: request.destinationDirectory,
+      branchName,
+      headSha,
+      baseCommitSha: "a".repeat(40),
+      bundleFileName: `content-20260724-${RECORD_ID}-v1.bundle`,
+      importBranchName: `import/content-20260724-${RECORD_ID}`,
+      changedFiles: [`content/records/science-article/${RECORD_ID}/record.json`],
+      conflicts: [],
+      ready: true,
+    }),
+  );
+  const exportBundle = vi.fn(
+    async (request: Parameters<RepositoryApi["exportBundle"]>[0]) => ({
+      branchName: request.expectedBranchName,
+      headSha: request.expectedHeadSha,
+      destinationDirectory: request.destinationDirectory,
+      bundleFileName: `content-20260724-${RECORD_ID}-v1.bundle`,
+      bundleSizeBytes: 4096,
+      sha256: "D".repeat(64),
+      importBranchName: `import/content-20260724-${RECORD_ID}`,
+      artifactNames: [
+        `content-20260724-${RECORD_ID}-v1.bundle`,
+        `content-20260724-${RECORD_ID}-v1.bundle.sha256.txt`,
+        "MANIFEST.txt",
+        "HANDOFF.md",
+        "TEST-SUMMARY.txt",
+        "CHANGED-FILES.txt",
+        "Import-Bundle.ps1",
+      ],
+    }),
+  );
+  const repositoryApi: RepositoryApi = {
+    dryRun: vi.fn(),
+    commit: vi.fn(),
+    bundlePreflight,
+    exportBundle,
+  };
+  render(
+    <RepositoryExportPage
+      draftApi={emptyDraftApi()}
+      mediaApi={mediaApi(imageFixture())}
+      repositoryApi={repositoryApi}
+    />,
+  );
+
+  expect(await screen.findByText("目前没有可导出的草稿。")).toBeVisible();
+  await user.type(screen.getByLabelText("源仓库根目录"), "D:\\fictional-worktree");
+  await user.type(screen.getByLabelText("目标交接目录"), "E:\\content-handoff");
+  await user.click(screen.getByRole("button", { name: "预检 Bundle" }));
+
+  expect(await screen.findByText("Bundle 预检通过")).toBeVisible();
+  expect(screen.getByText(`content-20260724-${RECORD_ID}-v1.bundle`)).toBeVisible();
+  const exportButton = screen.getByRole("button", { name: "导出离线交接包" });
+  expect(exportButton).toBeDisabled();
+  await user.click(
+    screen.getByRole("checkbox", {
+      name: "确认导出完整分支并创建上述交接目录",
+    }),
+  );
+  await user.click(exportButton);
+
+  expect(await screen.findByText("离线交接包已验证")).toBeVisible();
+  expect(screen.getByText("Import-Bundle.ps1")).toBeVisible();
+  expect(exportBundle).toHaveBeenCalledWith({
+    repositoryPath: "D:\\fictional-worktree",
+    destinationDirectory: "E:\\content-handoff",
+    expectedBranchName: branchName,
+    expectedHeadSha: headSha,
+    confirmed: true,
+  });
 });

@@ -40,6 +40,8 @@ pub fn run() {
             media::save_image_metadata,
             repository::repository_export_dry_run,
             repository::repository_local_commit,
+            repository::repository_bundle_preflight,
+            repository::repository_export_bundle,
             session::take_recovery_draft,
         ])
         .build(tauri::generate_context!())

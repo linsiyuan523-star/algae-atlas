@@ -7,6 +7,8 @@ import type { Draft } from "./drafts";
 import type { StagedImage } from "./media";
 import {
   createExportPlan,
+  runRepositoryBundleExport,
+  runRepositoryBundlePreflight,
   runRepositoryExportDryRun,
   runRepositoryLocalCommit,
 } from "./repository";
@@ -208,6 +210,8 @@ test("combines shared Schema validation with read-only repository diagnostics", 
   const api: RepositoryApi = {
     dryRun: vi.fn(async (request) => backendResult(request)),
     commit: vi.fn(),
+    bundlePreflight: vi.fn(),
+    exportBundle: vi.fn(),
   };
 
   const result = await runRepositoryExportDryRun(
@@ -239,6 +243,8 @@ test("uses the approved dry-run snapshot for one confirmed local commit", async 
   const api: RepositoryApi = {
     dryRun: vi.fn(async (request) => backendResult(request)),
     commit,
+    bundlePreflight: vi.fn(),
+    exportBundle: vi.fn(),
   };
   const draft = draftFixture();
   const images = [imageFixture()];
@@ -275,4 +281,72 @@ test("uses the approved dry-run snapshot for one confirmed local commit", async 
       ]),
     }),
   );
+});
+
+test("binds a confirmed bundle export to the approved branch, HEAD and destination", async () => {
+  const branchName = `content/20260724-${RECORD_ID}`;
+  const headSha = "c".repeat(40);
+  const bundlePreflight = vi.fn(
+    async (request: Parameters<RepositoryApi["bundlePreflight"]>[0]) => ({
+    repositoryPath: request.repositoryPath,
+    canonicalRepositoryPath: request.repositoryPath,
+    destinationDirectory: request.destinationDirectory,
+    branchName,
+    headSha,
+    baseCommitSha: "a".repeat(40),
+    bundleFileName: `content-20260724-${RECORD_ID}-v1.bundle`,
+    importBranchName: `import/content-20260724-${RECORD_ID}`,
+    changedFiles: [`content/records/science-article/${RECORD_ID}/record.json`],
+    conflicts: [],
+    ready: true,
+    }),
+  );
+  const exportBundle = vi.fn(
+    async (request: Parameters<RepositoryApi["exportBundle"]>[0]) => ({
+    branchName: request.expectedBranchName,
+    headSha: request.expectedHeadSha,
+    destinationDirectory: request.destinationDirectory,
+    bundleFileName: `content-20260724-${RECORD_ID}-v1.bundle`,
+    bundleSizeBytes: 4096,
+    sha256: "D".repeat(64),
+    importBranchName: `import/content-20260724-${RECORD_ID}`,
+    artifactNames: ["MANIFEST.txt", "Import-Bundle.ps1"],
+    }),
+  );
+  const api: RepositoryApi = {
+    dryRun: vi.fn(),
+    commit: vi.fn(),
+    bundlePreflight,
+    exportBundle,
+  };
+
+  const preflight = await runRepositoryBundlePreflight(
+    api,
+    "D:\\fictional-worktree",
+    "E:\\content-handoff",
+  );
+  const result = await runRepositoryBundleExport(
+    api,
+    preflight,
+    "D:\\fictional-worktree",
+    "E:\\content-handoff",
+  );
+
+  expect(result.headSha).toBe(headSha);
+  expect(exportBundle).toHaveBeenCalledWith({
+    repositoryPath: "D:\\fictional-worktree",
+    destinationDirectory: "E:\\content-handoff",
+    expectedBranchName: branchName,
+    expectedHeadSha: headSha,
+    confirmed: true,
+  });
+  await expect(
+    runRepositoryBundleExport(
+      api,
+      preflight,
+      "D:\\fictional-worktree",
+      "E:\\different-handoff",
+    ),
+  ).rejects.toThrow("Bundle 预检结果已失效");
+  expect(exportBundle).toHaveBeenCalledTimes(1);
 });

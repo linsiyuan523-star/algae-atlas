@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Archive,
   CheckCircle2,
   FileText,
   GitCommitHorizontal,
@@ -15,6 +16,8 @@ import type { Draft, DraftApi } from "../drafts";
 import type { MediaApi, StagedImage } from "../media";
 import {
   createExportPlan,
+  runRepositoryBundleExport,
+  runRepositoryBundlePreflight,
   runRepositoryExportDryRun,
   runRepositoryLocalCommit,
 } from "../repository";
@@ -23,6 +26,8 @@ import type {
   PlannedGitOperation,
   PlannedTarget,
   RepositoryApi,
+  RepositoryBundleExportResult,
+  RepositoryBundlePreflightResult,
   RepositoryImageFile,
   RepositoryLocalCommitResult,
   RepositoryTextFile,
@@ -164,66 +169,64 @@ export function RepositoryExportPage({
     : null;
   const busy = running || committing;
 
-  if (!loadingDrafts && drafts.length === 0 && !error) {
-    return (
-      <div className="empty-state" role="status">
-        <Inbox aria-hidden="true" size={28} strokeWidth={1.6} />
-        <p>目前没有可导出的草稿。</p>
-      </div>
-    );
-  }
-
   return (
     <div className="repository-export">
-      <form className="repository-export-form" onSubmit={handleSubmit}>
-        <div className="field-group">
-          <label htmlFor="export-draft">导出草稿</label>
-          <select
-            id="export-draft"
-            value={selectedDraftId}
-            disabled={loadingDrafts || busy}
-            onChange={(event) => {
-              setSelectedDraftId(event.target.value);
-              clearPreparedResult();
-            }}
+      {!loadingDrafts && drafts.length === 0 && !error ? (
+        <div className="empty-state" role="status">
+          <Inbox aria-hidden="true" size={28} strokeWidth={1.6} />
+          <p>目前没有可导出的草稿。</p>
+        </div>
+      ) : (
+        <form className="repository-export-form" onSubmit={handleSubmit}>
+          <div className="field-group">
+            <label htmlFor="export-draft">导出草稿</label>
+            <select
+              id="export-draft"
+              value={selectedDraftId}
+              disabled={loadingDrafts || busy}
+              onChange={(event) => {
+                setSelectedDraftId(event.target.value);
+                clearPreparedResult();
+              }}
+            >
+              {loadingDrafts ? <option value="">正在读取草稿...</option> : null}
+              {drafts.map((draft) => (
+                <option key={draft.draftId} value={draft.draftId}>
+                  {draftLabel(draft)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field-group repository-path-field">
+            <label htmlFor="repository-path">仓库根目录</label>
+            <input
+              id="repository-path"
+              type="text"
+              value={repositoryPath}
+              placeholder="D:\\project-worktree"
+              disabled={busy}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => {
+                setRepositoryPath(event.target.value);
+                clearPreparedResult();
+              }}
+            />
+          </div>
+          <button
+            className="primary-button repository-run-button"
+            type="submit"
+            disabled={loadingDrafts || busy || drafts.length === 0}
           >
-            {loadingDrafts ? <option value="">正在读取草稿...</option> : null}
-            {drafts.map((draft) => (
-              <option key={draft.draftId} value={draft.draftId}>
-                {draftLabel(draft)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field-group repository-path-field">
-          <label htmlFor="repository-path">仓库根目录</label>
-          <input
-            id="repository-path"
-            type="text"
-            value={repositoryPath}
-            placeholder="D:\\project-worktree"
-            disabled={busy}
-            spellCheck={false}
-            autoComplete="off"
-            onChange={(event) => {
-              setRepositoryPath(event.target.value);
-              clearPreparedResult();
-            }}
-          />
-        </div>
-        <button
-          className="primary-button repository-run-button"
-          type="submit"
-          disabled={loadingDrafts || busy || drafts.length === 0}
-        >
-          {running ? (
-            <LoaderCircle className="repository-spinner" aria-hidden="true" size={18} />
-          ) : (
-            <Search aria-hidden="true" size={18} />
-          )}
-          {running ? "正在预演" : "诊断并预演"}
-        </button>
-      </form>
+            {running ? (
+              <LoaderCircle className="repository-spinner" aria-hidden="true" size={18} />
+            ) : (
+              <Search aria-hidden="true" size={18} />
+            )}
+            {running ? "正在预演" : "诊断并预演"}
+          </button>
+        </form>
+      )}
 
       {error ? (
         <p className="operation-error" role="alert">
@@ -243,6 +246,7 @@ export function RepositoryExportPage({
         />
       ) : null}
       {commitResult ? <LocalCommitResult result={commitResult} /> : null}
+      <BundleExportPanel repositoryApi={repositoryApi} />
     </div>
   );
 }
@@ -332,6 +336,230 @@ function LocalCommitResult({ result }: { result: RepositoryLocalCommitResult }) 
         <span>{result.branchName}</span>
         <code>{result.commitSha}</code>
         <small>{result.commitMessage}</small>
+      </div>
+    </section>
+  );
+}
+
+function BundleExportPanel({ repositoryApi }: { repositoryApi: RepositoryApi }) {
+  const [repositoryPath, setRepositoryPath] = useState("");
+  const [destinationDirectory, setDestinationDirectory] = useState("");
+  const [preflight, setPreflight] =
+    useState<RepositoryBundlePreflightResult | null>(null);
+  const [exportResult, setExportResult] =
+    useState<RepositoryBundleExportResult | null>(null);
+  const [running, setRunning] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function clearPreflight() {
+    setPreflight(null);
+    setExportResult(null);
+    setConfirmed(false);
+  }
+
+  async function handlePreflight(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const selectedRepository = repositoryPath.trim();
+    const selectedDestination = destinationDirectory.trim();
+    if (!selectedRepository || !selectedDestination) {
+      setError("请填写源仓库根目录和目标交接目录。");
+      return;
+    }
+
+    setRunning(true);
+    setError(null);
+    clearPreflight();
+    try {
+      setPreflight(
+        await runRepositoryBundlePreflight(
+          repositoryApi,
+          selectedRepository,
+          selectedDestination,
+        ),
+      );
+    } catch (caught: unknown) {
+      setError(`Bundle 预检失败：${describeError(caught)}`);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handleExport() {
+    if (!confirmed || !preflight?.ready) {
+      setError("请先完成 Bundle 预检并确认导出。");
+      return;
+    }
+
+    setExporting(true);
+    setError(null);
+    try {
+      setExportResult(
+        await runRepositoryBundleExport(
+          repositoryApi,
+          preflight,
+          repositoryPath.trim(),
+          destinationDirectory.trim(),
+        ),
+      );
+      setConfirmed(false);
+    } catch (caught: unknown) {
+      setError(`Bundle 导出失败：${describeError(caught)}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const busy = running || exporting;
+  return (
+    <section className="repository-bundle-panel" aria-labelledby="bundle-export-title">
+      <div className="repository-commit-heading">
+        <Archive aria-hidden="true" size={21} />
+        <div>
+          <h3 id="bundle-export-title">离线 Bundle 交接</h3>
+          <span>完整内容分支</span>
+        </div>
+      </div>
+
+      <form className="repository-bundle-form" onSubmit={handlePreflight}>
+        <div className="field-group repository-path-field">
+          <label htmlFor="bundle-repository-path">源仓库根目录</label>
+          <input
+            id="bundle-repository-path"
+            type="text"
+            value={repositoryPath}
+            placeholder="D:\\project-worktree"
+            disabled={busy}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => {
+              setRepositoryPath(event.target.value);
+              clearPreflight();
+            }}
+          />
+        </div>
+        <div className="field-group repository-path-field">
+          <label htmlFor="bundle-destination-directory">目标交接目录</label>
+          <input
+            id="bundle-destination-directory"
+            type="text"
+            value={destinationDirectory}
+            placeholder="E:\\content-handoff"
+            disabled={busy}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => {
+              setDestinationDirectory(event.target.value);
+              clearPreflight();
+            }}
+          />
+        </div>
+        <button
+          className="secondary-button repository-bundle-run-button"
+          type="submit"
+          disabled={busy}
+        >
+          {running ? (
+            <LoaderCircle className="repository-spinner" aria-hidden="true" size={18} />
+          ) : (
+            <Search aria-hidden="true" size={18} />
+          )}
+          {running ? "正在预检" : "预检 Bundle"}
+        </button>
+      </form>
+
+      {error ? (
+        <p className="operation-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {preflight ? <BundlePreflightReport result={preflight} /> : null}
+      {preflight?.ready && !exportResult ? (
+        <div className="repository-bundle-confirmation">
+          <label className="repository-commit-confirmation">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              disabled={busy}
+              onChange={(event) => setConfirmed(event.target.checked)}
+            />
+            <span>确认导出完整分支并创建上述交接目录</span>
+          </label>
+          <button
+            className="primary-button repository-commit-button"
+            type="button"
+            disabled={!confirmed || busy}
+            onClick={handleExport}
+          >
+            {exporting ? (
+              <LoaderCircle className="repository-spinner" aria-hidden="true" size={18} />
+            ) : (
+              <Archive aria-hidden="true" size={18} />
+            )}
+            {exporting ? "正在导出" : "导出离线交接包"}
+          </button>
+        </div>
+      ) : null}
+      {exportResult ? <BundleExportResult result={exportResult} /> : null}
+    </section>
+  );
+}
+
+function BundlePreflightReport({ result }: { result: RepositoryBundlePreflightResult }) {
+  return (
+    <div
+      className={`repository-bundle-summary ${result.ready ? "is-ready" : "is-blocked"}`}
+      role="status"
+    >
+      {result.ready ? (
+        <CheckCircle2 aria-hidden="true" size={21} />
+      ) : (
+        <AlertTriangle aria-hidden="true" size={21} />
+      )}
+      <div>
+        <strong>{result.ready ? "Bundle 预检通过" : "Bundle 预检被阻止"}</strong>
+        <dl>
+          <Diagnostic label="分支" value={result.branchName ?? "未识别"} mono />
+          <Diagnostic label="HEAD" value={shortSha(result.headSha)} mono />
+          <Diagnostic label="Bundle" value={result.bundleFileName ?? "未生成"} mono />
+          <Diagnostic label="改动文件" value={`${result.changedFiles.length} 个`} />
+        </dl>
+      </div>
+      {result.conflicts.length ? (
+        <ul className="repository-conflict-list" aria-label="Bundle 预检阻断项">
+          {result.conflicts.map((item, index) => (
+            <li key={`${item.code}-${item.path ?? ""}-${index}`}>
+              <div>
+                <code>{item.code}</code>
+                {item.path ? <span>{item.path}</span> : null}
+              </div>
+              <strong>{item.message}</strong>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function BundleExportResult({ result }: { result: RepositoryBundleExportResult }) {
+  return (
+    <section className="repository-commit-result repository-bundle-result" role="status">
+      <CheckCircle2 aria-hidden="true" size={24} />
+      <div>
+        <strong>离线交接包已验证</strong>
+        <code>{result.destinationDirectory}</code>
+        <span>{result.bundleFileName}</span>
+        <code>{result.sha256}</code>
+        <small>{result.importBranchName}</small>
+        <ul aria-label="交接文件清单">
+          {result.artifactNames.map((name) => (
+            <li key={name}>
+              <code>{name}</code>
+            </li>
+          ))}
+        </ul>
       </div>
     </section>
   );
