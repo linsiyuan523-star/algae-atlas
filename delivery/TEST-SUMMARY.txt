@@ -1,9 +1,9 @@
-Stage: Stage-05B1
+Stage: Stage-05B2
 Status: PASS
-ValidatedAt: 2026-07-23
-Branch: local/stage-05b1-editor
-StartCommit: 6855f5dc29f4b461bb29a29c4eea2cda5689093c
-FeatureCommit: 4c795c418cc91109976deb4394f83c2ba0565fc2
+ValidatedAt: 2026-07-24
+Branch: local/stage-05b2-bilingual
+StartCommit: fcddeff963e96d4393e1fb5298f63c3b27b596b2
+FeatureCommit: 548af1556b55748b1c7c965fb8e4195dcaf6363e
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
@@ -20,27 +20,26 @@ Required checks:
 - npm.cmd run desktop:check: PASS
   - Desktop TypeScript and ESLint passed
   - Existing non-fatal missing Next.js pages notice printed
-- Full desktop Vitest run: PASS; 11 files, 92 tests
-- Final editor/security focus: PASS; 2 files, 22 tests
-  - Paste cleanup, safe links, active HTML removal, supported structures, deterministic serialization, media placeholders, and toolbar behavior passed
-- Related editor/persistence focus: PASS; 5 files, 36 tests
-  - Chinese body save, body-file reference, draft compatibility, schema helper, and component behavior passed
-- npm.cmd run desktop:test:scaffold: PASS; 1 test
+- npm.cmd run desktop:test: PASS
+  - Desktop scaffold: 1 test passed
+  - Vitest: 13 files, 123 tests passed
+- Focused bilingual workflow/editor suite: PASS
+  - 5 files, 58 tests passed
+  - Locale state, English forms, component interaction, Markdown/image-alt behavior, persistence, and migration passed
 - npm.cmd run desktop:rust:test: PASS; 9 tests
-  - CRUD, v1/v2 migration, v3 body persistence, body size/control-character limits, path validation, quarantine, recovery, and atomic replacement passed
+  - CRUD, v1-v3 migration, bilingual body storage, parked locale storage, path validation, quarantine, recovery, and atomic replacement passed
 - npm.cmd run desktop:rust:fmt: PASS
+- npm.cmd run desktop:rust:check: PASS
 - npm.cmd run desktop:rust:clippy: PASS with warnings denied
+- npm.cmd run desktop:frontend:build: PASS
+  - 1,946 modules transformed
+  - Existing non-fatal chunk-size warning printed
 - git diff --check: PASS
 
-Visual check:
-- Vite desktop shell at a 1280 px viewport: PASS
-- Viewport and page widths matched; main content, form, and editor toolbar remained bounded
-- Browser-only mode could not open a Tauri-backed draft because invoke is unavailable, as expected
-
 Boundary:
-- Full website check/test/build: NOT RUN by instruction
-- Desktop production build and native Tauri smoke: NOT RUN by instruction
+- Root npm run check/test/build: NOT RUN; no shared Schema or website file changed
+- Native Tauri build/smoke: NOT RUN by instruction
 - Git remote writes, PR, merge, tag, release, deployment: NONE
 
 Resolved attempt:
-- The scaffold contract initially expected the pre-editor dependency set; its exact dependency whitelist was updated for Tiptap and DOMPurify, then the test passed.
+- One parallel desktop/Rust run caused an interaction test to exceed 5 seconds by 0.037 seconds under contention. The serial full desktop run passed; do not raise the timeout or repeat parallel execution.
