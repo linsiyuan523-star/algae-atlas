@@ -1,10 +1,10 @@
-Stage=Stage-08B
-RecordedAt=2026-07-24T19:30:50+08:00
-SourceCommit=c3a0b0023f1783b8e8e54b0d469bfa8a24939ed4
+Stage=Final-Integration
+RecordedAt=2026-07-24T22:42:54+08:00
+ValidationHead=53e43181b848f0c4f3bbe0a5742a62fe9a84fe40
 CandidateVersion=0.1.0
 CandidateFile=content-workbench_0.1.0_x64-setup.exe
-CandidateSizeBytes=2627443
-CandidateSHA256=51227623E19C502233B1954A46E2F2DF0669D7DDA48A07DF2E501B1278A22602
+CandidateSizeBytes=2630838
+CandidateSHA256=8682A7DA94E64A5DD915617ABC2DAF6610B8939D81D9E7136BFE35D184B9E6F7
 SigningStatus=NotSigned
 OS=Microsoft Windows 10 Pro 10.0.19045 x64
 PowerShell=5.1.19041.6456

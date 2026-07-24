@@ -1,6 +1,6 @@
 Stage: Final Integration
-Status: VALIDATION_PENDING
-ValidatedAt: pending
+Status: PASS_WITH_RELEASE_BLOCKERS
+ValidatedAt: 2026-07-24T22:42:54+08:00
 Branch: feature/algae-content-workbench
 
 Input verification:
@@ -16,6 +16,17 @@ Merge verification:
 - Business-source conflicts: NONE
 - Shared metadata/package conflicts: resolved manually
 
-Required final checks are pending and will be recorded in the four final reports.
+Final verification:
+- npm ci, npm run check, npm test, and npm run build:next: PASS
+- Content validation and migration dry-run with unchanged Git state: PASS
+- Desktop TypeScript/component tests, cargo check, Rust tests, fmt, Clippy, and Tauri startup: PASS
+- NSIS x64 candidate build and SHA-256 copy verification: PASS
+- Offline Bundle creation, verify, and clean no-remote import with exact tree equality: PASS
+
+Release blockers:
+- npm audit production: 3 high findings; current stable Next remains affected
+- Installer signing: NotSigned
+- RustSec lockfile audit: not completed because local tool acquisition timed out
+
 No remote Git, Draft PR, main-branch merge, tag, release, signing, or deployment
 operation has been run.

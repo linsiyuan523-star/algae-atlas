@@ -24,3 +24,10 @@ Stage-08C retained areas:
 
 Final integration reports are listed after validation. Generated dependencies,
 build output, installers, temporary repositories, and bundles are not committed.
+
+Final integration metadata:
+- FINAL-INTEGRATION-REPORT.md
+- SECURITY-AUDIT.md
+- ACCEPTANCE-REPORT.md
+- RELEASE-CANDIDATE-NOTES.md
+- package.json and package-lock.json (Next.js 16.2.11)
