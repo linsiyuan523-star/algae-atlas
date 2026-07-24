@@ -1,37 +1,40 @@
-# Stage 6A1 Delivery Handoff
+# Stage 6A2 Delivery Handoff
 
-- Stage: Stage-06A1 - Image Intake and Attribution Metadata
-- Start commit: `2beb9506506387e6579515d214ae40dd195eca01`
-- Feature commit: `fc437a7552ef439708ac29d726dfc6c8b7d4801e`
-- End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the delivery bundle head)
+- Stage: Stage-06A2 - Image Processing and Privacy
+- Start commit: `1a24bd6c5c08eb6a5517be2402f78bb0165da4f9`
+- Feature commit: `be3d1dc2518fcf70236058557fe4ee7bc069a2ed`
+- End commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the verified bundle head)
 
 ## Completed
 
-- Local image selection and drag/drop intake for cover, body, gallery, and portrait images.
-- Safe app-data staging with UUID v4 filenames, file type/dimension inspection, SHA-256 metadata, and fixed upload path previews.
-- Attribution, license, rights, consent, Chinese/English alt, and caption metadata UI and persistence.
-- Publication-candidate blocks for missing license, non-public rights, pending identifiable-person consent, missing alt text, or unsaved metadata.
-- Draft recovery reconnects staged media references after an interrupted autosave.
+- Privacy-safe JPEG, PNG, and WebP decoding with orientation handling and metadata-free WebP output.
+- Configurable dimensions/output bytes, cover thumbnails, per-draft source-hash duplicate detection, and explicit local original retention.
+- Transactional derivative/manifest writes, failed-write rollback, managed staging cleanup, and v1 manifest compatibility.
+- Desktop processing controls plus focused EXIF, deduplication, rollback, cleanup, compatibility, and component tests.
 
 ## Not Completed
 
-- No conversion, EXIF cleanup, duplicate hash comparison, media repository export, Git publication, remote write, merge, release, or deployment.
+- New AVIF conversion, object storage, old-image batch conversion, repository export, remote write, merge, release, and deployment.
 
 ## Test Summary
 
-- Focused Vitest: PASS; 4 files, 24 tests.
-- Rust media tests: PASS; 5 tests.
-- Desktop check, Rust format/Clippy, frontend build, visual responsive review, and Git whitespace check: PASS.
+- Focused Vitest: PASS; 2 files, 7 tests.
+- Rust media tests: PASS; 12 tests.
+- Desktop check, Rust format/Clippy, locked dependency install, and Git whitespace check: PASS.
+- Website production build: NOT RUN by stage boundary.
 
 ## Known Issues
 
-- Existing missing-pages and Vite large-chunk notices remain non-blocking.
+- New AVIF intake is disabled until a Windows-packaged `dav1d` decoder is available; legacy v1 AVIF entries remain readable.
+- Existing missing-pages and MSVC linker-message notices remain non-blocking.
 
 ## Next Stage Exact Start
 
-- `25_Stage6A2_图片处理与隐私.md`
+- Integrate this Stage-06A2 tip with the Stage-06B1 delivery tip.
+- Run `27_Stage6B2_卡片响应式与Stage6检查点.md`.
 
 ## Do Not Repeat
 
-- Do not rerun root website checks without a shared Schema or website change.
-- Do not add conversion, EXIF cleanup, or duplicate-image hashing to Stage-06A1.
+- Do not retry `avif-native` without packaged `dav1d`/`pkg-config` support.
+- Do not rerun root website checks without shared Schema or website changes.
+- Do not expose retained originals as publication paths.

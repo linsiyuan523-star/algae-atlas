@@ -1728,15 +1728,15 @@ mod tests {
         let draft_root = root.join(DRAFT_ID);
         fs::create_dir_all(&draft_root).expect("creates legacy staging directory");
         let image_id = "22222222-2222-4222-8222-222222222222";
-        let bytes = tiny_png(80, 60);
+        let bytes = tiny_avif_container(80, 60);
         let legacy = StagedImage {
             format_version: 1,
             draft_id: DRAFT_ID.to_owned(),
             id: image_id.to_owned(),
-            original_name: "legacy.png".to_owned(),
-            staged_name: format!("{image_id}.png"),
-            target_path: format!("public/images/uploads/2026/07/{image_id}.png"),
-            mime_type: "image/png".to_owned(),
+            original_name: "legacy.avif".to_owned(),
+            staged_name: format!("{image_id}.avif"),
+            target_path: format!("public/images/uploads/2026/07/{image_id}.avif"),
+            mime_type: "image/avif".to_owned(),
             bytes: bytes.len() as u64,
             width: 80,
             height: 60,

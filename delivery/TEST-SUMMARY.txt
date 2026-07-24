@@ -1,9 +1,9 @@
-Stage: Stage-06A1
+Stage: Stage-06A2
 Status: PASS
 ValidatedAt: 2026-07-24
-Branch: local/stage-06a1-image-intake
-StartCommit: 2beb9506506387e6579515d214ae40dd195eca01
-FeatureCommit: fc437a7552ef439708ac29d726dfc6c8b7d4801e
+Branch: local/stage-06a2-image-processing
+StartCommit: 1a24bd6c5c08eb6a5517be2402f78bb0165da4f9
+FeatureCommit: be3d1dc2518fcf70236058557fe4ee7bc069a2ed
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
 Environment:
@@ -15,20 +15,30 @@ Environment:
 Required checks:
 - npm.cmd ci --offline --ignore-scripts: PASS; 659 packages, 0 vulnerabilities
 - npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
-- Focused Vitest (media, image intake, draft recovery, app): PASS; 4 files, 24 tests
-- cargo +1.97.1 test --locked --manifest-path src-tauri/Cargo.toml media::tests: PASS; 5 tests
-- cargo +1.97.1 fmt --manifest-path src-tauri/Cargo.toml --all -- --check: PASS
-- cargo +1.97.1 clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings: PASS
-- npm.cmd run desktop:frontend:build: PASS
-- Responsive visual check: PASS at desktop and 375px widths; no horizontal overflow
+- Focused Vitest (media and ImageIntake): PASS; 2 files, 7 tests
+- cargo +1.97.1 test --locked --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all-targets media::tests: PASS; 12 tests
+- cargo +1.97.1 fmt --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all -- --check: PASS
+- cargo +1.97.1 clippy --locked --manifest-path tools/content-workbench/src-tauri/Cargo.toml --all-targets -- -D warnings: PASS
 - git diff --check: PASS
+
+Covered behavior:
+- JPEG/PNG/WebP fixtures produce bounded WebP output without upscaling
+- JPEG EXIF GPS/device strings are absent from generated WebP
+- Cover thumbnail generation and integrity metadata
+- Configurable dimensions and output-byte limits
+- Source SHA-256 duplicate rejection before writes
+- Injected failure rollback leaves no derivative or manifest
+- Managed temporary/orphan cleanup preserves unrelated files
+- Explicit local original retention and Stage-06A1 v1 compatibility
+- New AVIF intake fails closed when the privacy-safe decoder is unavailable
 
 Boundary:
 - Root website check/test/build: NOT RUN; no shared Schema or website file changed
-- Native Tauri smoke build: NOT RUN; focused Rust command coverage used instead
+- Website production build: NOT RUN by Stage-06A2 instruction
+- Native Tauri visual smoke: NOT RUN; browser-only Vite has no Tauri IPC
 - Git remote writes, PR, merge, tag, release, deployment: NONE
 
-Informational existing notices:
+Informational notices:
 - ESLint reports the existing missing Next.js pages directory notice.
-- Vite reports the existing minified chunk-size warning.
-- Rust test linking reports the existing MSVC linker message warning.
+- Rust test linking reports the existing MSVC linker-message warning.
+- `avif-native` was not retained because Windows lacks packaged dav1d/pkg-config.
