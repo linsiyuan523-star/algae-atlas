@@ -16,3 +16,6 @@
 /tests/content-migration/** text eol=lf
 /tsconfig.content-migration.json text eol=lf
 /.gitattributes text eol=lf
+/tools/content-workbench/** text eol=lf
+/tools/content-workbench/**/*.png binary
+/tools/content-workbench/**/*.ico binary

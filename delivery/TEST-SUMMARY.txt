@@ -1,89 +1,21 @@
-Stage: Stage-03
-Status: PASS; ready for final delivery-doc commit and post-commit bundle verification
-ValidatedAt: 2026-07-22
-Branch: local/stage-03-migration
-BaselineCommit: 86c2e209fe77cc644d946bff9901d740f9fb3ee1
-ImplementationTipBeforeDeliveryDocs: bb6075240d96e9877f2e334f484c748456127742
-FinalCommit: EXTERNAL_BUNDLE_HEAD in the verified external copy
-PredecessorBundleSha256: C0114AE0EFB01D14E44D8D1A20F297A7DDB3D7513CD9384F8F665665BF9B7D88
+Stage: Final Integration
+Status: VALIDATION_PENDING
+ValidatedAt: pending
+Branch: feature/algae-content-workbench
 
-Environment:
-- Git: 2.55.0.windows.2
-- Node.js: v22.23.1
-- npm: 10.9.8
-- PowerShell: 5.1.19041.6456
-- TypeScript: 5.9.3
-- Next.js: 16.2.6
-- Vite/vinext target: 8.0.13
+Input verification:
+- 21 Bundle files have matching SHA-256 evidence: PASS
+- 21 Bundle files pass `git bundle verify`: PASS
+- Imported heads equal the declared Bundle heads: PASS
+- Stage-03 and Stage-08C merge base is Stage-01 head: PASS
 
-Dependency and predecessor verification:
-- Stage-02 bundle SHA-256: PASS
-- Stage-02 bundle head equals baseline commit: PASS
-- Complete predecessor history includes Stage-01: PASS
-- npm.cmd ci --offline --ignore-scripts: PASS
-- Installed: 509 packages; vulnerabilities: 0
-- Informational dependency warnings: two known deprecated transitive @esbuild-kit packages; no unrelated upgrade performed
+Merge verification:
+- Stage-00 through Stage-03 integrated in dependency order: PASS
+- Stage-04 through Stage-08C cumulative history integrated: PASS
+- Stage-06A and Stage-06B merge history retained: PASS
+- Business-source conflicts: NONE
+- Shared metadata/package conflicts: resolved manually
 
-Migration planning and write evidence:
-- Bare/default dry-run: PASS, zero filesystem changes
-- Explicit --dry-run: PASS, zero Git-visible changes
-- Initial real dry-run: 3 planned; 11 skipped; 0 conflicts; 0 validation issues
-- Initial --write with allowlisted report: 3 written; 11 skipped; 0 conflicts; 0 validation issues
-- Files created: 9 record/Markdown files, 1 deterministic ledger, 1 initial report
-- Second --write: 0 written; 15 skipped; 3 TARGET_EXISTS; 1 LEDGER_EXISTS; 0 conflicts; 0 validation issues
-- Formal content: 3 science-article records; both locales draft; authors 0; media 0
-- Production selector values: 11 legacy; source switches 0
-- Legacy data/media/default-selector diffs: none
-
-Focused Stage-03 validation:
-- npm.cmd run check:content-migration: PASS
-- npm.cmd run test:content-migration: PASS (15 tests, 0 failures)
-- npm.cmd run test:content-loader: PASS (10 tests, 0 failures)
-- npm.cmd run content:validate: PASS
-- Default and explicit dry-run snapshots: PASS
-- Write/exclusive-create and deterministic ledger: PASS
-- Second-run byte preservation: PASS
-- Partial-target preservation: PASS
-- Injected fourth-copy rollback: PASS
-- Injected final-report-copy rollback: PASS
-- Existing report preflight/no candidate write: PASS
-- Report path allowlist and CLI mode rejection: PASS
-- Repository-relative diagnostics/no absolute root leak: PASS
-- Legacy field preservation and draft/non-public state: PASS
-- All source selectors remain legacy: PASS
-
-Final full gates from committed code state:
-- npm.cmd run check: PASS
-  - schema TypeScript: PASS
-  - content-loader TypeScript: PASS
-  - content-migration TypeScript: PASS
-  - Next TypeScript: PASS
-  - ESLint: PASS
-  - warnings/errors: none
-- npm.cmd test: PASS
-  - Stage-01 schema tests: 58 passed, 0 failed
-  - Browser-compatible schema target: PASS (94 modules transformed; generated ES module executed)
-  - Stage-02 content repository tests: 10 passed, 0 failed
-  - Stage-03 migration tests: 15 passed, 0 failed
-  - vinext compatibility build: PASS
-  - Existing rendered-site tests: 25 passed, 0 failed
-  - Existing IndexNow tests: 1 passed, 0 failed
-- npm.cmd run build:next: PASS
-  - compiled and TypeScript passed
-  - static pages: 97/97 generated
-
-Warnings and environment retries:
-- vinext emitted its existing informational notice that static analysis could not classify some dynamic API usage; the compatibility build completed successfully.
-- One early parallel approval request for focused read-only checks lost its control stream. The same commands ran in the restricted sandbox and passed. Classification: command-dispatch environment retry, not a code/test/build failure.
-- No final check, full test, or native Next build retry was required.
-
-Repository hygiene before delivery docs:
-- git diff --check: PASS
-- Git worker remote list: empty
-- No fetch, pull, push, PR, merge, tag, release, deployment, production, database, or secret operation
-- No migration temporary files remained
-- Generated ledger contains no volatile timestamp
-- Generated candidates/report/ledger contain no host absolute path or high-confidence secret pattern
-
-Post-final-commit delivery checks:
-- Final clean Git status, exact changed-file allowlist, UTF-8/no-BOM/LF/final-LF scan, filename-only high-confidence secret scan, final SHA, bundle verification, local bundle SHA-256, USB copy SHA-256, and USB bundle-head verification are recorded in the external copies after bundle creation.
+Required final checks are pending and will be recorded in the four final reports.
+No remote Git, Draft PR, main-branch merge, tag, release, signing, or deployment
+operation has been run.

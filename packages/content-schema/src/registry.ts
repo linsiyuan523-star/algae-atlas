@@ -10,6 +10,7 @@ export type FieldValueKind =
   | "date"
   | "datetime"
   | "enum"
+  | "enum-list"
   | "group"
   | "id"
   | "id-list"
@@ -158,7 +159,24 @@ const teamNewsFields = {
     field("eventDate", "shared.eventDate", "事件日期", "Event date", "date", "always"),
     field("endDate", "shared.endDate", "结束日期", "End date", "date", "optional"),
     field("locationLabel", "shared.locationLabel", "地点", "Location", "group", "optional"),
-    field("category", "shared.category", "活动类型", "Activity type", "enum", "always"),
+    field(
+      "category",
+      "shared.category",
+      "活动类型",
+      "Activity type",
+      "enum",
+      "always",
+      {
+        options: [
+          "research",
+          "teaching",
+          "fieldwork",
+          "meeting",
+          "student-research",
+          "other",
+        ],
+      },
+    ),
     field(
       "participantAuthorIds",
       "shared.participantAuthorIds",
@@ -168,6 +186,15 @@ const teamNewsFields = {
       "optional",
     ),
     field("sources", "shared.sources", "新闻来源", "News sources", "reference-list", "published-locale"),
+    field(
+      "disclosureStatus",
+      "shared.disclosureStatus",
+      "公开确认",
+      "Disclosure status",
+      "enum",
+      "always",
+      { options: ["pending", "approved"] },
+    ),
   ],
   localized: [
     field(
@@ -184,16 +211,40 @@ const teamNewsFields = {
 
 const outputFields = {
   shared: [
-    field("outputKind", "shared.outputKind", "成果类型", "Output kind", "enum", "always"),
+    field("outputKind", "shared.outputKind", "成果类型", "Output kind", "enum", "always", {
+      options: ["publication", "patent", "dataset", "software", "student-research"],
+    }),
     field("contributorIds", "shared.contributorIds", "作者", "Contributors", "id-list", "always"),
     field("year", "shared.year", "年份", "Year", "integer", "always"),
-    field("venueKind", "shared.venueKind", "期刊/会议/专利类型", "Venue kind", "enum", "always"),
+    field("publicationDate", "shared.publicationDate", "公开日期", "Publication date", "date", "optional"),
+    field("venueKind", "shared.venueKind", "期刊/会议/专利类型", "Venue kind", "enum", "always", {
+      options: ["journal", "conference", "patent-office", "repository", "other"],
+    }),
     field("venueName", "shared.venueName", "期刊/会议/专利", "Venue", "text", "always"),
     field("identifier", "shared.identifier", "DOI 或其他标识符", "DOI or identifier", "group", "always"),
+    field("identifierKind", "shared.identifier.kind", "标识符类型", "Identifier kind", "enum", "always", {
+      options: ["doi", "isbn", "patent", "accession", "url", "other"],
+    }),
+    field("identifierValue", "shared.identifier.value", "标识符", "Identifier", "text", "always"),
     field("canonicalUrl", "shared.canonicalUrl", "公开链接", "Public URL", "url", "optional"),
+    field("outputStatus", "shared.outputStatus", "成果状态", "Output status", "enum", "always", {
+      options: ["published", "accepted", "granted", "released", "pending"],
+    }),
   ],
   localized: [
     field("citationNote", "locales.{locale}.fields.citationNote", "引用说明", "Citation note", "text", "always", {
+      localized: true,
+    }),
+    field(
+      "contributionNote",
+      "locales.{locale}.fields.contributionNote",
+      "贡献说明",
+      "Contribution note",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field("description", "locales.{locale}.fields.description", "成果简介", "Description", "text", "optional", {
       localized: true,
     }),
   ],
@@ -201,15 +252,53 @@ const outputFields = {
 
 const projectFields = {
   shared: [
-    field("projectStatus", "shared.projectStatus", "项目状态", "Project status", "enum", "always"),
+    field("projectKind", "shared.projectKind", "项目类型", "Project kind", "enum", "always", {
+      options: ["funded", "internal", "student", "collaborative", "field-observation"],
+    }),
+    field("projectStatus", "shared.projectStatus", "项目状态", "Project status", "enum", "always", {
+      options: ["planned", "active", "completed", "suspended", "cancelled"],
+    }),
+    field("publicProjectCode", "shared.publicProjectCode", "公开项目编号", "Public project code", "text", "optional"),
     field("leadAuthorId", "shared.leadAuthorId", "负责人", "Lead", "id", "always"),
     field("startDate", "shared.startDate", "开始日期", "Start date", "date", "always"),
     field("endDate", "shared.endDate", "结束日期", "End date", "date", "optional"),
     field("fundingSources", "shared.fundingSources", "资助来源", "Funding sources", "reference-list", "optional"),
-    field("publicScope", "shared.publicScope", "公开范围", "Public scope", "enum", "always"),
+    field("publicScope", "shared.publicScope", "公开范围", "Public scope", "enum", "always", {
+      options: ["public", "summary-only", "internal"],
+    }),
+    field(
+      "disclosureStatus",
+      "shared.disclosureStatus",
+      "公开确认",
+      "Disclosure status",
+      "enum",
+      "always",
+      { options: ["pending", "approved"] },
+    ),
   ],
   localized: [
     field("objectives", "locales.{locale}.fields.objectives", "项目目标", "Objectives", "text", "always", {
+      localized: true,
+    }),
+    field(
+      "methodsOverview",
+      "locales.{locale}.fields.methodsOverview",
+      "方法概述",
+      "Methods overview",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "publicProgress",
+      "locales.{locale}.fields.publicProgress",
+      "公开进展",
+      "Public progress",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field("outcomes", "locales.{locale}.fields.outcomes", "项目成果", "Outcomes", "text", "optional", {
       localized: true,
     }),
   ],
@@ -217,9 +306,15 @@ const projectFields = {
 
 const learningFields = {
   shared: [
-    field("resourceKind", "shared.resourceKind", "资源类型", "Resource kind", "enum", "always"),
-    field("targetAudience", "shared.targetAudience", "适用对象", "Audience", "enum", "always"),
-    field("hazardLevel", "shared.hazardLevel", "风险等级", "Hazard level", "enum", "always"),
+    field("resourceKind", "shared.resourceKind", "资源类型", "Resource kind", "enum", "always", {
+      options: ["instrument-tutorial", "beginner-guide", "record-template", "safety-note"],
+    }),
+    field("targetAudience", "shared.targetAudience", "适用对象", "Audience", "enum", "always", {
+      options: ["general", "students", "laboratory-members", "researchers"],
+    }),
+    field("hazardLevel", "shared.hazardLevel", "风险等级", "Hazard level", "enum", "always", {
+      options: ["none", "low", "moderate", "high"],
+    }),
     field(
       "laboratoryReviewStatus",
       "shared.laboratoryReviewStatus",
@@ -227,7 +322,9 @@ const learningFields = {
       "Laboratory review status",
       "enum",
       "always",
+      { options: ["not-required", "pending", "reviewed"] },
     ),
+    field("version", "shared.version", "资源版本", "Resource version", "text", "always"),
   ],
   localized: [
     field(
@@ -242,6 +339,66 @@ const learningFields = {
     field("audience", "locales.{locale}.fields.audience", "适用对象说明", "Audience note", "text", "always", {
       localized: true,
     }),
+    field("purpose", "locales.{locale}.fields.purpose", "资源目的", "Purpose", "text", "always", {
+      localized: true,
+    }),
+    field(
+      "prerequisites",
+      "locales.{locale}.fields.prerequisites",
+      "前置条件",
+      "Prerequisites",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "applicableExperiments",
+      "locales.{locale}.fields.applicableExperiments",
+      "适用实验",
+      "Applicable experiments",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field("preCheck", "locales.{locale}.fields.preCheck", "操作前检查", "Pre-check", "text-list", "optional", {
+      localized: true,
+    }),
+    field("materials", "locales.{locale}.fields.materials", "材料", "Materials", "text-list", "optional", {
+      localized: true,
+    }),
+    field("steps", "locales.{locale}.fields.steps", "步骤", "Steps", "text-list", "optional", {
+      localized: true,
+    }),
+    field(
+      "commonParameters",
+      "locales.{locale}.fields.commonParameters",
+      "常用参数",
+      "Common parameters",
+      "text-list",
+      "optional",
+      { localized: true },
+    ),
+    field("dataExport", "locales.{locale}.fields.dataExport", "数据导出", "Data export", "text", "optional", {
+      localized: true,
+    }),
+    field(
+      "cleaningAndShutdown",
+      "locales.{locale}.fields.cleaningAndShutdown",
+      "清洁与关机",
+      "Cleaning and shutdown",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "commonErrors",
+      "locales.{locale}.fields.commonErrors",
+      "常见错误",
+      "Common errors",
+      "text-list",
+      "optional",
+      { localized: true },
+    ),
     field(
       "safetyNotice",
       "locales.{locale}.fields.safetyNotice",
@@ -251,13 +408,33 @@ const learningFields = {
       "always",
       { localized: true },
     ),
+    field(
+      "administration",
+      "locales.{locale}.fields.administration",
+      "管理说明",
+      "Administration",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field("disclaimer", "locales.{locale}.fields.disclaimer", "使用声明", "Disclaimer", "text", "always", {
+      localized: true,
+    }),
   ],
 };
 
 const algaeFields = {
   shared: [
     field("scientificName", "shared.scientificName", "学名", "Scientific name", "text", "always"),
-    field("taxonomicRank", "shared.taxonomicRank", "分类层级", "Taxonomic rank", "enum", "always"),
+    field("taxonomicRank", "shared.taxonomicRank", "分类层级", "Taxonomic rank", "enum", "always", {
+      options: ["kingdom", "phylum", "class", "order", "family", "genus", "species", "group"],
+    }),
+    field("environmentKinds", "shared.environmentKinds", "环境类型", "Environment kinds", "enum-list", "always", {
+      options: ["freshwater", "marine", "brackish", "terrestrial-moist", "extreme"],
+    }),
+    field("profileCategory", "shared.profileCategory", "图鉴类别", "Profile category", "enum", "always", {
+      options: ["microalgae", "macroalgae", "cyanobacteria", "other"],
+    }),
     field(
       "samplingLocationLabel",
       "shared.samplingLocationLabel",
@@ -273,6 +450,16 @@ const algaeFields = {
       "Identification status",
       "enum",
       "always",
+      { options: ["unverified", "provisional", "verified", "limited"] },
+    ),
+    field(
+      "samplingLocationPolicy",
+      "shared.samplingLocationPolicy",
+      "采样地点公开策略",
+      "Sampling location policy",
+      "enum",
+      "always",
+      { options: ["hidden", "generalized", "exact-approved"] },
     ),
     field(
       "identificationEvidence",
@@ -287,13 +474,66 @@ const algaeFields = {
     field("commonName", "locales.{locale}.fields.commonName", "中文名/常用名", "Common name", "text", "always", {
       localized: true,
     }),
+    field("categoryLabel", "locales.{locale}.fields.categoryLabel", "类别说明", "Category label", "text", "always", {
+      localized: true,
+    }),
+    field("habitat", "locales.{locale}.fields.habitat", "生境", "Habitat", "text", "always", {
+      localized: true,
+    }),
+    field("morphology", "locales.{locale}.fields.morphology", "形态", "Morphology", "text", "always", {
+      localized: true,
+    }),
+    field(
+      "researchFocus",
+      "locales.{locale}.fields.researchFocus",
+      "研究重点",
+      "Research focus",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "identificationLimitations",
+      "locales.{locale}.fields.identificationLimitations",
+      "鉴定限制",
+      "Identification limitations",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field(
+      "observationGuidance",
+      "locales.{locale}.fields.observationGuidance",
+      "观察建议",
+      "Observation guidance",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "referencesNote",
+      "locales.{locale}.fields.referencesNote",
+      "参考说明",
+      "References note",
+      "text",
+      "optional",
+      { localized: true },
+    ),
   ],
 };
 
 const liveFeedFields = {
   shared: [
     field("scientificGroup", "shared.scientificGroup", "类群", "Scientific group", "text", "always"),
-    field("taxonomicLevel", "shared.taxonomicLevel", "分类层级", "Taxonomic level", "enum", "always"),
+    field("taxonomicLevel", "shared.taxonomicLevel", "分类层级", "Taxonomic level", "enum", "always", {
+      options: ["phylum", "class", "order", "family", "genus", "species", "group"],
+    }),
+    field("category", "shared.category", "生物饵料类别", "Live-feed category", "enum", "always", {
+      options: ["microalgae", "rotifer", "copepod", "cladoceran", "other"],
+    }),
+    field("environmentKinds", "shared.environmentKinds", "水环境类型", "Water environments", "enum-list", "always", {
+      options: ["freshwater", "marine", "brackish"],
+    }),
     field(
       "cultureDisclosureBoundary",
       "shared.cultureDisclosureBoundary",
@@ -301,6 +541,7 @@ const liveFeedFields = {
       "Culture disclosure boundary",
       "enum",
       "always",
+      { options: ["public-overview", "reviewed-procedure", "internal-only"] },
     ),
     field(
       "identificationConfidence",
@@ -309,9 +550,48 @@ const liveFeedFields = {
       "Identification confidence",
       "enum",
       "always",
+      { options: ["low", "medium", "high", "confirmed"] },
     ),
   ],
-  localized: [],
+  localized: [
+    field("name", "locales.{locale}.fields.name", "名称", "Name", "text", "always", { localized: true }),
+    field("overview", "locales.{locale}.fields.overview", "概述", "Overview", "text", "always", {
+      localized: true,
+    }),
+    field("environment", "locales.{locale}.fields.environment", "环境", "Environment", "text", "always", {
+      localized: true,
+    }),
+    field("morphology", "locales.{locale}.fields.morphology", "形态", "Morphology", "text", "always", {
+      localized: true,
+    }),
+    field("lifeHistory", "locales.{locale}.fields.lifeHistory", "生活史", "Life history", "text", "optional", {
+      localized: true,
+    }),
+    field(
+      "ecologicalRole",
+      "locales.{locale}.fields.ecologicalRole",
+      "生态作用",
+      "Ecological role",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field("feedingTraits", "locales.{locale}.fields.feedingTraits", "摄食特征", "Feeding traits", "text", "optional", {
+      localized: true,
+    }),
+    field("researchFocus", "locales.{locale}.fields.researchFocus", "研究重点", "Research focus", "text", "optional", {
+      localized: true,
+    }),
+    field("cultureFactors", "locales.{locale}.fields.cultureFactors", "培养因素", "Culture factors", "text", "optional", {
+      localized: true,
+    }),
+    field("applications", "locales.{locale}.fields.applications", "应用", "Applications", "text", "optional", {
+      localized: true,
+    }),
+    field("limitations", "locales.{locale}.fields.limitations", "限制说明", "Limitations", "text", "always", {
+      localized: true,
+    }),
+  ],
 };
 
 const observationFields = {
@@ -324,11 +604,69 @@ const observationFields = {
       "datetime",
       "always",
     ),
+    field(
+      "observationEndedAt",
+      "shared.observationEndedAt",
+      "观测结束时间",
+      "Observation end time",
+      "datetime",
+      "optional",
+    ),
     field("generalizedLocationLabel", "shared.generalizedLocationLabel", "地点", "Location", "group", "optional"),
-    field("observationType", "shared.observationType", "观测类型", "Observation type", "enum", "always"),
-    field("sampleStatus", "shared.sampleStatus", "样品状态", "Sample status", "enum", "always"),
+    field("observationType", "shared.observationType", "观测类型", "Observation type", "enum", "always", {
+      options: ["water-discoloration", "field-observation", "sample-analysis", "microscopy", "environmental-measurement", "other"],
+    }),
+    field("evidenceType", "shared.evidenceType", "证据类型", "Evidence type", "enum", "always", {
+      options: ["visual", "sample", "microscopy", "instrumental", "combined"],
+    }),
+    field("observationStatus", "shared.observationStatus", "观测状态", "Observation status", "enum", "always", {
+      options: ["preliminary", "under-review", "verified", "closed"],
+    }),
+    field("sampleStatus", "shared.sampleStatus", "样品状态", "Sample status", "enum", "always", {
+      options: ["none", "collected", "processing", "verified", "archived"],
+    }),
+    field("locationPolicy", "shared.locationPolicy", "地点公开策略", "Location policy", "enum", "always", {
+      options: ["hidden", "generalized", "exact-approved"],
+    }),
+    field("responsibleAuthorId", "shared.responsibleAuthorId", "负责作者", "Responsible author", "id", "always"),
+    field("disclosureStatus", "shared.disclosureStatus", "公开确认", "Disclosure status", "enum", "always", {
+      options: ["pending", "approved"],
+    }),
   ],
   localized: [
+    field(
+      "observedPhenomena",
+      "locales.{locale}.fields.observedPhenomena",
+      "观测现象",
+      "Observed phenomena",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field(
+      "environmentalContext",
+      "locales.{locale}.fields.environmentalContext",
+      "环境背景",
+      "Environmental context",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "evidenceLimits",
+      "locales.{locale}.fields.evidenceLimits",
+      "证据限制",
+      "Evidence limits",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field("interpretation", "locales.{locale}.fields.interpretation", "解释", "Interpretation", "text", "optional", {
+      localized: true,
+    }),
+    field("followUp", "locales.{locale}.fields.followUp", "后续行动", "Follow-up", "text", "optional", {
+      localized: true,
+    }),
     field(
       "officialInformationDisclaimer",
       "locales.{locale}.fields.officialInformationDisclaimer",
@@ -343,19 +681,70 @@ const observationFields = {
 
 const articleFields = {
   shared: [
-    field("articleKind", "shared.articleKind", "文章类型", "Article kind", "enum", "always"),
-    field("targetAudience", "shared.targetAudience", "目标读者", "Target audience", "enum", "always"),
+    field("articleKind", "shared.articleKind", "文章类型", "Article kind", "enum", "always", {
+      options: ["foundation", "observation-guide", "method-explainer", "research-context"],
+    }),
+    field("publicationDate", "shared.publicationDate", "发布日期", "Publication date", "date", "always"),
+    field("targetAudience", "shared.targetAudience", "目标读者", "Target audience", "enum", "always", {
+      options: ["general", "students", "educators", "researchers"],
+    }),
+    field(
+      "readingTimeMinutes",
+      "shared.readingTimeMinutes",
+      "阅读时长（分钟）",
+      "Reading time (minutes)",
+      "integer",
+      "optional",
+    ),
     field("references", "shared.references", "参考资料", "References", "reference-list", "optional"),
   ],
   localized: [
     field("topic", "locales.{locale}.fields.topic", "主题", "Topic", "text", "always", { localized: true }),
+    field(
+      "targetAudienceLabel",
+      "locales.{locale}.fields.targetAudienceLabel",
+      "目标读者说明",
+      "Target audience label",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field(
+      "categoryLabel",
+      "locales.{locale}.fields.categoryLabel",
+      "分类标签",
+      "Category label",
+      "text",
+      "optional",
+      { localized: true },
+    ),
   ],
 };
 
 const memberFields = {
   shared: [
-    field("roleCategory", "shared.roleCategory", "角色", "Role category", "enum", "always"),
-    field("portraitConsent", "shared.portraitConsent", "照片授权", "Portrait consent", "enum", "always"),
+    field("authorId", "shared.authorId", "作者档案 ID", "Author profile ID", "id", "always"),
+    field("membershipStatus", "shared.membershipStatus", "成员状态", "Membership status", "enum", "always", {
+      options: ["active", "alumni", "guest", "inactive"],
+    }),
+    field("roleCategory", "shared.roleCategory", "角色", "Role category", "enum", "always", {
+      options: ["faculty", "researcher", "student", "technician", "collaborator", "other"],
+    }),
+    field("displayOrder", "shared.displayOrder", "显示顺序", "Display order", "integer", "always"),
+    field("publicStartYear", "shared.publicStartYear", "公开起始年份", "Public start year", "integer", "optional"),
+    field("publicEndYear", "shared.publicEndYear", "公开结束年份", "Public end year", "integer", "optional"),
+    field(
+      "profileDisclosure",
+      "shared.profileDisclosure",
+      "资料公开确认",
+      "Profile disclosure",
+      "enum",
+      "always",
+      { options: ["pending", "approved"] },
+    ),
+    field("portraitConsent", "shared.portraitConsent", "照片授权", "Portrait consent", "enum", "always", {
+      options: ["not-applicable", "pending", "confirmed"],
+    }),
     field(
       "publicContactEnabled",
       "shared.publicContactEnabled",
@@ -391,8 +780,19 @@ const collaborationFields = {
       "Collaboration kind",
       "enum",
       "always",
+      { options: ["area", "exchange", "case-study"] },
+    ),
+    field(
+      "collaborationStatus",
+      "shared.collaborationStatus",
+      "合作状态",
+      "Collaboration status",
+      "enum",
+      "always",
+      { options: ["open-for-discussion", "case-by-case", "internal-only"] },
     ),
     field("startedAt", "shared.startedAt", "开始时间", "Start date", "date", "optional"),
+    field("endedAt", "shared.endedAt", "结束时间", "End date", "date", "optional"),
     field(
       "publicAuthorization",
       "shared.publicAuthorization",
@@ -400,6 +800,7 @@ const collaborationFields = {
       "Public authorization",
       "enum",
       "always",
+      { options: ["pending", "bilateral-approved", "not-required"] },
     ),
     field(
       "collaborationBoundary",
@@ -408,6 +809,16 @@ const collaborationFields = {
       "Collaboration boundary",
       "enum",
       "always",
+      { options: ["public-summary", "approved-details", "internal-only"] },
+    ),
+    field(
+      "disclosureStatus",
+      "shared.disclosureStatus",
+      "公开确认",
+      "Disclosure status",
+      "enum",
+      "always",
+      { options: ["pending", "approved"] },
     ),
   ],
   localized: [
@@ -420,13 +831,74 @@ const collaborationFields = {
       "optional",
       { localized: true },
     ),
+    field(
+      "suitablePartners",
+      "locales.{locale}.fields.suitablePartners",
+      "适合合作对象",
+      "Suitable partners",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field(
+      "possibleTopics",
+      "locales.{locale}.fields.possibleTopics",
+      "可合作主题",
+      "Possible topics",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field(
+      "partnerPreparation",
+      "locales.{locale}.fields.partnerPreparation",
+      "合作方准备",
+      "Partner preparation",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "teamMayContribute",
+      "locales.{locale}.fields.teamMayContribute",
+      "团队可提供内容",
+      "Team contribution",
+      "text",
+      "always",
+      { localized: true },
+    ),
+    field("caveat", "locales.{locale}.fields.caveat", "合作边界说明", "Caveat", "text", "always", {
+      localized: true,
+    }),
+    field(
+      "processSummary",
+      "locales.{locale}.fields.processSummary",
+      "过程摘要",
+      "Process summary",
+      "text",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "outcomeSummary",
+      "locales.{locale}.fields.outcomeSummary",
+      "成果摘要",
+      "Outcome summary",
+      "text",
+      "optional",
+      { localized: true },
+    ),
   ],
 };
 
 const researchProfileFields = {
   shared: [
-    field("routeKey", "shared.routeKey", "固定路由键", "Fixed route key", "enum", "always"),
-    field("contentStatus", "shared.contentStatus", "内容状态", "Content status", "enum", "always"),
+    field("routeKey", "shared.routeKey", "固定路由键", "Fixed route key", "enum", "always", {
+      options: ["microalgae", "macroalgae", "live-feeds", "algal-blooms"],
+    }),
+    field("contentStatus", "shared.contentStatus", "内容状态", "Content status", "enum", "always", {
+      options: ["active", "under-review", "archived"],
+    }),
   ],
   localized: [
     field(
@@ -439,12 +911,39 @@ const researchProfileFields = {
       { localized: true },
     ),
     field(
+      "typicalQuestions",
+      "locales.{locale}.fields.typicalQuestions",
+      "典型问题",
+      "Typical questions",
+      "text-list",
+      "optional",
+      { localized: true },
+    ),
+    field(
+      "methodsAndMeasurements",
+      "locales.{locale}.fields.methodsAndMeasurements",
+      "方法与测量",
+      "Methods and measurements",
+      "text-list",
+      "optional",
+      { localized: true },
+    ),
+    field(
       "scopeCaveat",
       "locales.{locale}.fields.scopeCaveat",
       "范围边界",
       "Scope caveat",
       "text",
       "always",
+      { localized: true },
+    ),
+    field(
+      "resourcesAndConditions",
+      "locales.{locale}.fields.resourcesAndConditions",
+      "资源与条件",
+      "Resources and conditions",
+      "text",
+      "optional",
       { localized: true },
     ),
   ],

@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "tools/content-workbench"
   ],
   "engines": {
     "node": ">=22.13.0"
@@ -15,19 +16,29 @@
     "dev:next": "next dev",
     "build:next": "next build",
     "indexnow": "tsx scripts/submit-indexnow.ts",
-    "check": "npm run check:schema && npm run check:content-loader && npm run check:content-migration && tsc --noEmit -p tsconfig.next.json && eslint app components lib packages scripts tests/indexnow.test.ts tests/content-repository tests/content-migration",
+    "check": "npm run check:schema && npm run check:content-loader && npm run check:content-migration && npm run desktop:check && tsc --noEmit -p tsconfig.next.json && eslint app components lib packages scripts tests/indexnow.test.ts tests/content-repository tests/content-migration",
     "check:schema": "tsc --noEmit -p packages/content-schema/tsconfig.json",
     "check:content-loader": "tsc --noEmit -p tsconfig.content-loader.json",
     "check:content-migration": "tsc --noEmit -p tsconfig.content-migration.json",
     "content:migrate": "tsx scripts/migrate-content.ts",
     "content:validate": "tsx scripts/validate-content.ts",
-    "test": "npm run test:schema && npm run test:schema:browser && npm run test:content-loader && npm run test:content-migration && npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/indexnow.test.ts",
+    "test": "npm run test:schema && npm run test:schema:browser && npm run test:content-loader && npm run test:content-migration && npm run desktop:test && npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/indexnow.test.ts",
     "test:schema": "tsx --test packages/content-schema/tests/*.test.ts",
     "test:schema:browser": "vite build --config packages/content-schema/vite.browser-contract.config.ts && node packages/content-schema/.browser-contract/content-schema-browser-contract.js",
     "test:content-loader": "tsx --test tests/content-repository/*.test.ts",
     "test:content-migration": "tsx --test tests/content-migration/*.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "desktop:dev": "npm run tauri:dev --workspace @algae-atlas/content-workbench",
+    "desktop:check": "npm run check --workspace @algae-atlas/content-workbench",
+    "desktop:test:scaffold": "node --test tests/content-workbench-scaffold.test.mjs",
+    "desktop:test": "npm run desktop:test:scaffold && npm run test --workspace @algae-atlas/content-workbench",
+    "desktop:frontend:build": "npm run build --workspace @algae-atlas/content-workbench",
+    "desktop:rust:fmt": "npm run rust:fmt --workspace @algae-atlas/content-workbench",
+    "desktop:rust:check": "npm run rust:check --workspace @algae-atlas/content-workbench",
+    "desktop:rust:clippy": "npm run rust:clippy --workspace @algae-atlas/content-workbench",
+    "desktop:rust:test": "npm run rust:test --workspace @algae-atlas/content-workbench",
+    "desktop:build": "npm run tauri:build --workspace @algae-atlas/content-workbench"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

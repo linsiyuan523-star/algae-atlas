@@ -1,37 +1,26 @@
-.gitattributes
-content/migration-ledger.json
-content/records/science-article/photobioreactor-basics/en.md
-content/records/science-article/photobioreactor-basics/record.json
-content/records/science-article/photobioreactor-basics/zh.md
-content/records/science-article/what-are-algae/en.md
-content/records/science-article/what-are-algae/record.json
-content/records/science-article/what-are-algae/zh.md
-content/records/science-article/why-water-turns-green/en.md
-content/records/science-article/why-water-turns-green/record.json
-content/records/science-article/why-water-turns-green/zh.md
-delivery/CHANGED-FILES.txt
-delivery/HANDOFF.md
-delivery/MANIFEST.txt
-delivery/migration-reports/stage-03-science-articles.json
-delivery/TEST-SUMMARY.txt
-docs/content-workbench/HANDOFF.md
-docs/content-workbench/MIGRATION-TOOL.md
-docs/superpowers/plans/2026-07-22-stage-03-legacy-content-migration.md
-docs/superpowers/specs/2026-07-22-stage-03-legacy-content-migration-design.md
-package.json
-packages/content-schema/tests/cli.test.ts
-scripts/content-migration/cli.ts
-scripts/content-migration/planner.ts
-scripts/content-migration/science-articles.ts
-scripts/content-migration/types.ts
-scripts/content-migration/writer.ts
-scripts/migrate-content.ts
-scripts/validate-content.ts
-tests/content-migration/cli.test.ts
-tests/content-migration/dry-run.test.ts
-tests/content-migration/real-candidates.test.ts
-tests/content-migration/repository-validation.test.ts
-tests/content-migration/science-articles.test.ts
-tests/content-migration/write-safety.test.ts
-tests/content-repository/file-loader.test.ts
-tsconfig.content-migration.json
+Final integration combines the complete Stage-00 through Stage-03 history with
+the complete Stage-04 through Stage-08C desktop history.
+
+Stage-03 retained areas:
+- content/migration-ledger.json
+- content/records/science-article/
+- delivery/migration-reports/stage-03-science-articles.json
+- docs/content-workbench/MIGRATION-TOOL.md
+- scripts/content-migration/
+- scripts/migrate-content.ts
+- scripts/validate-content.ts
+- tests/content-migration/
+- tests/content-repository/
+
+Stage-08C retained areas:
+- docs/content-workbench/ACCEPTANCE-REPORT.md
+- docs/content-workbench/ADMIN-SECURITY.md
+- docs/content-workbench/BACKUP-RECOVERY.md
+- docs/content-workbench/QUICKSTART.md
+- docs/content-workbench/TROUBLESHOOTING.md
+- scripts/build-windows-candidate.ps1
+- tests/content-workbench-scaffold.test.mjs
+- tools/content-workbench/
+
+Final integration reports are listed after validation. Generated dependencies,
+build output, installers, temporary repositories, and bundles are not committed.

@@ -48,6 +48,12 @@ npm ci
 npm run dev:next
 ```
 
+在 Windows x64 MSVC 开发环境中启动 Stage 4A 桌面空壳：
+
+```powershell
+npm run desktop:dev
+```
+
 提交 PR 前运行：
 
 ```bash
