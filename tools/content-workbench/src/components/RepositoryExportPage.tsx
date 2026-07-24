@@ -41,6 +41,7 @@ type RepositoryExportPageProps = {
   mediaApi: MediaApi;
   repositoryApi: RepositoryApi;
   githubPublishApi?: GitHubPublishApi;
+  initialRepositoryPath?: string;
   now?: () => Date;
 };
 
@@ -55,11 +56,12 @@ export function RepositoryExportPage({
   mediaApi,
   repositoryApi,
   githubPublishApi = defaultGitHubPublishApi,
+  initialRepositoryPath = "",
   now = () => new Date(),
 }: RepositoryExportPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState("");
-  const [repositoryPath, setRepositoryPath] = useState("");
+  const [repositoryPath, setRepositoryPath] = useState(initialRepositoryPath);
   const [result, setResult] = useState<ExportDryRunResult | null>(null);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
   const [running, setRunning] = useState(false);

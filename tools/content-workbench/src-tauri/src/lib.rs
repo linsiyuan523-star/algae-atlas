@@ -1,5 +1,6 @@
 mod drafts;
 mod media;
+mod onboarding;
 mod repository;
 mod session;
 
@@ -10,12 +11,21 @@ pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
             let app_data_root = app.path().app_data_dir()?;
-            let drafts_root = app_data_root.join("drafts").join("v1");
-            let media_root = app_data_root.join("media-staging").join("v1");
+            let onboarding_root = app_data_root.join("onboarding").join("v1");
+            let default_storage = onboarding::default_storage_paths(&app_data_root);
+            onboarding::prepare_storage_paths(&default_storage)?;
+            let active_storage =
+                onboarding::configured_storage_paths(&onboarding_root, &default_storage);
             let repository_staging_root = app_data_root.join("repository-staging").join("v1");
             let session_root = app_data_root.join("session");
-            app.manage(drafts::DraftStore::new(drafts_root));
-            app.manage(media::MediaStore::new(media_root));
+            app.manage(drafts::DraftStore::new(active_storage.drafts.clone()));
+            app.manage(media::MediaStore::new(active_storage.staging.clone()));
+            app.manage(onboarding::OnboardingStore::new(
+                onboarding_root,
+                app_data_root,
+                default_storage,
+                active_storage,
+            )?);
             app.manage(repository::RepositoryPublisher::new(
                 repository_staging_root,
             ));
@@ -42,6 +52,8 @@ pub fn run() {
             repository::repository_local_commit,
             repository::repository_bundle_preflight,
             repository::repository_export_bundle,
+            onboarding::onboarding_status,
+            onboarding::save_onboarding_configuration,
             session::take_recovery_draft,
         ])
         .build(tauri::generate_context!())

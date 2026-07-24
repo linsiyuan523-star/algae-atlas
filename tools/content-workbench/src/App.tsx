@@ -11,6 +11,7 @@ import {
 import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { DraftsPage, NewDraftPage } from "./components/DraftPages";
+import { OnboardingPage } from "./components/OnboardingPage";
 import { RepositoryExportPage } from "./components/RepositoryExportPage";
 import { inspectDraft, tauriDraftApi, unavailableDraftApi } from "./drafts";
 import type { Draft, DraftApi } from "./drafts";
@@ -22,6 +23,11 @@ import {
   unavailableRepositoryApi,
 } from "./repository";
 import type { RepositoryApi } from "./repository";
+import {
+  tauriOnboardingApi,
+  unavailableOnboardingApi,
+} from "./onboarding";
+import type { OnboardingApi, OnboardingStatus } from "./onboarding";
 
 const APP_VERSION = "0.1.0";
 
@@ -45,7 +51,6 @@ const navigationItems = [
   {
     id: "settings",
     label: "设置",
-    emptyState: "当前没有可配置项。",
     icon: Settings,
   },
   {
@@ -67,6 +72,7 @@ type AppProps = {
   mediaApi?: MediaApi;
   repositoryApi?: RepositoryApi;
   githubPublishApi?: GitHubPublishApi;
+  onboardingApi?: OnboardingApi;
 };
 
 const recoveryRequests = new WeakMap<DraftApi, Promise<Draft | null>>();
@@ -86,6 +92,7 @@ export default function App({
   mediaApi,
   repositoryApi,
   githubPublishApi,
+  onboardingApi,
 }: AppProps) {
   const activeDraftApi =
     draftApi ?? (isTauri() ? tauriDraftApi : unavailableDraftApi);
@@ -94,10 +101,17 @@ export default function App({
   const activeRepositoryApi =
     repositoryApi ??
     (isTauri() ? tauriRepositoryApi : unavailableRepositoryApi);
+  const supportsOnboarding = Boolean(onboardingApi) || isTauri();
+  const activeOnboardingApi =
+    onboardingApi ?? (isTauri() ? tauriOnboardingApi : unavailableOnboardingApi);
   const [activeSection, setActiveSection] = useState<SectionId>("new-content");
   const [initialDraft, setInitialDraft] = useState<Draft | null>(null);
   const [recoveryDraft, setRecoveryDraft] = useState<Draft | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [onboardingStatus, setOnboardingStatus] =
+    useState<OnboardingStatus | null>(null);
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
+  const [onboardingLoading, setOnboardingLoading] = useState(supportsOnboarding);
   const activeItem =
     navigationItems.find((item) => item.id === activeSection) ?? navigationItems[0];
 
@@ -121,6 +135,35 @@ export default function App({
     };
   }, [activeDraftApi]);
 
+  useEffect(() => {
+    if (!supportsOnboarding) {
+      return;
+    }
+    let isCurrent = true;
+    activeOnboardingApi
+      .status()
+      .then((next) => {
+        if (isCurrent) {
+          setOnboardingStatus(next);
+          setOnboardingError(null);
+        }
+      })
+      .catch((caught: unknown) => {
+        if (isCurrent) {
+          setOnboardingError(describeError(caught));
+        }
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setOnboardingLoading(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeOnboardingApi, supportsOnboarding]);
+
   function handleDraftCreated(draft: Draft) {
     setInitialDraft(draft);
     setActiveSection("drafts");
@@ -133,6 +176,32 @@ export default function App({
     setInitialDraft(recoveryDraft);
     setRecoveryDraft(null);
     setActiveSection("drafts");
+  }
+
+  function handleOnboardingStatus(next: OnboardingStatus) {
+    setOnboardingStatus(next);
+    setOnboardingError(null);
+    setOnboardingLoading(false);
+  }
+
+  if (
+    supportsOnboarding &&
+    (onboardingLoading || !onboardingStatus?.configured)
+  ) {
+    return (
+      <div className="onboarding-shell">
+        <main className="onboarding-main">
+          <OnboardingPage
+            api={activeOnboardingApi}
+            initialStatus={onboardingStatus}
+            initialError={
+              onboardingError ? `无法初始化首次启动向导：${onboardingError}` : null
+            }
+            onStatusChange={handleOnboardingStatus}
+          />
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -216,6 +285,15 @@ export default function App({
               mediaApi={activeMediaApi}
               repositoryApi={activeRepositoryApi}
               githubPublishApi={githubPublishApi}
+              initialRepositoryPath={onboardingStatus?.configuration?.repositoryPath}
+            />
+          ) : activeSection === "settings" && supportsOnboarding ? (
+            <OnboardingPage
+              api={activeOnboardingApi}
+              initialStatus={onboardingStatus}
+              initialError={onboardingError}
+              title="本地设置与诊断"
+              onStatusChange={handleOnboardingStatus}
             />
           ) : (
             <div className="empty-state" role="status">
