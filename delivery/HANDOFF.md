@@ -1,37 +1,33 @@
-# Stage 7B1 Delivery Handoff
+# Stage 8A Delivery Handoff
 
-- Stage: Stage-07B1 - GitHub Draft PR Mock
-- Start commit: `2ee13f17a7e93046458ec5cb449e5dec8eec8dda`
-- Implementation commit: `0be72177d8d5e97239b3db923b47db47cca6990e`
-- Delivery commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the clean branch tip)
+- Stage: Stage-08A - First-run Onboarding and Diagnostics
+- Start commit: `12ea637bdc2e00ce2bb8dbdf930b681543f9b5f1`
+- Implementation commit: `7d8ae19`
+- Delivery commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the clean Stage-08A branch tip)
 
 ## Completed
 
-- Added an authentication abstraction, repository allowlist, pre-push safety gates, and Draft PR request/template model.
-- Added a no-network mock backend with duplicate branch/PR idempotency, different-HEAD blocking, and bounded retry state.
-- Kept Integration explicitly disabled by default and exposed host-only API injection without configuring credentials.
-- Added the Draft PR mock panel and offline tests for mock, duplicate PR, network failure, `main` blocking, allowlist, and missing credentials.
+- First-run local path configuration and diagnostics are available through Tauri commands and the React workbench.
+- Diagnostics cover required tools, local directory read/write access, local Git state, image processing capabilities, and application-data counts.
+- Settings retains the local configuration workflow; selected draft/staging roots apply on restart.
 
 ## Not Completed
 
-- No real GitHub backend, token, remote, push, PR, merge, tag, release, installer, or deployment was created.
+- No folder-picker plugin, installer, remote operation, GitHub login, credential handling, deployment, or release work was performed.
 
 ## Test Summary
 
-- Desktop check, 154-test Vitest suite, focused Stage-07B1 tests, production build, Git whitespace check, and desktop/mobile browser workflow: PASS.
-- No actual remote or network call was made.
+- Desktop check, frontend build, Rust format, Rust Clippy, focused Vitest, and focused Rust onboarding tests: PASS.
 
 ## Known Issues
 
-- The mock repository slug must be replaced by the integration host in a later stage.
-- Existing non-fatal Vite chunk-size and ESLint missing-pages notices remain.
+- Existing ESLint missing-pages and Vite chunk-size notices remain non-blocking.
+- Browser-only Vite does not expose native Tauri onboarding commands.
 
 ## Next Stage Exact Start
 
-- Execute `32_Stage8A_首次启动与诊断.md` from the clean Stage-07B1 branch tip.
+- Execute `33_Stage8B_Windows安装候选.md` from the clean Stage-08A branch tip.
 
 ## Do Not Repeat
 
-- Do not configure a real token or remote on a worker.
-- Do not enable Integration without an explicit backend, credential provider, and approved repository allowlist.
-- Use `npm.cmd` on this host; `npm.ps1` is blocked by execution policy.
+- Do not add remote Git/GitHub behavior or production installer work to Stage 8A.

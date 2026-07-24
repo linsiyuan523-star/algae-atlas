@@ -1,52 +1,32 @@
-Stage: Stage-07B1
+Stage: Stage-08A
 Status: PASS
 ValidatedAt: 2026-07-24
-Branch: local/stage-07b1-pr-mock
-StartCommit: 2ee13f17a7e93046458ec5cb449e5dec8eec8dda
-ImplementationCommit: 0be72177d8d5e97239b3db923b47db47cca6990e
+Branch: local/stage-08a-onboarding
+StartCommit: 12ea637bdc2e00ce2bb8dbdf930b681543f9b5f1
+ImplementationCommit: 7d8ae19
 FinalCommit: BRANCH_TIP_AT_DELIVERY
 
-Prerequisite:
-- Stage-07A3 Bundle SHA-256: PASS; A2B9A1FF55DA840F15A514603E3F85EE98E5EA32AA8F1FFF2571C9FEB1B9DCD6
-- git bundle verify: PASS; complete history, exact head 2ee13f17a7e93046458ec5cb449e5dec8eec8dda
-- Worker remotes: NONE
-
-Environment:
-- Git: 2.55.0.windows.2
-- Node: 22.23.1
-- npm: 10.9.8
-- Dependencies: exact Stage-07A3 install reused through an ignored local junction
-
-Stage-07B1 validation:
-- npm.cmd run check --workspace @algae-atlas/content-workbench: PASS
-- npm.cmd run test --workspace @algae-atlas/content-workbench: PASS; 21 files, 154 tests
-- Focused GitHub publish/component tests: PASS; 2 files, 8 tests
-- App and Stage-07B1 regression tests: PASS; 3 files, 12 tests
-- npm.cmd run build --workspace @algae-atlas/content-workbench: PASS; 1,954 modules
+Stage-08A validation:
+- npm.cmd run desktop:check: PASS
+- npm.cmd run desktop:frontend:build: PASS; 1,956 modules transformed
+- npm.cmd run desktop:rust:fmt: PASS
+- npm.cmd run desktop:rust:clippy: PASS
+- npm.cmd run test --workspace @algae-atlas/content-workbench -- src/components/OnboardingPage.test.tsx src/App.test.tsx: PASS; 2 files, 8 tests
+- cargo +1.97.1 test --locked --manifest-path src-tauri/Cargo.toml onboarding::tests: PASS; 3 tests
 - git diff --check: PASS
 
-Safety and behavior evidence:
-- Default backend is in-memory mock: PASS
-- No credential lookup in mock mode: PASS
-- Repository allowlist: PASS
-- `main` source branch blocked: PASS
-- Duplicate branch and Draft PR idempotency: PASS
-- Existing branch with different HEAD blocked: PASS
-- Simulated network failure exposes bounded retry state: PASS
-- Integration disabled by default: PASS
-- Enabled integration without credentials blocked before backend call: PASS
-- Draft PR model always sets draft=true: PASS
-- No HTTP client, Git remote command, token configuration, or environment lookup: PASS
-
-UI smoke:
-- In-app Browser desktop: PASS; preflight and Mock Draft PR result rendered
-- In-app Browser mobile width 390: PASS; no horizontal overflow or overlap
-- Browser console warnings/errors: NONE
-- Temporary browser preview entry removed before commit: PASS
+Behavior evidence:
+- First run holds the workbench behind local configuration until paths are saved: PASS
+- Simulated Git, Node, Rust, MSVC, WebView2, path, local Git, image, and application-data diagnostics render: PASS
+- Native save rejects an invalid draft storage path: PASS
+- Simulated native permission failure is surfaced in the UI: PASS
+- Invalid saved storage returns the next launch to onboarding: PASS
+- Local preview HTTP 200 and browser console warnings/errors: NONE
 
 Boundary:
-- Real network, GitHub, push, remote branch, PR, merge, tag, release, installer, and deployment: NOT RUN
+- Production installer build, installer candidate, remote Git, GitHub login, token handling, push, PR, merge, tag, release, and deployment: NOT RUN
 
 Known non-blocking notices:
 - Existing ESLint missing-pages notice
 - Existing Vite chunk-size warning
+- Browser-only Vite cannot invoke native Tauri commands

@@ -4,6 +4,7 @@ import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
 import App from "./App";
 import type { Draft, DraftApi } from "./drafts";
+import type { OnboardingApi, OnboardingStatus } from "./onboarding";
 import { createSharedRecordDraft } from "./schema-drafts";
 
 function makeDraft(titleZh = "虚构标题"): Draft {
@@ -30,6 +31,59 @@ function makeDraft(titleZh = "虚构标题"): Draft {
 }
 
 const draft = makeDraft();
+
+function onboardingStatus(configured: boolean): OnboardingStatus {
+  return {
+    configured,
+    ...(configured
+      ? {
+          configuration: {
+            formatVersion: 1,
+            repositoryPath: "D:\\fictional-worktree",
+            draftsDirectory: "D:\\drafts",
+            stagingDirectory: "D:\\staging",
+          },
+        }
+      : {}),
+    defaults: {
+      draftsDirectory: "D:\\drafts",
+      stagingDirectory: "D:\\staging",
+    },
+    activeStorage: {
+      draftsDirectory: "D:\\drafts",
+      stagingDirectory: "D:\\staging",
+    },
+    restartRequired: false,
+    diagnostics: {
+      tools: [],
+      paths: [],
+      localGit: {
+        inspected: false,
+        isRepository: false,
+        statusEntries: 0,
+      },
+      imageCapabilities: {
+        supportedInputFormats: ["JPEG", "PNG", "WebP"],
+        outputFormat: "WebP",
+        maxSourceBytes: 20 * 1024 * 1024,
+        privacyMetadataRemoved: true,
+      },
+      applicationData: {
+        appDataDirectory: "D:\\app-data",
+        configurationFile: "D:\\app-data\\configuration.json",
+        draftCount: 0,
+        stagedImageCount: 0,
+      },
+    },
+  };
+}
+
+function createOnboardingApi(): OnboardingApi {
+  return {
+    status: vi.fn(async () => onboardingStatus(false)),
+    saveConfiguration: vi.fn(async () => onboardingStatus(true)),
+  };
+}
 
 function createApi(): DraftApi {
   return {
@@ -152,4 +206,23 @@ test("uses read-only browser fallbacks when Tauri is unavailable", async () => {
 
   expect(await screen.findByText("目前没有可导出的草稿。")).toBeVisible();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("holds the workbench behind first-run configuration until local paths are saved", async () => {
+  const user = userEvent.setup();
+  const onboardingApi = createOnboardingApi();
+  render(<App draftApi={createApi()} onboardingApi={onboardingApi} />);
+
+  expect(await screen.findByRole("heading", { name: "首次启动设置", level: 2 })).toBeVisible();
+  expect(screen.queryByRole("navigation", { name: "工作台导航" })).not.toBeInTheDocument();
+
+  await user.type(screen.getByLabelText("本地仓库"), "D:\\fictional-worktree");
+  await user.click(screen.getByRole("button", { name: "保存本地配置" }));
+
+  expect(await screen.findByRole("navigation", { name: "工作台导航" })).toBeVisible();
+  expect(onboardingApi.saveConfiguration).toHaveBeenCalledWith({
+    repositoryPath: "D:\\fictional-worktree",
+    draftsDirectory: "D:\\drafts",
+    stagingDirectory: "D:\\staging",
+  });
 });

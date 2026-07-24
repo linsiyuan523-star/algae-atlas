@@ -1,49 +1,42 @@
-# Stage 7B1 Handoff
+# Stage 8A Handoff
 
-- Stage: Stage-07B1 - GitHub Draft PR Mock
-- Start commit: `2ee13f17a7e93046458ec5cb449e5dec8eec8dda`
-- Implementation commit: `0be72177d8d5e97239b3db923b47db47cca6990e`
-- Delivery commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the clean Stage-07B1 branch tip)
+- Stage: Stage-08A - First-run Onboarding and Diagnostics
+- Start commit: `12ea637bdc2e00ce2bb8dbdf930b681543f9b5f1`
+- Implementation commit: `7d8ae19`
+- Delivery commit: `BRANCH_TIP_AT_DELIVERY` (resolve from the clean Stage-08A branch tip)
 
 ## Completed
 
-- Added a versioned GitHub publishing interface with an authentication-provider abstraction; credentials are requested only by an explicitly enabled integration backend and are never persisted.
-- Added a case-normalized target-repository allowlist, clean-worktree/branch/HEAD/path/title gates, protected `main`/`master` source-branch blocking, and stale-preflight binding.
-- Added an in-memory mock backend as the default with no HTTP, Git remote, shell, token, or environment access.
-- Added idempotent branch and Draft PR behavior, different-HEAD conflict blocking, bounded retry state for simulated network failures, and a deterministic Draft PR description template.
-- Added an explicit Integration switch that is disabled by default and app-level dependency injection for a future integration host.
-- Added a responsive Draft PR preflight/confirmation/result panel bound to the verified local content commit.
-- Added unit and component coverage for mock success, duplicate PRs, allowlist/protected-branch gates, transient failures, retry, disabled integration, and missing credentials.
+- Added a first-run local configuration gate for repository, draft, and image-staging directories.
+- Persisted only validated local paths; no credential, token, GitHub login, remote, or network action was added.
+- Added tool diagnostics for Git, Node.js, Rust, MSVC, and WebView2, plus path permission, local Git, image capability, and application-data status.
+- Applied configured draft and staging storage roots on the next desktop launch and returns to onboarding if saved paths later become invalid.
+- Added a settings-page view of the same local configuration and diagnostics, including the configured repository as the default repository-export path.
 
 ## Not Completed
 
-- No real GitHub backend, credential, remote push, remote branch, or remote PR was configured or executed.
-- No merge, tag, release, installer, or deployment was performed.
-- The Stage-08 target repository and integration-host credential source remain unconfigured.
+- No native folder-picker dialog was added; directory paths use the existing text-input pattern.
+- No installer, installer candidate, release, deployment, remote, GitHub integration, or credential storage was created.
 
 ## Test Summary
 
-- Desktop check (TypeScript and ESLint): PASS.
-- Desktop Vitest: PASS; 21 files, 154 tests.
-- Focused Stage-07B1 Vitest: PASS; 2 files, 8 tests.
-- App/wiring regression Vitest: PASS; 3 files, 12 tests.
-- Desktop production build: PASS; 1,954 modules transformed.
-- In-app Browser at desktop and 390px mobile widths: PASS; mock preflight and publish completed, no horizontal overflow, overlap, console warning, or console error.
-- Git whitespace and sensitive-operation scans: PASS.
+- Desktop TypeScript/ESLint check, frontend build, Rust format, and Rust Clippy: PASS.
+- Focused onboarding/App Vitest: PASS; 2 files, 8 tests.
+- Focused Rust onboarding tests: PASS; 3 tests covering persistence, invalid storage, and missing storage recovery.
+- Local Vite preview returned HTTP 200 with no browser console warning or error; browser fallback cannot invoke native Tauri commands.
 
 ## Known Issues
 
-- The default allowed repository is an offline mock slug and must be replaced only by an explicitly configured integration host.
-- The existing non-fatal ESLint missing-pages notice and Vite chunk-size warning remain.
-- Browser-only Vite cannot perform the native local commit; component tests bind the panel to the same verified commit result contract.
+- Existing ESLint missing-pages notice and Vite chunk-size warning remain.
+- Changing configured draft or staging directories requires restarting the desktop application before the new storage roots are active.
 
 ## Next Stage Exact Start
 
-- Start from the clean Stage-07B1 branch tip after resolving `BRANCH_TIP_AT_DELIVERY`.
-- Execute `32_Stage8A_首次启动与诊断.md`.
+- Start from the clean Stage-08A branch tip after resolving `BRANCH_TIP_AT_DELIVERY`.
+- Execute `33_Stage8B_Windows安装候选.md`.
 
 ## Do Not Repeat
 
-- Do not add a Git remote, real GitHub token, HTTP client, `git push`, or remote PR call on a worker.
-- Do not bypass the allowlist, protected-branch gate, stale-preflight binding, or disabled Integration switch.
-- On this Windows host use `npm.cmd`; the PowerShell `npm.ps1` shim is blocked by execution policy.
+- Do not add GitHub authentication, token storage, HTTP, Git remote commands, push, PR creation, merge, tag, release, or deployment on this worker.
+- Do not run a production installer build in Stage 8A.
+- Use `npm.cmd` on this Windows host; the PowerShell `npm.ps1` shim is blocked by execution policy.
