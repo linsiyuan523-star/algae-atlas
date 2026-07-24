@@ -1,4 +1,15 @@
-Stage-06B2 integration merge
+Stage-06B2 changed files
 
-Integrated Stage-06A2 image processing and Stage-06B1 detail preview.
-The final Stage-06B2 file inventory will be written after implementation and validation.
+Implementation and tests:
+- tests/content-workbench-scaffold.test.mjs
+- tools/content-workbench/src/components/ContentPreview.test.tsx
+- tools/content-workbench/src/components/ContentPreview.tsx
+- tools/content-workbench/src/components/DetailPreview.tsx
+- tools/content-workbench/src/components/DraftPages.tsx
+- tools/content-workbench/src/styles/app.css
+
+Delivery records:
+- docs/content-workbench/HANDOFF.md
+- delivery/HANDOFF.md
+- delivery/TEST-SUMMARY.txt
+- delivery/CHANGED-FILES.txt

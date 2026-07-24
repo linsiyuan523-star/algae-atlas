@@ -1,6 +1,28 @@
-Stage 6 integration merge
+Stage: Stage-06B2
+Status: PASS
+ValidatedAt: 2026-07-24
+Branch: local/stage-06b2-responsive-preview
+StartCommit: d73ac176a3a820b30bd90a8259ae637a13052717
+FeatureCommit: 1946185d14b69517dbdfe4f0f7997f54d93ae97b
+FinalCommit: BRANCH_TIP_AT_DELIVERY
 
-- Stage-06A2 delivery bundle: verified SHA-256 and complete history.
-- Stage-06B1 delivery bundle: verified SHA-256 and complete history.
-- Parent tests: recorded as passing in each verified delivery handoff.
-- Post-merge checks: pending Stage-06B2 implementation.
+Required checks:
+- npm.cmd run check: PASS
+- Focused preview suites: PASS; 3 files, 20 tests
+- npm.cmd test: PASS; desktop Vitest 17 files, 137 tests; root/schema/render checks also passed
+- npm.cmd run build:next: PASS
+- npm.cmd run desktop:frontend:build: PASS
+- git diff --check: PASS
+
+Tauri smoke:
+- npm.cmd run tauri:dev: PASS; compiled, launched, and loaded the workbench root screen
+- Native WebView2 capture/input automation: NOT AVAILABLE; SetIsBorderRequired failed (0x80004002)
+- Temporary process and logs: removed; no user-app-data test draft created
+
+Boundary:
+- No remote write, GitHub action, PR, merge to main, tag, release, or deployment
+- No root website visual redesign or server-rendering change
+
+Known non-blocking notices:
+- Existing Next.js missing-pages notice
+- Existing Vite chunk-size warning
