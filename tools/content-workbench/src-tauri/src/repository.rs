@@ -2039,6 +2039,24 @@ $targetRef = "refs/heads/{import_branch}"
 $expectedHead = "{head_sha}"
 $expectedHash = "{sha256}"
 
+function Get-Sha256Hex {{
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$LiteralPath
+  )
+
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  $stream = $null
+  try {{
+    $stream = [System.IO.File]::OpenRead($LiteralPath)
+    $hashBytes = $sha256.ComputeHash($stream)
+    return ([System.BitConverter]::ToString($hashBytes)).Replace("-", "")
+  }} finally {{
+    if ($null -ne $stream) {{ $stream.Dispose() }}
+    if ($null -ne $sha256) {{ $sha256.Dispose() }}
+  }}
+}}
+
 if (-not (Test-Path -LiteralPath $RepositoryPath -PathType Container)) {{
   throw "RepositoryPath must be an existing directory."
 }}
@@ -2052,7 +2070,7 @@ $branchBefore = (& git -C $repositoryRoot symbolic-ref --quiet --short HEAD)
 $branchExit = $LASTEXITCODE
 if ($branchExit -ne 0 -and $branchExit -ne 1) {{ throw "Cannot inspect target branch." }}
 
-$actualHash = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash.ToUpperInvariant()
+$actualHash = Get-Sha256Hex -LiteralPath $bundlePath
 if ($actualHash -ne $expectedHash) {{ throw "Bundle SHA-256 does not match the manifest." }}
 $sidecar = (Get-Content -LiteralPath $sidecarPath -Raw).Trim()
 if ($sidecar -ne "$expectedHash  {bundle_name}") {{ throw "Bundle SHA-256 sidecar is invalid." }}
@@ -2707,7 +2725,7 @@ mod tests {
         collections::BTreeMap,
         fs,
         path::{Path, PathBuf},
-        process::Command,
+        process::{Command, Output},
     };
     use tempfile::tempdir;
 
@@ -2750,6 +2768,25 @@ mod tests {
         git(&root, &["commit", "-m", "test: initialize repository"]);
         git(&root, &["status", "--short"]);
         (temporary, root)
+    }
+
+    fn run_import_script(script: &Path, repository_root: &Path) -> Output {
+        let script = script.to_string_lossy().replace('\'', "''");
+        let repository_root = repository_root.to_string_lossy().replace('\'', "''");
+        let command = format!(
+            "$null = Get-Command Join-Path,Test-Path,Get-Content,Write-Output -ErrorAction SilentlyContinue; $hashCommand = Get-Command Get-FileHash -ErrorAction SilentlyContinue; if ($null -ne $hashCommand) {{ Remove-Item Function:\\Get-FileHash -ErrorAction Stop }}; $env:PSModulePath = ''; & '{script}' -RepositoryPath '{repository_root}'"
+        );
+        Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &command,
+            ])
+            .output()
+            .expect("runs import script without PowerShell module auto-loading")
     }
 
     fn request(root: &Path) -> RepositoryDryRunRequest {
@@ -3347,18 +3384,10 @@ mod tests {
         let (_integration_temporary, integration_root) = repository_fixture();
         let integration_head = git(&integration_root, &["rev-parse", "HEAD"]);
         let script = destination.join("Import-Bundle.ps1");
-        let imported = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                script.to_string_lossy().as_ref(),
-                "-RepositoryPath",
-                integration_root.to_string_lossy().as_ref(),
-            ])
-            .output()
-            .expect("runs import script");
+        let script_contents = fs::read_to_string(&script).expect("reads import script");
+        assert!(script_contents.contains("function Get-Sha256Hex"));
+        assert!(!script_contents.contains("Get-FileHash"));
+        let imported = run_import_script(&script, &integration_root);
         assert!(
             imported.status.success(),
             "{}",
@@ -3384,6 +3413,41 @@ mod tests {
             commit.commit_sha
         );
         assert!(git(&integration_root, &["status", "--short"]).is_empty());
+
+        let sidecar = destination.join(format!("{}.sha256.txt", result.bundle_file_name));
+        let valid_sidecar = fs::read(&sidecar).expect("reads valid sidecar");
+        fs::write(
+            &sidecar,
+            format!("{}  {}\r\n", "0".repeat(64), result.bundle_file_name),
+        )
+        .expect("writes invalid sidecar");
+        let (_invalid_temporary, invalid_root) = repository_fixture();
+        let invalid_head = git(&invalid_root, &["rev-parse", "HEAD"]);
+        let invalid_import = run_import_script(&script, &invalid_root);
+        assert!(!invalid_import.status.success());
+        assert_eq!(git(&invalid_root, &["branch", "--show-current"]), "main");
+        assert_eq!(git(&invalid_root, &["rev-parse", "HEAD"]), invalid_head);
+        assert!(git(&invalid_root, &["status", "--short"]).is_empty());
+        assert!(git(
+            &invalid_root,
+            &["branch", "--list", &result.import_branch_name]
+        )
+        .is_empty());
+
+        fs::write(&sidecar, valid_sidecar).expect("restores valid sidecar");
+        fs::remove_file(&sidecar).expect("removes sidecar");
+        let (_missing_temporary, missing_root) = repository_fixture();
+        let missing_head = git(&missing_root, &["rev-parse", "HEAD"]);
+        let missing_import = run_import_script(&script, &missing_root);
+        assert!(!missing_import.status.success());
+        assert_eq!(git(&missing_root, &["branch", "--show-current"]), "main");
+        assert_eq!(git(&missing_root, &["rev-parse", "HEAD"]), missing_head);
+        assert!(git(&missing_root, &["status", "--short"]).is_empty());
+        assert!(git(
+            &missing_root,
+            &["branch", "--list", &result.import_branch_name]
+        )
+        .is_empty());
     }
 
     #[test]
@@ -3450,21 +3514,7 @@ mod tests {
 
         let (_integration_temporary, integration_root) = repository_fixture();
         let integration_head = git(&integration_root, &["rev-parse", "HEAD"]);
-        let imported = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                destination
-                    .join("Import-Bundle.ps1")
-                    .to_string_lossy()
-                    .as_ref(),
-                "-RepositoryPath",
-                integration_root.to_string_lossy().as_ref(),
-            ])
-            .output()
-            .expect("runs Stage 8C import script");
+        let imported = run_import_script(&destination.join("Import-Bundle.ps1"), &integration_root);
         assert!(
             imported.status.success(),
             "{}",
