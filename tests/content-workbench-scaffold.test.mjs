@@ -65,8 +65,8 @@ test("content workbench scaffold has the local-only desktop contract", () => {
     "@tiptap/starter-kit": "3.28.0",
     dompurify: "3.4.12",
     "lucide-react": "1.25.0",
-    react: "19.2.6",
-    "react-dom": "19.2.6",
+    react: "19.2.8",
+    "react-dom": "19.2.8",
   };
   const expectedDevDependencies = {
     "@tauri-apps/cli": "2.11.4",
@@ -87,7 +87,7 @@ test("content workbench scaffold has the local-only desktop contract", () => {
   const workspaceVitePath = resolveWorkspacePackage(packageLock, "vite");
   assert.equal(workspaceVitePath, "tools/content-workbench/node_modules/vite");
   assert.equal(packageLock.packages[workspaceVitePath].version, "8.0.16");
-  assert.equal(packageLock.packages["node_modules/vite"].version, "8.0.13");
+  assert.equal(packageLock.packages["node_modules/vite"].version, "8.1.5");
 
   assert.equal(tauriConfig.bundle.active, true);
   assert.equal(tauriConfig.bundle.useLocalToolsDir, true);
