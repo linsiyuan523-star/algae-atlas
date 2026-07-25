@@ -1,98 +1,77 @@
 # Final Integration Report
 
-Status: READY_FOR_DRAFT_PR_WITH_RELEASE_BLOCKERS
+Status: BLOCKED
 
-- Validation head: `53e43181b848f0c4f3bbe0a5742a62fe9a84fe40`
-- Integration branch: `feature/algae-content-workbench`
-- Base branch: `main` at `456ff609e27ce5aa46fa0608289a30298bdd3e7f`
-- Report commit: resolve from the branch head after this report commit
-- Remote writes, pull requests, merges, releases, and deployments: none
+- Repository: `linsiyuan523-star/algae-atlas`
+- PR: Draft #7, base `main`
+- Initial verified PR head: `47af7a17cbe107813aca71fae7cf33787fdf8239`
+- Audited implementation head: `af8ecd4cdccf6f689794887d18f432ff17f8983e`
+- Base observed at start: `456ff609e27ce5aa46fa0608289a30298bdd3e7f`
+- Report commit: the commit containing this file; resolve the exact final PR
+  head with `git rev-parse HEAD` or the PR API after push.
 
-## Inputs And Merge
+The initial worktree was clean, the local branch matched the remote PR head,
+and PR #7 was open and Draft. Commit
+`53e43181b848f0c4f3bbe0a5742a62fe9a84fe40` is an ancestor of the initial PR
+head. Its installer is not accepted as the current candidate, even though the
+intervening tracked changes were reports and delivery metadata.
 
-- Verified 21 USB Bundle SHA-256 sidecars and `git bundle verify` results.
-- The baseline sidecar uses `Get-FileHash` output; both recorded values match the
-  Bundle SHA-256.
-- Imported every Bundle head under `integration/import/*`.
-- Fast-forwarded Stage 00 through Stage 03 in dependency order.
-- Created merge commit `c062fc5073b860a53c7d21b3df563da0fb27ce3f` with the
-  Stage 03 and Stage 08C heads as parents.
-- Retained the Stage 6A2 and Stage 6B1 merge history; both are ancestors of the
-  integration head.
+## GitHub Actions
 
-## Final Validation
+`.github/workflows/pr-validation.yml` now provides three PR jobs:
+
+- Website and content checks on Node.js 22.13.0.
+- Windows Rust and desktop checks on Rust 1.97.1, with Clippy warnings denied.
+- npm production/full audits and RustSec scanning with `cargo-audit` 0.22.2.
+
+Workflow permissions are `contents: read`. Action references are pinned to
+verified commit SHAs. Per-PR concurrency cancels obsolete runs. The only upload
+is a seven-day audit/unsigned NSIS artifact; the workflow has no write,
+release, deployment, or package-publication permission.
+
+## Local Verification
 
 | Gate | Result |
 | --- | --- |
-| `npm ci` | PASS; 660 packages installed from the final lockfile |
-| `npm run check` | PASS; schema, loader, migration, desktop, Next, and ESLint |
-| `npm test` | PASS; schema 58, loader 10, migration 15, scaffold 1, desktop 159, rendered 25, IndexNow 1 |
-| `npm run build:next` | PASS; 97/97 static pages with Next 16.2.11 |
+| `npm ci` | PASS; 660 packages installed from the updated lockfile |
+| `npm run check` | PASS |
+| `npm test` | PASS; schema 58, loader 10, migration 15, scaffold 1, desktop 159, rendered HTML 25, IndexNow 1 |
+| `npm run build:next` | PASS; 97/97 static pages on Next 16.2.11 |
 | `npm run content:validate` | PASS |
-| `content:migrate -- --dry-run` | PASS; 0 planned, 15 skipped, 0 conflicts, 0 validation issues, Git unchanged |
-| `cargo check --all-targets` | PASS |
-| Rust tests | PASS; 37 passed |
-| Rust format and Clippy | PASS; Clippy ran with `-D warnings` |
-| Tauri startup | PASS; responsive local window launched and was stopped cleanly |
-| NSIS candidate build | PASS; x64 current-user installer |
-| Offline Bundle round trip | PASS; exact head/tree imported into a clean no-remote repository while its baseline `main` stayed unchanged |
+| `npm run content:migrate -- --dry-run` | PASS; 0 planned, 15 skipped, 0 conflicts, 0 validation issues; Git state unchanged |
+| `npm run desktop:rust:fmt` | PASS |
+| `npm run desktop:rust:check` | PASS |
+| `npm run desktop:rust:clippy` | PASS with `-D warnings` |
+| `npm run desktop:rust:test` | PASS; 37 tests |
+| `npm run desktop:build` | PASS after one transient truncated NSIS download retry |
+| `npm audit --omit=dev` | BLOCKED; 3 high |
+| `npm audit` | BLOCKED; 6 high, 4 moderate, 1 low |
+| RustSec | COMPLETE, BLOCKED; 0 vulnerabilities, 17 warnings including one unsound advisory |
 
-Informational notices: the desktop ESLint pages-directory notice, the Vite
-chunk-size notice, and the Windows linker message did not change command exit
-status. The RustSec audit tool could not be acquired within a bounded 20-minute
-window; see `SECURITY-AUDIT.md`.
+## Pre-Report Candidate
 
-## Candidate
+- Source head: `af8ecd4cdccf6f689794887d18f432ff17f8983e`
+- Relative path:
+  `tools/content-workbench/src-tauri/target/release/bundle/nsis/藻类团队内容发布工作台_0.1.0_x64-setup.exe`
+- SHA-256: `3A737A83DA4606ADEDF351CD8E6C651D1E7AE81A48741FBA1593AAC35D25951F`
+- Size: 2,626,740 bytes
+- Authenticode: `NotSigned`
 
-- File: `content-workbench_0.1.0_x64-setup.exe`
-- SHA-256: `8682A7DA94E64A5DD915617ABC2DAF6610B8939D81D9E7136BFE35D184B9E6F7`
-- Size: 2,630,838 bytes
-- Signature: not signed
-- Installer build and final-copy hashes match; no workspace or user path was
-  found in the binary scan.
+NSIS output is nondeterministic: rebuilding unchanged source changed the hash.
+This pre-report candidate therefore is not represented as a final release
+package. A fresh candidate must be built from the final report commit; its
+exact hash belongs in CI/task evidence rather than a self-referential report
+commit.
 
-## Proposed Draft PR
+## Remaining Blockers
 
-- Repository: `linsiyuan523-star/algae-atlas`
-- URL: `https://github.com/linsiyuan523-star/algae-atlas`
-- Base: `main`
-- Head: `feature/algae-content-workbench`
-- Title: `feat: add offline algae content workbench`
+1. The production npm audit has 3 unresolved high findings and no compatible
+   stable Next 16 fix.
+2. RustSec reports the unsound `glib` RUSTSEC-2024-0429 warning in the
+   cross-platform Tauri dependency chain.
+3. No Authenticode certificate or owner-approved unsigned internal-only
+   distribution decision exists.
+4. Remote PR jobs have not yet run for the new workflow.
 
-```markdown
-## Change
-
-Integrates the schema-backed content repository, safe legacy migration flow,
-and Windows Tauri content workbench with offline Bundle export/import.
-
-## Pages And Languages
-
-Existing website routes remain code-owned. Migrated science articles stay draft
-and all production selectors remain `legacy`; Chinese-only content does not
-create an English detail page.
-
-## Images
-
-No public image source switch is included. New desktop intake records rights,
-attribution, and Chinese alt text before publication.
-
-## Validation
-
-- [x] `npm run check`
-- [x] `npm test`
-- [x] `npm run build:next`
-- [x] Desktop TypeScript, component, Rust, and Tauri startup checks
-- [x] Offline Bundle round trip
-- [x] Credential and secret scan
-
-## Deployment And Risk
-
-This PR must remain Draft. Do not merge or deploy until the production npm audit
-findings and unsigned-installer decision in `SECURITY-AUDIT.md` are resolved or
-explicitly accepted. Deployment may occur only after merge from `origin/main`.
-
-## Rollback
-
-Revert this feature branch merge with an ordinary revert commit. Do not switch
-legacy content selectors or delete legacy source data as part of rollback.
-```
+The PR must remain Draft. Do not merge, release, upload a formal installer, or
+deploy production from this state.

@@ -1,25 +1,32 @@
 # Release Candidate Notes
 
-Status: DRAFT_ONLY
+Status: BLOCKED
 
 - Product: Algae Team Content Publishing Workbench
 - Version: 0.1.0
-- Validation head: `53e43181b848f0c4f3bbe0a5742a62fe9a84fe40`
+- Audited implementation head: `af8ecd4cdccf6f689794887d18f432ff17f8983e`
 - Target: Windows x64, NSIS current-user installer
-- Candidate: `content-workbench_0.1.0_x64-setup.exe`
-- SHA-256: `8682A7DA94E64A5DD915617ABC2DAF6610B8939D81D9E7136BFE35D184B9E6F7`
-- Size: 2,630,838 bytes
-- Signature: not signed
+- Pre-report candidate:
+  `tools/content-workbench/src-tauri/target/release/bundle/nsis/藻类团队内容发布工作台_0.1.0_x64-setup.exe`
+- Pre-report SHA-256:
+  `3A737A83DA4606ADEDF351CD8E6C651D1E7AE81A48741FBA1593AAC35D25951F`
+- Pre-report size: 2,626,740 bytes
+- Signature: `NotSigned`
 - Runtime prerequisite: installed WebView2 runtime
 
-The candidate was built successfully from the final dependency state with
-Tauri 2.11.5 and Rust 1.97.1. The package is an installer candidate only; it
-was not signed, released, uploaded, or deployed.
+This is an acceptance-only unsigned candidate. It was not uploaded as a formal
+release, installed, signed, released, or deployed. NSIS rebuilds were not
+byte-reproducible, so a fresh final-head build must carry its own hash and must
+not reuse the value above as release evidence.
 
-Before a release decision:
+Release remains blocked by:
 
-- resolve or explicitly accept the production npm audit findings;
-- complete Rust lockfile vulnerability scanning;
-- rehearse this exact hash on a clean Windows VM;
-- sign the installer or approve an unsigned distribution policy;
-- merge only through a reviewed PR, then deploy only from `origin/main`.
+1. Three high production npm findings in the Next/PostCSS/Sharp chain.
+2. RustSec RUSTSEC-2024-0429 (`glib` 0.18.5, unsound) plus 16 unmaintained
+   transitive warnings.
+3. No valid Authenticode certificate and no repository-owner unsigned
+   internal-distribution approval.
+4. Pending GitHub Actions results for the newly added PR workflow.
+
+Do not mark the PR Ready, merge it, create a GitHub Release, publish the EXE,
+or deploy the website from this state.
