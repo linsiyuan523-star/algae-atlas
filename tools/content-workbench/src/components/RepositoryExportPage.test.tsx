@@ -294,6 +294,8 @@ test("preflights and exports an offline bundle after restart without a draft", a
         "TEST-SUMMARY.txt",
         "CHANGED-FILES.txt",
         "Import-Bundle.ps1",
+        "Validate-Bundle.sh",
+        "validate-bundle.mjs",
       ],
     }),
   );

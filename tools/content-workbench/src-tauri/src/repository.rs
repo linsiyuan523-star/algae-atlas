@@ -21,6 +21,10 @@ const MAX_TARGET_LENGTH: usize = 512;
 const MAX_TEXT_FILE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PUBLICATION_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
+const PORTABLE_BUNDLE_VALIDATOR: &str =
+    include_str!("../../portable-validator/validate-bundle.mjs");
+const PORTABLE_BUNDLE_VALIDATOR_WRAPPER: &str =
+    include_str!("../../portable-validator/Validate-Bundle.sh");
 
 const CONTENT_TYPES: [&str; 11] = [
     "team-news",
@@ -1856,6 +1860,8 @@ fn write_bundle_delivery_artifacts(
         "TEST-SUMMARY.txt".to_owned(),
         "CHANGED-FILES.txt".to_owned(),
         "Import-Bundle.ps1".to_owned(),
+        "Validate-Bundle.sh".to_owned(),
+        "validate-bundle.mjs".to_owned(),
     ];
     write_delivery_file(
         staging_root,
@@ -1869,7 +1875,7 @@ fn write_bundle_delivery_artifacts(
     );
     write_delivery_file(staging_root, "MANIFEST.txt", manifest.as_bytes())?;
     let handoff = format!(
-        "# Offline Content Bundle Handoff\n\n- Source branch: `{branch_name}`\n- Source HEAD: `{head_sha}`\n- Base commit: `{base_commit_sha}`\n- Complete bundle: `{bundle_name}`\n- SHA-256: `{bundle_sha256}`\n- Import target: `{import_branch}`\n\nRun `Import-Bundle.ps1` against a clean local repository. It verifies the sidecar and bundle, then creates only the named `import/...` temporary branch. It does not checkout, merge, push, pull, tag, release, or deploy.\n",
+        "# Offline Content Bundle Handoff\n\n- Source branch: `{branch_name}`\n- Source HEAD: `{head_sha}`\n- Base commit: `{base_commit_sha}`\n- Complete bundle: `{bundle_name}`\n- SHA-256: `{bundle_sha256}`\n- Import target: `{import_branch}`\n\nBefore transfer, validate the delivery from an isolated Ubuntu directory:\n\n```bash\nbash Validate-Bundle.sh ./{bundle_name}\n```\n\nThe Ubuntu validator reads only this delivery, uses an isolated temporary bare Git repository, and removes it by default. It does not checkout, merge, fetch from a network, push, commit, run npm, use sudo, write a target repository, or deploy.\n\nRun `Import-Bundle.ps1` against a clean local repository only during a separately approved import step. It verifies the sidecar and bundle, then creates only the named `import/...` temporary branch. It does not checkout, merge, push, pull, tag, release, or deploy.\n",
     );
     write_delivery_file(staging_root, "HANDOFF.md", handoff.as_bytes())?;
     let summary = format!(
@@ -1895,6 +1901,16 @@ fn write_bundle_delivery_artifacts(
             bundle_sha256,
         )
         .as_bytes(),
+    )?;
+    write_delivery_file(
+        staging_root,
+        "Validate-Bundle.sh",
+        PORTABLE_BUNDLE_VALIDATOR_WRAPPER.as_bytes(),
+    )?;
+    write_delivery_file(
+        staging_root,
+        "validate-bundle.mjs",
+        PORTABLE_BUNDLE_VALIDATOR.as_bytes(),
     )?;
     Ok(artifacts)
 }
@@ -2789,6 +2805,19 @@ mod tests {
             .expect("runs import script without PowerShell module auto-loading")
     }
 
+    fn run_bundle_validator(script: &Path, bundle: &Path, sidecar_directory: &Path) -> Output {
+        Command::new("node")
+            .args([
+                script.to_string_lossy().as_ref(),
+                bundle.to_string_lossy().as_ref(),
+                "--sidecar-dir",
+                sidecar_directory.to_string_lossy().as_ref(),
+            ])
+            .env("VALIDATOR_TEST_SECRET", "must-not-be-printed")
+            .output()
+            .expect("runs portable bundle validator")
+    }
+
     fn request(root: &Path) -> RepositoryDryRunRequest {
         RepositoryDryRunRequest {
             repository_path: root.to_string_lossy().into_owned(),
@@ -3359,10 +3388,22 @@ mod tests {
             result.bundle_file_name,
             "content-20260724-fictional-dry-run-v1.bundle"
         );
-        assert_eq!(result.artifact_names.len(), 7);
+        assert_eq!(result.artifact_names.len(), 9);
         assert!(result
             .artifact_names
             .contains(&"Import-Bundle.ps1".to_owned()));
+        assert!(result
+            .artifact_names
+            .contains(&"Validate-Bundle.sh".to_owned()));
+        assert!(result
+            .artifact_names
+            .contains(&"validate-bundle.mjs".to_owned()));
+        assert!(fs::read_to_string(destination.join("HANDOFF.md"))
+            .expect("reads handoff")
+            .contains(&format!(
+                "bash Validate-Bundle.sh ./{}",
+                result.bundle_file_name
+            )));
         assert_eq!(
             fs::read_to_string(destination.join(format!("{}.sha256.txt", result.bundle_file_name)))
                 .expect("reads sidecar"),
@@ -3380,6 +3421,23 @@ mod tests {
             ],
         );
         assert!(git(&root, &["status", "--short"]).is_empty());
+
+        let validator = run_bundle_validator(
+            &destination.join("validate-bundle.mjs"),
+            &destination.join(&result.bundle_file_name),
+            &destination,
+        );
+        assert!(
+            validator.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&validator.stdout),
+            String::from_utf8_lossy(&validator.stderr)
+        );
+        let validator_output = String::from_utf8_lossy(&validator.stdout);
+        assert!(validator_output.contains("VALIDATION_RESULT=PASS"));
+        assert!(validator_output.contains(&format!("HEAD_COMMIT={}", commit.commit_sha)));
+        assert!(validator_output.contains("CHANGED_FILE_COUNT=4"));
+        assert!(!validator_output.contains("must-not-be-printed"));
 
         let (_integration_temporary, integration_root) = repository_fixture();
         let integration_head = git(&integration_root, &["rev-parse", "HEAD"]);
@@ -3510,7 +3568,7 @@ mod tests {
             result.bundle_file_name,
             "content-20260724-stage-08c-team-news-v1.bundle"
         );
-        assert_eq!(result.artifact_names.len(), 7);
+        assert_eq!(result.artifact_names.len(), 9);
 
         let (_integration_temporary, integration_root) = repository_fixture();
         let integration_head = git(&integration_root, &["rev-parse", "HEAD"]);
