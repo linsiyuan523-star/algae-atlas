@@ -431,6 +431,7 @@ function DraftEditor({
   const [viewMode, setViewMode] = useState<"edit" | "preview">("edit");
   const editorInputRef = useRef(editorInput);
   const recordDraftRef = useRef(draft.recordDraft);
+  const hydratedDraftRef = useRef(draft);
   const saveInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const stagedImagesRef = useRef<StagedImage[]>([]);
@@ -450,8 +451,40 @@ function DraftEditor({
   }, []);
 
   useEffect(() => {
+    if (hydratedDraftRef.current === draft) {
+      return;
+    }
+    hydratedDraftRef.current = draft;
+
+    // Never replace edits that are still dirty while a newer draft object arrives.
+    if (isDirty || saveInFlightRef.current) {
+      return;
+    }
+
+    const inspection = inspectDraft(draft);
+    const formInspection =
+      getContentFormAdapter(inspection.fields.contentType)?.inspect(
+        draft.recordDraft,
+      ) ?? { values: {}, errors: {} };
+    const nextInput = editorInputFromDraft(draft);
+    editorInputRef.current = nextInput;
     recordDraftRef.current = draft.recordDraft;
-  }, [draft.recordDraft]);
+    setEditorInput(nextInput);
+    setSavedInput(nextInput);
+    setFieldErrors(inspection.errors);
+    setContentFormErrors(formInspection.errors);
+    setBodyError(prepareArticleMarkdown(draft.bodyZh, "zh").issues[0]?.message);
+    setEnglishFormErrors({});
+    setEnglishBodyError(
+      prepareArticleMarkdown(draft.bodyEn, "en").issues[0]?.message,
+    );
+    setZhWorkflowErrors({});
+    setEnWorkflowErrors({});
+    setSaveStatus("saved");
+    setSaveError(null);
+    setDeleteError(null);
+    setViewMode("edit");
+  }, [draft, isDirty]);
 
   useEffect(() => {
     let isCurrent = true;

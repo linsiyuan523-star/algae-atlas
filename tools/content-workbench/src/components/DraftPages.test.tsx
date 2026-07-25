@@ -185,6 +185,39 @@ function createMediaApi(images: StagedImage[] = []): MediaApi {
   };
 }
 
+function formControl(id: string) {
+  const element = document.getElementById(id);
+  if (
+    !(
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLTextAreaElement ||
+      element instanceof HTMLSelectElement
+    )
+  ) {
+    throw new Error(`missing form control: ${id}`);
+  }
+  return element;
+}
+
+function makeEmptyTeamNewsDraft(): Draft {
+  const prepared = createSharedRecordDraft(
+    {
+      contentType: "team-news",
+      stableId: "draft-b",
+      titleZh: "Draft B",
+    },
+    "2026-07-23T08:00:00Z",
+  );
+  if (!prepared.success) {
+    throw new Error("test draft must be valid");
+  }
+  return {
+    ...draft,
+    draftId: "33333333-3333-4333-8333-333333333333",
+    recordDraft: prepared.recordDraft,
+  };
+}
+
 test("creates a draft from the shared content registry after field validation", async () => {
   const user = userEvent.setup();
   const api = createApi();
@@ -269,6 +302,57 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
   expect(window.confirm).toHaveBeenCalledWith("确定删除“虚构文章”？");
   expect(api.deleteDraft).toHaveBeenCalledWith(draft.draftId);
   expect(await screen.findByText("目前没有草稿。")).toBeVisible();
+});
+
+test("clears draft A values when switching to draft B", async () => {
+  const user = userEvent.setup();
+  const draftA = makeDraft("Draft A");
+  const recordA = structuredClone(draftA.recordDraft) as Record<string, unknown>;
+  const localesA = recordA.locales as Record<string, unknown>;
+  const zhA = localesA.zh as Record<string, unknown>;
+  const sharedA = recordA.shared as Record<string, unknown>;
+  zhA.summary = "A-only summary";
+  sharedA.eventDate = "2026-07-24";
+  recordA.id = "draft-a";
+  draftA.recordDraft = recordA;
+  const draftB = makeEmptyTeamNewsDraft();
+  const byId = new Map([
+    [draftA.draftId, draftA],
+    [draftB.draftId, draftB],
+  ]);
+  const api = createApi();
+  api.listDrafts = vi.fn(async () => [draftA, draftB]);
+  api.openDraft = vi.fn(async (draftId) => {
+    const selected = byId.get(draftId);
+    if (!selected) {
+      throw new Error("draft not found");
+    }
+    return selected;
+  });
+
+  render(<DraftsPage api={api} initialDraft={draftA} />);
+
+  await waitFor(() => {
+    const buttons = document.querySelectorAll<HTMLButtonElement>(
+      ".draft-list-panel button",
+    );
+    expect(buttons).toHaveLength(2);
+    expect(buttons[1]).toBeEnabled();
+  });
+  const listButtons = document.querySelectorAll<HTMLButtonElement>(
+    ".draft-list-panel button",
+  );
+  await user.click(listButtons[1]!);
+
+  await waitFor(() => {
+    expect(formControl("draft-title-zh")).toHaveValue("Draft B");
+    expect(formControl("draft-stable-id")).toHaveValue("draft-b");
+    expect(formControl("team-news-summaryZh")).toHaveValue("");
+    expect(formControl("team-news-eventDate")).toHaveValue("");
+    expect(formControl("team-news-category")).toHaveValue("");
+  });
+  expect(formControl("team-news-summaryZh")).not.toHaveValue("A-only summary");
+  expect(formControl("team-news-eventDate")).not.toHaveValue("2026-07-24");
 });
 
 test("reattaches a safely staged image after an interrupted draft autosave", async () => {
@@ -450,6 +534,7 @@ test("copies Chinese structure and exposes English image text placeholders", asy
     ...makeScienceArticleDraft(),
     bodyZh: "## 虚构结构\n\n![中文图](media:fictional-image)\n",
   };
+  api.listDrafts = vi.fn(async () => [article]);
   render(<DraftsPage api={api} initialDraft={article} />);
 
   await user.click(screen.getByRole("switch", { name: "英文版本" }));
@@ -538,6 +623,7 @@ test("blocks machine-assisted published English without a human verifier", async
   const user = userEvent.setup();
   const api = createApi();
   const published = makeMachinePublishedEnglishDraft();
+  api.listDrafts = vi.fn(async () => [published]);
   render(<DraftsPage api={api} initialDraft={published} />);
 
   expect(screen.getByLabelText("英文来源")).toHaveValue("machine-assisted");

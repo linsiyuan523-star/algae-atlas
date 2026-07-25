@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
@@ -108,6 +108,20 @@ function createApi(): DraftApi {
   };
 }
 
+function formControl(id: string) {
+  const element = document.getElementById(id);
+  if (
+    !(
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLTextAreaElement ||
+      element instanceof HTMLSelectElement
+    )
+  ) {
+    throw new Error(`missing form control: ${id}`);
+  }
+  return element;
+}
+
 test("switches between all workbench pages", async () => {
   const user = userEvent.setup();
   const api = createApi();
@@ -172,6 +186,102 @@ test("creates a shared-schema draft and opens it in the drafts page", async () =
   expect(await screen.findByRole("heading", { name: "草稿箱", level: 2 })).toBeVisible();
   expect(screen.getByRole("heading", { name: "编辑草稿" })).toBeVisible();
   expect(screen.getByText(draft.draftId)).toBeVisible();
+});
+
+test("rehydrates every saved field after leaving and reopening the same draft", async () => {
+  const user = userEvent.setup();
+  const storage: { draft: Draft | null } = { draft: null };
+  const api: DraftApi = {
+    createDraft: vi.fn(async (input) => {
+      storage.draft = {
+        ...draft,
+        recordDraft: input.recordDraft,
+        bodyZh: input.bodyZh,
+        bodyEn: input.bodyEn,
+        parkedEnglishLocale: input.parkedEnglishLocale,
+      };
+      return storage.draft;
+    }),
+    listDrafts: vi.fn(async () => (storage.draft ? [storage.draft] : [])),
+    openDraft: vi.fn(async (draftId) => {
+      if (!storage.draft || storage.draft.draftId !== draftId) {
+        throw new Error("draft not found");
+      }
+      return storage.draft;
+    }),
+    saveDraft: vi.fn(async (input) => {
+      if (!storage.draft) {
+        throw new Error("draft not found");
+      }
+      storage.draft = {
+        ...storage.draft,
+        recordDraft: input.recordDraft,
+        bodyZh: input.bodyZh,
+        bodyEn: input.bodyEn,
+        parkedEnglishLocale: input.parkedEnglishLocale,
+        updatedAt: "2026-07-23T09:00:00Z",
+      };
+      return storage.draft;
+    }),
+    deleteDraft: vi.fn(async () => undefined),
+    takeRecoveryDraft: vi.fn(async () => null),
+  };
+
+  render(<App draftApi={api} />);
+
+  await user.type(formControl("new-stable-id"), "reopen-regression");
+  await user.type(formControl("new-title-zh"), "Initial title");
+  await user.click(
+    document.querySelector<HTMLButtonElement>(
+      ".new-draft-action button[type='submit']",
+    )!,
+  );
+  await waitFor(() => expect(document.getElementById("draft-title-zh")).not.toBeNull());
+
+  await user.clear(formControl("draft-title-zh"));
+  await user.type(formControl("draft-title-zh"), "Saved title");
+  await user.clear(formControl("team-news-summaryZh"));
+  await user.type(formControl("team-news-summaryZh"), "Saved summary");
+  await user.clear(formControl("team-news-eventDate"));
+  await user.type(formControl("team-news-eventDate"), "2026-07-25");
+  await user.selectOptions(formControl("team-news-category"), "teaching");
+  await user.selectOptions(formControl("team-news-disclosureStatus"), "approved");
+  await user.click(
+    document.querySelector<HTMLButtonElement>(
+      ".draft-editor-actions button[type='submit']",
+    )!,
+  );
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(storage.draft?.recordDraft).toMatchObject({
+    id: "reopen-regression",
+    locales: {
+      zh: { title: "Saved title", summary: "Saved summary" },
+    },
+    shared: { eventDate: "2026-07-25", category: "teaching", disclosureStatus: "approved" },
+  });
+
+  const navigation = screen.getByRole("navigation");
+  const navigationButtons = within(navigation).getAllByRole("button");
+  await user.click(navigationButtons[0]!);
+  await user.click(navigationButtons[1]!);
+
+  await waitFor(() => {
+    const listButton = document.querySelector<HTMLButtonElement>(
+      ".draft-list-panel button",
+    );
+    expect(listButton).not.toBeNull();
+    expect(listButton).toBeEnabled();
+  });
+  await user.click(document.querySelector<HTMLButtonElement>(".draft-list-panel button")!);
+
+  await waitFor(() => {
+    expect(formControl("draft-title-zh")).toHaveValue("Saved title");
+    expect(formControl("team-news-summaryZh")).toHaveValue("Saved summary");
+    expect(formControl("team-news-eventDate")).toHaveValue("2026-07-25");
+    expect(formControl("team-news-category")).toHaveValue("teaching");
+    expect(formControl("team-news-disclosureStatus")).toHaveValue("approved");
+  });
 });
 
 test("offers the most recent draft once after an interrupted session", async () => {
