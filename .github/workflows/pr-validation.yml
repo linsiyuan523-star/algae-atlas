@@ -129,6 +129,9 @@ jobs:
       - name: Install the locked Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc
 
+      - name: Install required Rust components
+        run: rustup component add --toolchain 1.97.1-x86_64-pc-windows-msvc rustfmt clippy
+
       - name: Check Rust formatting
         run: npm.cmd run desktop:rust:fmt
 
