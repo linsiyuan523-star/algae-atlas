@@ -2,6 +2,7 @@ import {
   validMarkdownFixture,
   validRecordFixtures,
 } from "@algae-atlas/content-schema/fixtures";
+import { createRecordDraftDefaults } from "@algae-atlas/content-schema";
 import { expect, test, vi } from "vitest";
 import type { Draft } from "./drafts";
 import type { StagedImage } from "./media";
@@ -30,6 +31,22 @@ function draftFixture(): Draft {
     draftId: "11111111-1111-4111-8111-111111111111",
     recordDraft: record,
     bodyZh: validMarkdownFixture,
+    bodyEn: "",
+    createdAt: "2026-07-24T08:00:00Z",
+    updatedAt: "2026-07-24T08:00:00Z",
+  };
+}
+
+function incompleteDraftFixture(): Draft {
+  return {
+    formatVersion: 4,
+    draftId: "33333333-3333-4333-8333-333333333333",
+    recordDraft: createRecordDraftDefaults(
+      "team-news",
+      "incomplete-dry-run",
+      "2026-07-24T08:00:00Z",
+    ),
+    bodyZh: "",
     bodyEn: "",
     createdAt: "2026-07-24T08:00:00Z",
     updatedAt: "2026-07-24T08:00:00Z",
@@ -204,6 +221,46 @@ test("blocks missing-English body and excludes unreferenced staged images", () =
     `content/records/science-article/${RECORD_ID}/zh.md`,
   ]);
   expect(plan.request.imageTargets).toEqual([]);
+});
+
+test("keeps complete schema validation at repository export for incomplete drafts", async () => {
+  const draft = incompleteDraftFixture();
+  const plannedAt = new Date(2026, 6, 24);
+  const commit = vi.fn();
+  const api: RepositoryApi = {
+    dryRun: vi.fn(async (request) => backendResult(request)),
+    commit,
+    bundlePreflight: vi.fn(),
+    exportBundle: vi.fn(),
+  };
+  const result = await runRepositoryExportDryRun(
+    api,
+    "D:\\fictional-worktree",
+    draft,
+    [],
+    plannedAt,
+  );
+
+  expect(result.ready).toBe(false);
+  expect(result.schema.valid).toBe(false);
+  expect(result.schema.issues).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ path: "locales.zh.title", severity: "error" }),
+      expect.objectContaining({ path: "locales.zh.summary", severity: "error" }),
+      expect.objectContaining({ path: "shared.eventDate", severity: "error" }),
+    ]),
+  );
+  await expect(
+    runRepositoryLocalCommit(
+      api,
+      "D:\\fictional-worktree",
+      draft,
+      [],
+      result,
+      plannedAt,
+    ),
+  ).rejects.toThrow("预演结果已失效");
+  expect(commit).not.toHaveBeenCalled();
 });
 
 test("combines shared Schema validation with read-only repository diagnostics", async () => {

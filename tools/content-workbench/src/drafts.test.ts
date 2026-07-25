@@ -50,7 +50,6 @@ describe("stored draft compatibility", () => {
     expect(inspectDraft(current).errors).toEqual({
       contentType: "请选择有效的内容类型。",
       stableId: "必须使用小写英文、数字和单个连字符组成的稳定 ID",
-      titleZh: "中文标题不能为空。",
       schemaVersion: "仅支持 Schema v1。",
     });
     expect(current.bodyZh).toBe("## 正文\n");

@@ -52,6 +52,7 @@ export type FormSchemaDefinition = {
 export type FormValue = string | boolean;
 export type FormValues = Record<string, FormValue>;
 export type FormErrors = Record<string, string | undefined>;
+export type FormValidationMode = "draft" | "publish";
 
 export const FORM_ERROR_KEY = "$form";
 
@@ -64,6 +65,7 @@ export function formFields(
 export function validateFormValues(
   schema: FormSchemaDefinition,
   values: FormValues,
+  mode: FormValidationMode = "publish",
 ): FormErrors {
   const errors: FormErrors = {};
   const fields = formFields(schema);
@@ -87,7 +89,7 @@ export function validateFormValues(
 
     const text = typeof value === "string" ? value.trim() : "";
     if (!text) {
-      if (field.required) {
+      if (field.required && mode === "publish") {
         errors[field.id] = `${field.label}不能为空。`;
       }
       continue;

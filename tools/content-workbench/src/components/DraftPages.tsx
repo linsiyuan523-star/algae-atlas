@@ -575,7 +575,10 @@ function DraftEditor({
         preparedRecordDraft = attachImageReference(preparedRecordDraft, image);
       }
 
-      const zhWorkflowValidation = validateLocaleWorkflow(snapshot.zhWorkflow);
+      const zhWorkflowValidation = validateLocaleWorkflow(
+        snapshot.zhWorkflow,
+        "draft",
+      );
       if (Object.values(zhWorkflowValidation).some(Boolean)) {
         setZhWorkflowErrors(zhWorkflowValidation);
         setSaveError("请修正中文语言状态后重试。");
@@ -621,6 +624,7 @@ function DraftEditor({
         const contentFormPrepared = adapter.validate(
           nextRecordDraft,
           snapshot.contentForm,
+          "draft",
         );
         if (!contentFormPrepared.success) {
           setContentFormErrors(contentFormPrepared.errors);
@@ -654,6 +658,7 @@ function DraftEditor({
 
         const englishWorkflowValidation = validateLocaleWorkflow(
           snapshot.enWorkflow,
+          "draft",
         );
         if (Object.values(englishWorkflowValidation).some(Boolean)) {
           setEnWorkflowErrors(englishWorkflowValidation);
@@ -730,6 +735,25 @@ function DraftEditor({
         }
       } else {
         nextRecordDraft = setEnglishLocaleMissing(nextRecordDraft);
+      }
+
+      const requiresPublicationValidation =
+        snapshot.zhWorkflow.state === "approved" ||
+        snapshot.zhWorkflow.state === "published" ||
+        snapshot.enWorkflow?.state === "approved" ||
+        snapshot.enWorkflow?.state === "published";
+      if (requiresPublicationValidation && adapter) {
+        const completeRecord = adapter.validate(
+          nextRecordDraft,
+          snapshot.contentForm,
+        );
+        if (!completeRecord.success) {
+          setContentFormErrors(completeRecord.errors);
+          setSaveError("请修正标出的字段后重试。");
+          setSaveStatus("failed");
+          return;
+        }
+        nextRecordDraft = completeRecord.recordDraft;
       }
 
       saveInFlightRef.current = true;

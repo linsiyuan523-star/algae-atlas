@@ -34,6 +34,8 @@ export type LocaleWorkflowErrors = Partial<
   Record<keyof LocaleWorkflowInput, string>
 >;
 
+export type LocaleWorkflowValidationMode = "draft" | "publish";
+
 export type ParkedEnglishLocale = {
   contentType: string;
   locale: Record<string, unknown>;
@@ -155,12 +157,26 @@ export function applyLocaleWorkflow(
 
 export function validateLocaleWorkflow(
   input: LocaleWorkflowInput,
+  mode: LocaleWorkflowValidationMode = "publish",
 ): LocaleWorkflowErrors {
   const errors: LocaleWorkflowErrors = {};
-  if (!isIsoDate(input.reviewUpdatedAt.trim())) {
+  const requiresCompleteReview =
+    mode === "publish" ||
+    input.state === "approved" ||
+    input.state === "published";
+  const reviewUpdatedAt = input.reviewUpdatedAt.trim();
+  const reviewVersion = input.reviewVersion.trim();
+
+  if (
+    (requiresCompleteReview && !isIsoDate(reviewUpdatedAt)) ||
+    (reviewUpdatedAt && !isIsoDate(reviewUpdatedAt))
+  ) {
     errors.reviewUpdatedAt = "审核更新时间必须是有效日期。";
   }
-  if (!/^\d+\.\d+$/.test(input.reviewVersion.trim())) {
+  if (
+    (requiresCompleteReview && !/^\d+\.\d+$/.test(reviewVersion)) ||
+    (reviewVersion && !/^\d+\.\d+$/.test(reviewVersion))
+  ) {
     errors.reviewVersion = "审核版本必须使用 major.minor 格式。";
   }
 
@@ -171,12 +187,15 @@ export function validateLocaleWorkflow(
   if (invalidReviewer) {
     errors.reviewerIds = `审核人 ID 格式无效：${invalidReviewer}。`;
   }
-  if (input.reviewStatus === "reviewed") {
-    if (!isIsoDate(input.reviewedAt.trim())) {
+  const reviewedAt = input.reviewedAt.trim();
+  if (reviewedAt && !isIsoDate(reviewedAt)) {
+    errors.reviewedAt = "已审核状态必须填写有效审核日期。";
+  } else if (requiresCompleteReview && input.reviewStatus === "reviewed") {
+    if (!reviewedAt) {
       errors.reviewedAt = "已审核状态必须填写有效审核日期。";
     } else if (
-      isIsoDate(input.reviewUpdatedAt.trim()) &&
-      input.reviewedAt.trim() < input.reviewUpdatedAt.trim()
+      isIsoDate(reviewUpdatedAt) &&
+      reviewedAt < reviewUpdatedAt
     ) {
       errors.reviewedAt = "审核日期不能早于审核更新时间。";
     }

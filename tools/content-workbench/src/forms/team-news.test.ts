@@ -80,6 +80,31 @@ test("serializes the team-news pilot through the shared schema and round-trips f
   });
 });
 
+test("keeps incomplete team-news fields saveable in draft mode", () => {
+  const result = validateTeamNewsRecordDraft(
+    baseRecord(),
+    emptyTeamNewsFormValues(),
+    "draft",
+  );
+
+  expect(result.success).toBe(true);
+  if (!result.success) {
+    return;
+  }
+
+  expect(result.recordDraft).toMatchObject({
+    authors: [],
+    shared: {
+      eventDate: "",
+      category: "",
+      disclosureStatus: "",
+    },
+    locales: { zh: { summary: "" } },
+  });
+  expect(teamNewsRecordSchema.safeParse(result.recordDraft).success).toBe(false);
+  expect(inspectTeamNewsForm(result.recordDraft).errors).toEqual({});
+});
+
 test("maps generic and shared-schema failures back to pilot fields", () => {
   const result = validateTeamNewsRecordDraft(baseRecord(), {
     ...validValues,

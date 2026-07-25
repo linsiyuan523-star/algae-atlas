@@ -5,6 +5,7 @@ import { batchTwoFormAdapters } from "./batch-two";
 import type {
   FormErrors,
   FormSchemaDefinition,
+  FormValidationMode,
   FormValues,
 } from "./form-engine";
 import {
@@ -27,7 +28,11 @@ export type ContentFormAdapter = {
     values: FormValues;
     errors: FormErrors;
   };
-  validate: (recordDraft: unknown, values: FormValues) => ContentFormResult;
+  validate: (
+    recordDraft: unknown,
+    values: FormValues,
+    mode?: FormValidationMode,
+  ) => ContentFormResult;
 };
 
 const teamNewsAdapter: ContentFormAdapter = {
@@ -35,8 +40,12 @@ const teamNewsAdapter: ContentFormAdapter = {
   schema: teamNewsFormSchema,
   emptyValues: emptyTeamNewsFormValues,
   inspect: inspectTeamNewsForm,
-  validate: (recordDraft, values) =>
-    validateTeamNewsRecordDraft(recordDraft, values as TeamNewsFormValues),
+  validate: (recordDraft, values, mode) =>
+    validateTeamNewsRecordDraft(
+      recordDraft,
+      values as TeamNewsFormValues,
+      mode,
+    ),
 };
 
 const adapters: Partial<Record<ContentType, ContentFormAdapter>> = {

@@ -228,6 +228,34 @@ test.each(invalidCases)(
   },
 );
 
+test("allows incomplete batch-one values in draft mode but keeps format checks", () => {
+  const adapter = batchOneFormAdapters["science-article"];
+  const draftResult = adapter.validate(
+    baseRecord("science-article"),
+    adapter.emptyValues(),
+    "draft",
+  );
+
+  expect(draftResult.success).toBe(true);
+  if (draftResult.success) {
+    expect(
+      contentRecordSchemas["science-article"].safeParse(draftResult.recordDraft)
+        .success,
+    ).toBe(false);
+    expect(adapter.inspect(draftResult.recordDraft).errors).toEqual({});
+  }
+
+  const invalidResult = adapter.validate(
+    baseRecord("science-article"),
+    { ...adapter.emptyValues(), readingTimeMinutes: "not-a-number" },
+    "draft",
+  );
+  expect(invalidResult.success).toBe(false);
+  if (!invalidResult.success) {
+    expect(invalidResult.errors.readingTimeMinutes).toBeTruthy();
+  }
+});
+
 test("takes every batch-one enum value from the shared field registry", () => {
   for (const type of BATCH_ONE_CONTENT_TYPES) {
     const registry = getFieldRegistry(type);

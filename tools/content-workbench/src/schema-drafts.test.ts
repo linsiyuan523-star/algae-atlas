@@ -45,7 +45,7 @@ describe("shared schema draft adapter", () => {
     expect(result.recordDraft).toEqual(expected);
   });
 
-  test("returns field errors instead of throwing for invalid identity fields", () => {
+  test("allows an empty draft title but rejects unsafe identity fields", () => {
     expect(
       validateDraftFields({
         contentType: "not-registered",
@@ -55,8 +55,30 @@ describe("shared schema draft adapter", () => {
     ).toEqual({
       contentType: "请选择有效的内容类型。",
       stableId: "必须使用小写英文、数字和单个连字符组成的稳定 ID",
-      titleZh: "中文标题不能为空。",
     });
+  });
+
+  test("creates an intentionally incomplete draft with an empty title", () => {
+    const result = createSharedRecordDraft(
+      {
+        contentType: "team-news",
+        stableId: "minimal-draft",
+        titleZh: "",
+      },
+      now,
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.recordDraft).toMatchObject({
+        id: "minimal-draft",
+        type: "team-news",
+        locales: {
+          zh: { state: "draft", title: "" },
+          en: { state: "missing" },
+        },
+      });
+    }
   });
 
   test("preserves same-type defaults but refuses an unsupported schema version", () => {

@@ -15,6 +15,7 @@ import type {
   FormFieldDefinition,
   FormOption,
   FormSchemaDefinition,
+  FormValidationMode,
   FormValues,
 } from "./form-engine";
 
@@ -207,7 +208,7 @@ export function inspectTeamNewsForm(recordDraft: unknown) {
 
   return {
     values,
-    errors: validateTeamNewsRecordDraft(recordDraft, values).errors,
+    errors: validateTeamNewsRecordDraft(recordDraft, values, "draft").errors,
   };
 }
 
@@ -218,12 +219,13 @@ export type TeamNewsRecordDraftResult =
 export function validateTeamNewsRecordDraft(
   recordDraft: unknown,
   values: TeamNewsFormValues,
+  mode: FormValidationMode = "publish",
 ): TeamNewsRecordDraftResult {
-  const errors = validateFormValues(teamNewsFormSchema, values);
+  const errors = validateFormValues(teamNewsFormSchema, values, mode);
   const sourceTitle = values.sourceTitle.trim();
   const sourceUrl = values.sourceUrl.trim();
 
-  if (sourceUrl && !sourceTitle) {
+  if (mode === "publish" && sourceUrl && !sourceTitle) {
     errors.sourceTitle = "填写来源链接时必须提供主要来源标题。";
   }
   if (
@@ -235,6 +237,16 @@ export function validateTeamNewsRecordDraft(
   }
 
   const candidate = applyTeamNewsFormValues(recordDraft, values);
+  if (mode === "draft") {
+    return Object.values(errors).some(Boolean)
+      ? { success: false, errors }
+      : {
+          success: true,
+          recordDraft: candidate as RecordDraft,
+          errors: {},
+        };
+  }
+
   const parsed = teamNewsRecordSchema.safeParse(candidate);
   if (!parsed.success) {
     for (const issue of parsed.error.issues) {

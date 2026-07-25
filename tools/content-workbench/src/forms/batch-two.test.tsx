@@ -251,6 +251,37 @@ test.each(invalidCases)(
   },
 );
 
+test("allows incomplete batch-two values in draft mode but keeps format checks", () => {
+  const adapter = batchTwoFormAdapters["coastal-observation"];
+  const draftResult = adapter.validate(
+    baseRecord("coastal-observation"),
+    adapter.emptyValues(),
+    "draft",
+  );
+
+  expect(draftResult.success).toBe(true);
+  if (draftResult.success) {
+    expect(
+      contentRecordSchemas["coastal-observation"].safeParse(draftResult.recordDraft)
+        .success,
+    ).toBe(false);
+    expect(adapter.inspect(draftResult.recordDraft).errors).toEqual({});
+  }
+
+  const invalidResult = adapter.validate(
+    baseRecord("coastal-observation"),
+    {
+      ...adapter.emptyValues(),
+      observationStartedAt: "not-a-timestamp",
+    },
+    "draft",
+  );
+  expect(invalidResult.success).toBe(false);
+  if (!invalidResult.success) {
+    expect(invalidResult.errors.observationStartedAt).toBeTruthy();
+  }
+});
+
 test("takes every batch-two enum value from the shared field registry", () => {
   for (const type of BATCH_TWO_CONTENT_TYPES) {
     const registry = getFieldRegistry(type);

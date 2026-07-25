@@ -231,10 +231,9 @@ test("creates a draft from the shared content registry after field validation", 
   await user.click(screen.getByRole("button", { name: "新建草稿" }));
   expect(api.createDraft).not.toHaveBeenCalled();
   expect(screen.getByText("必须使用小写英文、数字和单个连字符组成的稳定 ID")).toBeVisible();
-  expect(screen.getByText("中文标题不能为空。")).toBeVisible();
+  expect(screen.queryByText("中文标题不能为空。")).not.toBeInTheDocument();
 
   await user.type(screen.getByLabelText("稳定 ID"), "fictional-draft");
-  await user.type(screen.getByLabelText("中文标题"), "虚构标题");
   await user.click(screen.getByRole("button", { name: "新建草稿" }));
 
   expect(api.createDraft).toHaveBeenCalledOnce();
@@ -246,7 +245,7 @@ test("creates a draft from the shared content registry after field validation", 
     authors: [],
     tags: [],
     locales: {
-      zh: { state: "draft", title: "虚构标题" },
+      zh: { state: "draft", title: "" },
       en: { state: "missing" },
     },
   });
@@ -283,6 +282,7 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
   await user.type(screen.getByLabelText("稳定 ID"), "fictional-article");
   await user.clear(screen.getByLabelText("中文标题"));
   await user.type(screen.getByLabelText("中文标题"), "虚构文章");
+  vi.mocked(api.saveDraft).mockClear();
   await user.click(screen.getByRole("button", { name: "保存草稿" }));
 
   await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
@@ -422,8 +422,11 @@ test("validates and serializes the team-news pilot before saving", async () => {
 
   await user.clear(screen.getByLabelText(/事件日期/));
   await user.click(screen.getByRole("button", { name: "保存草稿" }));
-  expect(api.saveDraft).not.toHaveBeenCalled();
-  expect(screen.getByText("事件日期不能为空。")).toBeVisible();
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0].recordDraft).toMatchObject({
+    shared: { eventDate: "" },
+  });
+  vi.mocked(api.saveDraft).mockClear();
 
   await user.type(screen.getByLabelText(/事件日期/), "2026-07-25");
   await user.clear(screen.getByLabelText(/中文摘要/));
@@ -464,8 +467,11 @@ test("validates and serializes a batch-one content form before saving", async ()
 
   await user.clear(screen.getByLabelText(/中文摘要/));
   await user.click(screen.getByRole("button", { name: "保存草稿" }));
-  expect(api.saveDraft).not.toHaveBeenCalled();
-  expect(screen.getByText("中文摘要不能为空。")).toBeVisible();
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0].recordDraft).toMatchObject({
+    locales: { zh: { summary: "" } },
+  });
+  vi.mocked(api.saveDraft).mockClear();
 
   await user.type(screen.getByLabelText(/中文摘要/), "更新后的虚构科普摘要。");
   await user.clear(screen.getByLabelText(/阅读时长（分钟）/));
@@ -477,6 +483,36 @@ test("validates and serializes a batch-one content form before saving", async ()
     type: "science-article",
     shared: { readingTimeMinutes: 12 },
     locales: { zh: { summary: "更新后的虚构科普摘要。" } },
+  });
+});
+
+test("saves a minimum draft without publication fields", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const incomplete = makeEmptyTeamNewsDraft();
+  api.listDrafts = vi.fn(async () => [incomplete]);
+  render(<DraftsPage api={api} initialDraft={incomplete} />);
+
+  await user.clear(screen.getByLabelText("中文标题"));
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+  const saved = vi.mocked(api.saveDraft).mock.calls[0]?.[0];
+  expect(saved).toMatchObject({
+    bodyZh: "",
+    bodyEn: "",
+    recordDraft: {
+      locales: {
+        zh: { title: "", summary: "" },
+        en: { state: "missing" },
+      },
+      authors: [],
+      shared: {
+        eventDate: "",
+        category: "",
+        disclosureStatus: "",
+      },
+    },
   });
 });
 
@@ -619,6 +655,38 @@ test("moves Chinese to a publication candidate while English stays missing", asy
   });
 });
 
+test("keeps complete validation on a publication candidate", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const incomplete = makeEmptyTeamNewsDraft();
+  api.listDrafts = vi.fn(async () => [incomplete]);
+  render(<DraftsPage api={api} initialDraft={incomplete} />);
+
+  const chineseWorkflow = screen.getByRole("region", {
+    name: "中文语言状态",
+  });
+  await user.selectOptions(
+    within(chineseWorkflow).getByLabelText("审核状态"),
+    "reviewed",
+  );
+  await user.type(
+    within(chineseWorkflow).getByLabelText("审核人稳定 ID"),
+    "fictional-reviewer",
+  );
+  await user.type(
+    within(chineseWorkflow).getByLabelText("审核日期"),
+    "2026-07-23",
+  );
+  const state = within(chineseWorkflow).getByLabelText("语言状态");
+  await user.selectOptions(state, "internal-review");
+  await user.selectOptions(state, "approved");
+  await user.click(screen.getByRole("button", { name: "保存草稿" }));
+
+  expect(api.saveDraft).not.toHaveBeenCalled();
+  expect(screen.getByText("中文摘要不能为空。")).toBeVisible();
+  expect(screen.getByText("事件日期不能为空。")).toBeVisible();
+});
+
 test("blocks machine-assisted published English without a human verifier", async () => {
   const user = userEvent.setup();
   const api = createApi();
@@ -712,7 +780,7 @@ test("shows field errors for an invalid stored record without invoking save", as
 
   expect(screen.getByText("请选择有效的内容类型。")).toBeVisible();
   expect(screen.getByText("必须使用小写英文、数字和单个连字符组成的稳定 ID")).toBeVisible();
-  expect(screen.getByText("中文标题不能为空。")).toBeVisible();
+  expect(screen.queryByText("中文标题不能为空。")).not.toBeInTheDocument();
   expect(screen.getByText("仅支持 Schema v1。")).toBeVisible();
 
   await user.click(screen.getByRole("button", { name: "保存草稿" }));

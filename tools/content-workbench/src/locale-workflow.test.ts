@@ -111,6 +111,34 @@ describe("independent locale workflow", () => {
     ).toEqual({});
   });
 
+  test("allows incomplete review metadata in ordinary drafts but keeps formats and candidate checks", () => {
+    const incomplete = {
+      ...createEnglishWorkflow(now),
+      reviewUpdatedAt: "",
+      reviewVersion: "",
+    };
+
+    expect(validateLocaleWorkflow(incomplete, "draft")).toEqual({});
+    expect(
+      validateLocaleWorkflow(
+        { ...incomplete, reviewUpdatedAt: "not-a-date" },
+        "draft",
+      ),
+    ).toMatchObject({
+      reviewUpdatedAt: "审核更新时间必须是有效日期。",
+    });
+    expect(
+      validateLocaleWorkflow(
+        { ...incomplete, state: "approved" },
+        "draft",
+      ),
+    ).toMatchObject({
+      reviewStatus: "发布候选或已发布状态必须完成审核。",
+      reviewUpdatedAt: "审核更新时间必须是有效日期。",
+      reviewVersion: "审核版本必须使用 major.minor 格式。",
+    });
+  });
+
   test("returns approved or published content to review after an edit", () => {
     const approved = {
       ...createEnglishWorkflow(now),

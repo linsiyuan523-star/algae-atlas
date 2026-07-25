@@ -64,9 +64,7 @@ export function validateDraftFields(fields: DraftFields): DraftFieldErrors {
     errors.stableId = stableId.error.issues[0]?.message ?? "稳定 ID 无效。";
   }
 
-  if (!fields.titleZh.trim()) {
-    errors.titleZh = "中文标题不能为空。";
-  } else if (fields.titleZh.length > 500) {
+  if (fields.titleZh.length > 500) {
     errors.titleZh = "中文标题不能超过 500 个字符。";
   }
 

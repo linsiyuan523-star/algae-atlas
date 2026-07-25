@@ -20,6 +20,7 @@ import type {
   FormFieldDefinition,
   FormOption,
   FormSchemaDefinition,
+  FormValidationMode,
   FormValues,
 } from "./form-engine";
 
@@ -500,9 +501,23 @@ function createAdapter(config: AdapterConfig): ContentFormAdapter {
     };
   }
 
-  function validate(recordDraft: unknown, values: FormValues) {
-    const errors = validateFormValues(schema, values);
+  function validate(
+    recordDraft: unknown,
+    values: FormValues,
+    mode: FormValidationMode = "publish",
+  ) {
+    const errors = validateFormValues(schema, values, mode);
     const candidate = applyBindings(recordDraft, bindings, values);
+    if (mode === "draft") {
+      return Object.values(errors).some(Boolean)
+        ? { success: false as const, errors }
+        : {
+            success: true as const,
+            recordDraft: candidate as RecordDraft,
+            errors: {},
+          };
+    }
+
     const parsed = config.recordSchema.safeParse(candidate);
 
     if (!parsed.success) {
@@ -541,7 +556,7 @@ function createAdapter(config: AdapterConfig): ContentFormAdapter {
           values[binding.field.id] = readBinding(record, binding);
         }
       }
-      return { values, errors: validate(recordDraft, values).errors };
+      return { values, errors: validate(recordDraft, values, "draft").errors };
     },
     validate,
   };

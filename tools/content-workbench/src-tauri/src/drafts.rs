@@ -803,6 +803,49 @@ mod tests {
     }
 
     #[test]
+    fn saves_and_reopens_an_incomplete_content_draft() {
+        let temporary = tempdir().expect("temporary directory");
+        let store = DraftStore::new(temporary.path().join("drafts").join("v1"));
+        let record = json!({
+            "schemaVersion": 1,
+            "id": "minimal-draft",
+            "type": "team-news",
+            "authors": [],
+            "locales": {
+                "zh": { "state": "draft", "title": "" },
+                "en": { "state": "missing" }
+            }
+        });
+        let created = store
+            .create(CreateDraftRequest {
+                record_draft: record.clone(),
+                body_zh: String::new(),
+                body_en: String::new(),
+                parked_english_locale: None,
+            })
+            .expect("creates incomplete draft");
+
+        let saved = store
+            .save(SaveDraftRequest {
+                draft_id: created.draft_id.clone(),
+                record_draft: record,
+                body_zh: String::new(),
+                body_en: String::new(),
+                parked_english_locale: None,
+            })
+            .expect("saves incomplete draft");
+
+        assert!(saved.body_zh.is_empty());
+        assert!(saved.body_en.is_empty());
+        assert_eq!(
+            store
+                .open(&created.draft_id)
+                .expect("reopens incomplete draft"),
+            StoredDraft::Current(saved)
+        );
+    }
+
+    #[test]
     fn validates_bilingual_body_storage_boundaries() {
         assert!(validate_body_zh("## Fictional body\n").is_ok());
         assert!(validate_body_en("## English body\n").is_ok());
