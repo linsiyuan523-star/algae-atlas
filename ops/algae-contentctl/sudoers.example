@@ -1,0 +1,11 @@
+# Install as /etc/sudoers.d/algae-contentctl with mode 0440 after `visudo -cf`.
+# The controller validates every argument itself. Do not add SETENV, ALL, a shell,
+# systemctl, git, or generic file commands for this account.
+
+Cmnd_Alias ALGAE_CONTENTCTL = \
+  /usr/local/sbin/algae-contentctl status --json, \
+  /usr/local/sbin/algae-contentctl list --json, \
+  /usr/local/sbin/algae-contentctl publish --bundle /home/ubuntu/algae-content-workbench/incoming/* --json, \
+  /usr/local/sbin/algae-contentctl delete --type * --id * --json
+
+ubuntu ALL=(root) NOSETENV: NOPASSWD: ALGAE_CONTENTCTL
