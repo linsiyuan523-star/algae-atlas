@@ -1,6 +1,10 @@
 import type { CollectionSourceSelection } from "./types";
+import { createFileBackedContentRepository } from "./file-repository";
 import { createLegacyContentSource } from "./legacy-source";
-import { createPublicContentRepository } from "./repository";
+import {
+  createCollectionSourceSelection,
+  createPublicContentRepository,
+} from "./repository";
 
 export const collectionSourceSelection = {
   "team-news": "legacy",
@@ -18,7 +22,25 @@ export const collectionSourceSelection = {
 
 const legacySource = createLegacyContentSource();
 
-export const websiteContentRepository = createPublicContentRepository({
-  selection: collectionSourceSelection,
-  legacySource,
-});
+export function resolveContentRepositorySource(
+  configuredSource = process.env.CONTENT_REPOSITORY_SOURCE,
+): "legacy" | "records" {
+  if (!configuredSource || configuredSource === "legacy") return "legacy";
+  if (configuredSource === "records") return "records";
+  throw new Error(
+    `Invalid CONTENT_REPOSITORY_SOURCE value "${configuredSource}". Expected "records" or "legacy".`,
+  );
+}
+
+const contentRepositorySource = resolveContentRepositorySource();
+
+export const websiteContentRepository =
+  contentRepositorySource === "records"
+    ? await createFileBackedContentRepository(
+        process.cwd(),
+        createCollectionSourceSelection("records"),
+      )
+    : createPublicContentRepository({
+        selection: collectionSourceSelection,
+        legacySource,
+      });
