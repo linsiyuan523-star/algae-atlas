@@ -27,6 +27,7 @@ const MAX_SERVER_ITEMS: usize = 10_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+const UPLOAD_PERMISSIONS_TIMEOUT: Duration = Duration::from_secs(30);
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const LOCAL_VALIDATOR_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -252,8 +253,19 @@ fn publish_content(
     if let Err(error) = upload_delivery(&upload_root) {
         return *error;
     }
+    if let Err(error) = secure_uploaded_delivery(&job_id) {
+        return *error;
+    }
 
-    let remote_delivery = format!("{REMOTE_INCOMING_DIRECTORY}/{job_id}");
+    let Some(remote_delivery) = remote_delivery_path(&job_id) else {
+        return ServerCommandResult::error(
+            "publish",
+            "UPLOAD_PATH_INVALID",
+            "The uploaded Bundle path could not be derived safely.",
+            None,
+            None,
+        );
+    };
     let response = controller_json(
         "publish",
         &[
@@ -517,6 +529,42 @@ fn upload_delivery(upload_root: &Path) -> Result<(), Box<ServerCommandResult>> {
             output.stderr.log_tail(),
             None,
         )));
+    }
+    Ok(())
+}
+
+fn secure_uploaded_delivery(job_id: &str) -> Result<(), Box<ServerCommandResult>> {
+    let commands = remote_upload_chmod_specs(job_id).ok_or_else(|| {
+        Box::new(ServerCommandResult::error(
+            "publish",
+            "UPLOAD_PATH_INVALID",
+            "The uploaded Bundle path could not be derived safely.",
+            None,
+            None,
+        ))
+    })?;
+    for command in commands {
+        let output = run_process(command).map_err(|failure| {
+            Box::new(process_failure("publish", "UPLOAD_PERMISSIONS", failure))
+        })?;
+        if output.stdout.truncated {
+            return Err(Box::new(ServerCommandResult::error(
+                "publish",
+                "OUTPUT_LIMIT_EXCEEDED",
+                "The upload permission command produced too much output.",
+                output.stderr.log_tail(),
+                None,
+            )));
+        }
+        if !output.status.success() {
+            return Err(Box::new(ServerCommandResult::error(
+                "publish",
+                "UPLOAD_PERMISSIONS_FAILED",
+                "The uploaded Bundle permissions could not be secured.",
+                output.stderr.log_tail(),
+                None,
+            )));
+        }
     }
     Ok(())
 }
@@ -874,6 +922,29 @@ fn ssh_command_spec(remote_args: &[&str], timeout: Duration) -> CommandSpec {
     CommandSpec::new("ssh", args, timeout)
 }
 
+fn remote_delivery_path(job_id: &str) -> Option<String> {
+    let valid = job_id.len() == 32
+        && job_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+    valid.then(|| format!("{REMOTE_INCOMING_DIRECTORY}/{job_id}"))
+}
+
+fn remote_upload_chmod_specs(job_id: &str) -> Option<[CommandSpec; 2]> {
+    let remote_delivery = remote_delivery_path(job_id)?;
+    let remote_artifacts = format!("{remote_delivery}/*");
+    Some([
+        ssh_command_spec(
+            &["/usr/bin/chmod", "0700", "--", &remote_delivery],
+            UPLOAD_PERMISSIONS_TIMEOUT,
+        ),
+        ssh_command_spec(
+            &["/usr/bin/chmod", "0600", "--", &remote_artifacts],
+            UPLOAD_PERMISSIONS_TIMEOUT,
+        ),
+    ])
+}
+
 fn scp_command_spec(source: &Path) -> CommandSpec {
     let mut args = vec![OsString::from("-q"), OsString::from("-r")];
     args.extend(ssh_option_args());
@@ -1058,8 +1129,8 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        bundle_matches_request, parse_server_json, scp_command_spec, ssh_command_spec,
-        valid_https_url, validate_content_identity, validate_list_response,
+        bundle_matches_request, parse_server_json, remote_upload_chmod_specs, scp_command_spec,
+        ssh_command_spec, valid_https_url, validate_content_identity, validate_list_response,
         validate_mutation_identity, validate_status_response, CapturedOutput, ServerCommandResult,
     };
     use crate::repository::RepositoryBundlePreflightResult;
@@ -1323,6 +1394,41 @@ mod tests {
                 "algae-server:/home/ubuntu/algae-content-workbench/incoming/"
             ))
         );
+    }
+
+    #[test]
+    fn uploaded_delivery_permissions_use_fixed_commands_and_uuid_derived_paths() {
+        let job_id = "0123456789abcdef0123456789abcdef";
+        let [directory, artifacts] =
+            remote_upload_chmod_specs(job_id).expect("accepts a lowercase UUID job id");
+        let remote_delivery = format!("/home/ubuntu/algae-content-workbench/incoming/{job_id}");
+
+        assert_eq!(directory.program, "ssh");
+        assert!(directory.args.ends_with(&[
+            OsString::from("algae-server"),
+            OsString::from("/usr/bin/chmod"),
+            OsString::from("0700"),
+            OsString::from("--"),
+            OsString::from(&remote_delivery),
+        ]));
+        assert!(artifacts.args.ends_with(&[
+            OsString::from("algae-server"),
+            OsString::from("/usr/bin/chmod"),
+            OsString::from("0600"),
+            OsString::from("--"),
+            OsString::from(format!("{remote_delivery}/*")),
+        ]));
+        assert!(!directory.args.iter().any(|argument| argument == "sudo"));
+        assert!(!artifacts.args.iter().any(|argument| argument == "sudo"));
+
+        for invalid in [
+            "0123456789ABCDEF0123456789ABCDEF",
+            "0123456789abcdef0123456789abcde;",
+            "../0123456789abcdef0123456789abc",
+            "0123456789abcdef",
+        ] {
+            assert!(remote_upload_chmod_specs(invalid).is_none());
+        }
     }
 
     #[test]

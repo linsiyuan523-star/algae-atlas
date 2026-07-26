@@ -16,9 +16,6 @@ const requiredText = z.string().trim().min(1, "字段不能为空");
 const optionalText = requiredText.optional();
 
 const stableIdList = z.array(stableIdSchema).default([]);
-const requiredStableIdList = z
-  .array(stableIdSchema)
-  .min(1, "至少需要一个稳定 ID");
 const localizedTextList = z.array(requiredText).default([]);
 
 const legacySchema = z.strictObject({
@@ -110,7 +107,7 @@ const researchOutputSharedSchema = z.strictObject({
   venueName: requiredText,
   identifier: recordIdentifierSchema,
   canonicalUrl: httpsUrlSchema.optional(),
-  contributorIds: requiredStableIdList,
+  contributorIds: stableIdList,
   relatedProjectIds: stableIdList,
   verificationSources: z.array(sourceSchema).default([]),
   outputStatus: z.enum([
@@ -145,7 +142,7 @@ const researchProjectSharedSchema = z
       "cancelled",
     ]),
     publicProjectCode: optionalText,
-    leadAuthorId: stableIdSchema,
+    leadAuthorId: stableIdSchema.optional(),
     partnerAuthorIds: stableIdList,
     startDate: isoDateSchema,
     endDate: isoDateSchema.optional(),
@@ -364,7 +361,7 @@ const coastalObservationSharedSchema = z
     generalizedLocationLabel: localizedTextSchema.optional(),
     publicSampleIds: stableIdList,
     taxonomicObservationIds: stableIdList,
-    responsibleAuthorId: stableIdSchema,
+    responsibleAuthorId: stableIdSchema.optional(),
     dataSources: z.array(sourceSchema).default([]),
     disclosureStatus: z.enum(["pending", "approved"]),
     relatedProjectIds: stableIdList,
@@ -429,7 +426,7 @@ const scienceArticleLocalizedSchema = z.strictObject({
 
 const teamMemberSharedSchema = z
   .strictObject({
-    authorId: stableIdSchema,
+    authorId: stableIdSchema.optional(),
     membershipStatus: z.enum(["active", "alumni", "guest", "inactive"]),
     roleCategory: z.enum([
       "faculty",
@@ -661,26 +658,6 @@ function hasPublishedLocale(record: z.infer<typeof baseContentRecordSchema>) {
   );
 }
 
-function publishedTeamNewsLocalesHaveBylines(
-  record: z.infer<typeof baseContentRecordSchema>,
-) {
-  if (record.type !== "team-news") {
-    return false;
-  }
-
-  return (["zh", "en"] as const).every((locale) => {
-    const localized = record.locales[locale];
-    return (
-      localized.state !== "published" ||
-      Boolean(localized.fields.authorName?.trim())
-    );
-  });
-}
-
-function sourcesAreVerified(sources: Array<z.infer<typeof sourceSchema>>) {
-  return sources.length > 0 && sources.every((source) => source.verificationStatus === "verified");
-}
-
 export const contentRecordSchema = baseContentRecordSchema.superRefine(
   (record, context) => {
     if (Date.parse(record.updatedAt) < Date.parse(record.createdAt)) {
@@ -689,19 +666,6 @@ export const contentRecordSchema = baseContentRecordSchema.superRefine(
         ["updatedAt"],
         "RECORD_DATE_ORDER_INVALID",
         "更新时间不能早于创建时间",
-      );
-    }
-
-    if (
-      hasPublishedLocale(record) &&
-      record.authors.length === 0 &&
-      !publishedTeamNewsLocalesHaveBylines(record)
-    ) {
-      addRecordIssue(
-        context,
-        ["authors"],
-        "AUTHOR_REQUIRED_FOR_PUBLICATION",
-        "发布内容必须至少有一位可追责作者或团队",
       );
     }
 
@@ -741,136 +705,16 @@ export const contentRecordSchema = baseContentRecordSchema.superRefine(
       return;
     }
 
-    switch (record.type) {
-      case "team-news":
-        break;
-      case "research-output":
-        if (!sourcesAreVerified(record.shared.verificationSources)) {
-          addRecordIssue(
-            context,
-            ["shared", "verificationSources"],
-            "OUTPUT_SOURCE_REQUIRED",
-            "科研成果发布前必须有已核验来源",
-          );
-        }
-        break;
-      case "research-project":
-        if (
-          record.shared.publicScope === "internal" ||
-          record.shared.disclosureStatus !== "approved"
-        ) {
-          addRecordIssue(
-            context,
-            ["shared", "publicScope"],
-            "PROJECT_DISCLOSURE_REQUIRED",
-            "研究项目发布前必须批准公开范围",
-          );
-        }
-        break;
-      case "learning-resource": {
-        const hasOperationalDetails = ["zh", "en"].some((locale) => {
-          const value = record.locales[locale as "zh" | "en"];
-          return (
-            value.state !== "missing" &&
-            (value.fields.steps.length > 0 ||
-              value.fields.commonParameters.length > 0 ||
-              value.fields.materials.length > 0)
-          );
-        });
-        if (
-          (record.shared.hazardLevel !== "none" || hasOperationalDetails) &&
-          record.shared.laboratoryReviewStatus !== "reviewed"
-        ) {
-          addRecordIssue(
-            context,
-            ["shared", "laboratoryReviewStatus"],
-            "LAB_REVIEW_REQUIRED",
-            "含操作步骤、参数、材料或风险的资源必须完成实验室审核",
-          );
-        }
-        break;
-      }
-      case "algae-profile":
-        if (
-          record.shared.identificationStatus === "unverified" ||
-          !sourcesAreVerified(record.shared.taxonomySources)
-        ) {
-          addRecordIssue(
-            context,
-            ["shared", "identificationStatus"],
-            "TAXONOMY_REVIEW_REQUIRED",
-            "藻类图鉴发布前必须记录可核验分类来源和鉴定边界",
-          );
-        }
-        break;
-      case "live-feed-profile":
-        if (record.shared.cultureDisclosureBoundary === "internal-only") {
-          addRecordIssue(
-            context,
-            ["shared", "cultureDisclosureBoundary"],
-            "CULTURE_SCOPE_NOT_PUBLIC",
-            "内部培养说明不能作为公开内容发布",
-          );
-        }
-        break;
-      case "coastal-observation":
-        if (record.shared.disclosureStatus !== "approved") {
-          addRecordIssue(
-            context,
-            ["shared", "disclosureStatus"],
-            "OBSERVATION_DISCLOSURE_REQUIRED",
-            "近岸观测发布前必须完成公开范围审核",
-          );
-        }
-        if (!sourcesAreVerified(record.shared.dataSources)) {
-          addRecordIssue(
-            context,
-            ["shared", "dataSources"],
-            "OBSERVATION_SOURCE_REQUIRED",
-            "近岸观测发布前必须有已核验数据来源",
-          );
-        }
-        break;
-      case "team-member":
-        if (
-          record.shared.profileDisclosure !== "approved" ||
-          (record.shared.portraitMediaId &&
-            record.shared.portraitConsent !== "confirmed")
-        ) {
-          addRecordIssue(
-            context,
-            ["shared", "profileDisclosure"],
-            "MEMBER_PUBLIC_SCOPE_REQUIRED",
-            "团队成员发布前必须确认个人资料和照片公开授权",
-          );
-        }
-        break;
-      case "collaboration":
-        if (
-          record.shared.collaborationBoundary === "internal-only" ||
-          record.shared.disclosureStatus !== "approved" ||
-          record.shared.publicAuthorization === "pending"
-        ) {
-          addRecordIssue(
-            context,
-            ["shared", "publicAuthorization"],
-            "COLLABORATION_DISCLOSURE_REQUIRED",
-            "合作内容发布前必须完成公开授权和边界审核",
-          );
-        }
-        break;
-      case "research-profile":
-        if (record.id !== record.shared.routeKey) {
-          addRecordIssue(
-            context,
-            ["id"],
-            "RESEARCH_PROFILE_ID_FIXED",
-            "研究方向记录 ID 必须与已注册路由键一致",
-          );
-        }
-        break;
-      case "science-article":
-        break;
+    if (
+      record.type === "research-profile" &&
+      record.id !== record.shared.routeKey
+    ) {
+      addRecordIssue(
+        context,
+        ["id"],
+        "RESEARCH_PROFILE_ID_FIXED",
+        "研究方向记录 ID 必须与已注册路由键一致",
+      );
     }
   },
 );

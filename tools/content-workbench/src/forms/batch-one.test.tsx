@@ -181,6 +181,18 @@ test.each(BATCH_ONE_CONTENT_TYPES)(
   },
 );
 
+test.each([
+  ["research-output", "contributorId"],
+  ["research-project", "leadAuthorId"],
+  ["team-member", "authorId"],
+] as const)("%s form permits an empty responsibility field", (type, field) => {
+  const result = batchOneFormAdapters[type].validate(baseRecord(type), {
+    ...validValues[type],
+    [field]: "",
+  });
+  expect(result.success, JSON.stringify(result, null, 2)).toBe(true);
+});
+
 const invalidCases: Array<{
   type: BatchOneContentType;
   changes: FormValues;

@@ -90,6 +90,56 @@ test("团队动态仅使用中文署名时无需作者目录或来源即可发�
   );
 });
 
+test("作者或审核主体无需公开范围批准即可发布", () => {
+  const record = parseRecord(validRecordFixtures["science-article"]);
+  const authorInput = structuredClone(fixtureAuthor) as Record<string, unknown>;
+  authorInput.publicScope = "pending";
+  const author = parseAuthor(authorInput);
+  assert.equal(record.success, true);
+  assert.equal(author.success, true);
+  if (!record.success || !author.success) {
+    assert.fail("待确认公开范围的作者 fixture 应通过结构校验");
+  }
+
+  const eligibility = publicationEligibility(record.data, "zh", {
+    records: { [record.data.id]: record.data },
+    authors: { [author.data.id]: author.data },
+    media: {},
+    markdown: {
+      "science-article/fictional-science-article/zh.md": validMarkdownFixture,
+    },
+  });
+  assert.equal(
+    eligibility.eligible,
+    true,
+    JSON.stringify(eligibility.issues, null, 2),
+  );
+});
+
+test("未建立作者目录也不会阻止各内容类型发布", () => {
+  for (const [type, fixture] of Object.entries(validRecordFixtures)) {
+    const record = parseRecord(fixture);
+    assert.equal(record.success, true, `${type} fixture 应通过结构校验`);
+    if (!record.success) {
+      continue;
+    }
+
+    const eligibility = publicationEligibility(record.data, "zh", {
+      records: { [record.data.id]: record.data },
+      authors: {},
+      media: {},
+      markdown: {
+        [`${record.data.type}/${record.data.id}/zh.md`]: validMarkdownFixture,
+      },
+    });
+    assert.equal(
+      eligibility.eligible,
+      true,
+      `${type}: ${JSON.stringify(eligibility.issues, null, 2)}`,
+    );
+  }
+});
+
 test("URL 声明冲突被定位", () => {
   const snapshot = structuredClone(validRepositorySnapshotFixture);
   snapshot.urlClaims = [
@@ -142,7 +192,7 @@ test("英文 missing 时存在 en.md 被拒绝", () => {
   assert.ok(issues.some((issue) => issue.code === "UNEXPECTED_ENGLISH_BODY"));
 });
 
-test("审核人和机器翻译人工复核人必须解析到公开作者", () => {
+test("未建立审核主体目录不会阻止仓库校验", () => {
   const record = structuredClone(validRecordFixtures["science-article"]);
   const locales = record.locales as Record<string, Record<string, unknown>>;
   const zh = locales.zh;
@@ -151,8 +201,13 @@ test("审核人和机器翻译人工复核人必须解析到公开作者", () =>
   const snapshot = structuredClone(validRepositorySnapshotFixture);
   snapshot.records = [record];
   const issues = validateRepository(snapshot);
-  assert.ok(
-    issues.some((issue) => issue.code === "REVIEWER_REFERENCE_MISSING"),
+  assert.equal(
+    issues.some(
+      (issue) =>
+        issue.code === "REVIEWER_REFERENCE_MISSING" ||
+        issue.code === "AUTHOR_REFERENCE_MISSING",
+    ),
+    false,
   );
 });
 
@@ -170,18 +225,16 @@ test("单用户直发操作人保留在审核字段但不要求成为文章作�
   );
 });
 
-test("单用户直发操作人不能替代公开文章作者", () => {
+test("未建立作者目录时作者引用不阻止仓库校验", () => {
   const record = structuredClone(validRecordFixtures["science-article"]);
   record.authors = ["workbench-single-user"];
   const snapshot = structuredClone(validRepositorySnapshotFixture);
+  snapshot.authors = [];
   snapshot.records = [record];
   const issues = validateRepository(snapshot);
   assert.equal(
-    issues.some(
-      (issue) =>
-        issue.code === "AUTHOR_REFERENCE_MISSING" && issue.path === "authors",
-    ),
-    true,
+    issues.some((issue) => issue.code === "AUTHOR_REFERENCE_MISSING"),
+    false,
   );
 });
 
