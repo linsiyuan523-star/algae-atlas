@@ -6,6 +6,7 @@ import {
   Server,
   Trash2,
 } from "lucide-react";
+import type { ServerConnectionState } from "./ServerSettingsPage";
 
 export type ServerContentStatus = "published" | "updating" | "unknown";
 
@@ -22,6 +23,7 @@ type ServerContentPageProps = {
   items?: readonly ServerContentSummary[];
   loading?: boolean;
   error?: string | null;
+  connectionState?: ServerConnectionState;
   onRefresh?: () => void;
   onView?: (item: ServerContentSummary) => void;
   onEdit?: (item: ServerContentSummary) => void;
@@ -38,11 +40,14 @@ export function ServerContentPage({
   items = [],
   loading = false,
   error = null,
+  connectionState = "unchecked",
   onRefresh,
   onView,
   onEdit,
   onDelete,
 }: ServerContentPageProps) {
+  const canMutate = connectionState === "available";
+
   return (
     <div className="server-content-page">
       <header className="server-page-toolbar">
@@ -142,8 +147,12 @@ export function ServerContentPage({
                         className="icon-button server-delete-button"
                         type="button"
                         aria-label={`删除 ${item.titleZh}`}
-                        title="从服务器删除"
-                        disabled={!onDelete}
+                        title={
+                          canMutate
+                            ? "从服务器删除"
+                            : "服务器不可用，暂时不能删除"
+                        }
+                        disabled={!onDelete || loading || !canMutate}
                         onClick={() => onDelete?.(item)}
                       >
                         <Trash2 aria-hidden="true" size={17} />

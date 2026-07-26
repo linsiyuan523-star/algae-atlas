@@ -495,6 +495,36 @@ test("tests the SSH connection and reads server status", async () => {
   expect(serverApi.getStatus).toHaveBeenCalledOnce();
 });
 
+test("clears the server connection error after a successful retry", async () => {
+  const user = userEvent.setup();
+  const serverApi = createServerApi();
+  vi.mocked(serverApi.testConnection)
+    .mockResolvedValueOnce({
+      ok: false,
+      action: "connection",
+      code: "SSH_TIMEOUT",
+      message: "SSH unavailable",
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      action: "connection",
+      message: "SSH available",
+    });
+  render(<App draftApi={createApi()} serverApi={serverApi} />);
+
+  await user.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: "服务器设置",
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "测试连接" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("SSH unavailable");
+
+  await user.click(screen.getByRole("button", { name: "测试连接" }));
+  expect(await screen.findByText("连接可用")).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 test("loads server aliases and opens or edits matching content", async () => {
   const user = userEvent.setup();
   const api = createApi();
@@ -581,6 +611,95 @@ test("deletes server content after the exact single confirmation", async () => {
   await waitFor(() =>
     expect(screen.queryByText("待删除内容")).not.toBeInTheDocument(),
   );
+});
+
+test("keeps server content visible and disables deletion after an SSH failure", async () => {
+  const user = userEvent.setup();
+  const serverApi = createServerApi();
+  serverApi.listContent = vi.fn(async () => ({
+    ok: true,
+    action: "list",
+    message: "Listed",
+    items: [
+      {
+        contentType: "team-news" as const,
+        stableId: "fictional-draft",
+        titleZh: "保留的线上内容",
+        zhUrl: "https://example.invalid/zh/fictional-draft",
+      },
+    ],
+  }));
+  serverApi.deleteContent = vi.fn(async () => ({
+    ok: false,
+    action: "delete",
+    code: "SSH_TIMEOUT",
+    message: "SSH unavailable",
+  }));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<App draftApi={createApi()} serverApi={serverApi} />);
+
+  await user.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: "服务器内容",
+    }),
+  );
+  const deleteButton = await screen.findByRole("button", {
+    name: "删除 保留的线上内容",
+  });
+  await user.click(deleteButton);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("SSH unavailable");
+  expect(screen.getByText("保留的线上内容")).toBeVisible();
+  expect(deleteButton).toBeDisabled();
+});
+
+test("surfaces editor deletion failures without marking the server unavailable", async () => {
+  const user = userEvent.setup();
+  const draftApi = createApi();
+  draftApi.listDrafts = vi.fn(async () => [draft]);
+  draftApi.openDraft = vi.fn(async () => draft);
+  const serverApi = createServerApi();
+  serverApi.listContent = vi.fn(async () => ({
+    ok: true,
+    action: "list",
+    message: "Listed",
+    items: [
+      {
+        contentType: "team-news" as const,
+        stableId: "fictional-draft",
+        titleZh: "Published fixture",
+        zhUrl: "https://example.invalid/zh/fictional-draft",
+      },
+    ],
+  }));
+  serverApi.deleteContent = vi.fn(async () => ({
+    ok: false,
+    action: "delete",
+    code: "DELETE_VERIFICATION_FAILED",
+    message: "Delete verification failed",
+  }));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<App draftApi={draftApi} serverApi={serverApi} />);
+
+  const navigation = screen.getByRole("navigation");
+  await user.click(
+    within(navigation).getByRole("button", { name: "草稿箱" }),
+  );
+  await user.click(await screen.findByRole("button", { name: "打开 虚构标题" }));
+  await user.click(
+    await screen.findByRole("button", { name: "从服务器删除" }),
+  );
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Delete verification failed",
+  );
+  expect(serverApi.deleteContent).toHaveBeenCalledOnce();
+
+  await user.click(
+    within(navigation).getByRole("button", { name: "服务器设置" }),
+  );
+  expect(screen.getByText("连接可用")).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 test("checks SSH before creating one direct Bundle commit and publishing it", async () => {

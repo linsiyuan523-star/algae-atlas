@@ -372,7 +372,7 @@ export default function App({
     } catch (caught) {
       const message = describeError(caught);
       setServerContentError(message);
-      setServerConnectionError(message);
+      throw caught instanceof Error ? caught : new Error(message);
     } finally {
       setServerContentLoading(false);
     }
@@ -399,6 +399,7 @@ export default function App({
         throw new Error("SSH 可达，但服务器发布控制器或网站健康状态尚未就绪。");
       }
       setServerConnectionState("available");
+      setServerConnectionError(null);
     } catch (caught) {
       setServerConnectionState("unavailable");
       setServerConnectionError(describeError(caught));
@@ -617,10 +618,13 @@ export default function App({
               items={serverContentItems}
               loading={serverContentLoading}
               error={serverContentError}
+              connectionState={serverConnectionState}
               onRefresh={() => void loadServerContent()}
               onView={handleViewServerContent}
               onEdit={(item) => void handleEditServerContent(item)}
-              onDelete={(item) => void handleDeleteServerContent(item)}
+              onDelete={(item) => {
+                void handleDeleteServerContent(item).catch(() => undefined);
+              }}
             />
           ) : currentSection === "media-library" ? (
             <MediaLibraryPage />

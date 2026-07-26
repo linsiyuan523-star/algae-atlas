@@ -585,6 +585,37 @@ test("shows update, online view, and server delete actions for a published ID", 
   expect(screen.queryByRole("button", { name: "删除草稿" })).toBeNull();
 });
 
+test("shows a server deletion error in the editor", async () => {
+  const user = userEvent.setup();
+  const onDeleteServerContent = vi.fn(async () => {
+    throw new Error("server deletion failed");
+  });
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      serverConnectionState="available"
+      serverContentItems={[
+        {
+          stableId: "fictional-draft",
+          contentType: "team-news",
+          titleZh: "Initial title",
+          urlZh: "https://example.invalid/zh/news/fictional-draft",
+        },
+      ]}
+      onDeleteServerContent={onDeleteServerContent}
+    />,
+  );
+
+  await user.click(
+    await screen.findByRole("button", { name: "从服务器删除" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "server deletion failed",
+  );
+  expect(onDeleteServerContent).toHaveBeenCalledOnce();
+});
+
 test("keeps local actions available while server publishing is unavailable", () => {
   render(
     <DraftsPage
