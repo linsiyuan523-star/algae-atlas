@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
 import { AUTOSAVE_DELAY_MS, DraftsPage, NewDraftPage } from "./DraftPages";
+import { SINGLE_USER_DIRECT_OPERATOR_ID } from "../application-mode";
 import type { Draft, DraftApi } from "../drafts";
 import {
   createSharedRecordDraft,
@@ -298,7 +299,7 @@ test("lists, opens, manually saves, and deletes a schema-backed draft", async ()
   });
   expect(screen.getByText("已保存")).toBeVisible();
 
-  await user.click(screen.getByRole("button", { name: "删除" }));
+  await user.click(screen.getByRole("button", { name: "删除草稿" }));
   expect(window.confirm).toHaveBeenCalledWith("确定删除“虚构文章”？");
   expect(api.deleteDraft).toHaveBeenCalledWith(draft.draftId);
   expect(await screen.findByText("目前没有草稿。")).toBeVisible();
@@ -397,7 +398,7 @@ test("opens a live localized detail preview from the draft editor", async () => 
   const user = userEvent.setup();
   render(<DraftsPage api={createApi()} initialDraft={draft} />);
 
-  await user.click(screen.getByRole("button", { name: "预览详情页" }));
+  await user.click(screen.getByRole("button", { name: "本地预览" }));
   expect(screen.getByRole("heading", { name: "初始标题", level: 1 })).toBeVisible();
   expect(screen.getByText("仅用于组件测试的虚构摘要。")).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "中文正文编辑区" })).toBeNull();
@@ -408,6 +409,45 @@ test("opens a live localized detail preview from the draft editor", async () => 
   ).toHaveTextContent("不会生成英文详情页");
   await user.click(screen.getByRole("button", { name: "返回编辑" }));
   expect(await screen.findByRole("textbox", { name: "中文正文编辑区" })).toBeVisible();
+});
+
+test("uses the direct single-user action order without reviewer inputs", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const onExportDraft = vi.fn();
+  const onPublishToServer = vi.fn();
+  render(
+    <DraftsPage
+      api={api}
+      initialDraft={draft}
+      onExportDraft={onExportDraft}
+      onPublishToServer={onPublishToServer}
+    />,
+  );
+
+  expect(screen.queryByLabelText("审核人稳定 ID")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("审核状态")).not.toBeInTheDocument();
+
+  const actionButtons = document.querySelector<HTMLDivElement>(
+    ".draft-editor-action-buttons",
+  );
+  expect(actionButtons).not.toBeNull();
+  const buttons = within(actionButtons!).getAllByRole("button");
+  expect(buttons.map((button) => button.textContent)).toEqual([
+    "保存草稿",
+    "本地预览",
+    "发布到服务器",
+    "导出",
+    "删除草稿",
+  ]);
+
+  await waitFor(() => expect(buttons[2]).toBeEnabled());
+  await user.click(buttons[2]!);
+  expect(onPublishToServer).toHaveBeenCalledWith(draft, {
+    operatorId: SINGLE_USER_DIRECT_OPERATOR_ID,
+  });
+  await user.click(buttons[3]!);
+  expect(onExportDraft).toHaveBeenCalledWith(draft.draftId);
 });
 
 test("validates and serializes the team-news pilot before saving", async () => {
@@ -624,7 +664,13 @@ test("parks an English draft when disabled and restores it later", async () => {
 test("moves Chinese to a publication candidate while English stays missing", async () => {
   const user = userEvent.setup();
   const api = createApi();
-  render(<DraftsPage api={api} initialDraft={draft} />);
+  render(
+    <DraftsPage
+      api={api}
+      initialDraft={draft}
+      applicationMode="team-review"
+    />,
+  );
 
   const chineseWorkflow = screen.getByRole("region", {
     name: "中文语言状态",
@@ -660,7 +706,13 @@ test("keeps complete validation on a publication candidate", async () => {
   const api = createApi();
   const incomplete = makeEmptyTeamNewsDraft();
   api.listDrafts = vi.fn(async () => [incomplete]);
-  render(<DraftsPage api={api} initialDraft={incomplete} />);
+  render(
+    <DraftsPage
+      api={api}
+      initialDraft={incomplete}
+      applicationMode="team-review"
+    />,
+  );
 
   const chineseWorkflow = screen.getByRole("region", {
     name: "中文语言状态",
@@ -692,7 +744,13 @@ test("blocks machine-assisted published English without a human verifier", async
   const api = createApi();
   const published = makeMachinePublishedEnglishDraft();
   api.listDrafts = vi.fn(async () => [published]);
-  render(<DraftsPage api={api} initialDraft={published} />);
+  render(
+    <DraftsPage
+      api={api}
+      initialDraft={published}
+      applicationMode="team-review"
+    />,
+  );
 
   expect(screen.getByLabelText("英文来源")).toHaveValue("machine-assisted");
   expect(screen.getByLabelText("人工复核人稳定 ID")).toHaveValue("");

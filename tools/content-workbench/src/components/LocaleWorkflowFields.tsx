@@ -15,6 +15,7 @@ type LocaleWorkflowFieldsProps = {
   value: LocaleWorkflowInput;
   errors: LocaleWorkflowErrors;
   disabled?: boolean;
+  showReviewControls?: boolean;
   onChange: <Key extends keyof LocaleWorkflowInput>(
     field: Key,
     value: LocaleWorkflowInput[Key],
@@ -46,6 +47,7 @@ export function LocaleWorkflowFields({
   value,
   errors,
   disabled = false,
+  showReviewControls = true,
   onChange,
 }: LocaleWorkflowFieldsProps) {
   const prefix = `${locale}-workflow`;
@@ -109,6 +111,8 @@ export function LocaleWorkflowFields({
           </WorkflowField>
         ) : null}
 
+        {showReviewControls ? (
+          <>
         <WorkflowField
           label="审核状态"
           id={`${prefix}-review-status`}
@@ -237,6 +241,8 @@ export function LocaleWorkflowFields({
               onChange={(event) => onChange("humanVerifiedBy", event.target.value)}
             />
           </WorkflowField>
+        ) : null}
+          </>
         ) : null}
 
         {value.state === "published" ? (

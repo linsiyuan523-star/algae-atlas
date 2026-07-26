@@ -42,6 +42,8 @@ type RepositoryExportPageProps = {
   repositoryApi: RepositoryApi;
   githubPublishApi?: GitHubPublishApi;
   initialRepositoryPath?: string;
+  initialDraftId?: string;
+  showGitHubDraftPr?: boolean;
   now?: () => Date;
 };
 
@@ -57,10 +59,12 @@ export function RepositoryExportPage({
   repositoryApi,
   githubPublishApi = defaultGitHubPublishApi,
   initialRepositoryPath = "",
+  initialDraftId = "",
+  showGitHubDraftPr = false,
   now = () => new Date(),
 }: RepositoryExportPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [selectedDraftId, setSelectedDraftId] = useState("");
+  const [selectedDraftId, setSelectedDraftId] = useState(initialDraftId);
   const [repositoryPath, setRepositoryPath] = useState(initialRepositoryPath);
   const [result, setResult] = useState<ExportDryRunResult | null>(null);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
@@ -82,7 +86,9 @@ export function RepositoryExportPage({
         }
         setDrafts(loaded);
         setSelectedDraftId((selected) =>
-          loaded.some((draft) => draft.draftId === selected)
+          loaded.some((draft) => draft.draftId === initialDraftId)
+            ? initialDraftId
+            : loaded.some((draft) => draft.draftId === selected)
             ? selected
             : (loaded[0]?.draftId ?? ""),
         );
@@ -102,7 +108,7 @@ export function RepositoryExportPage({
     return () => {
       current = false;
     };
-  }, [draftApi]);
+  }, [draftApi, initialDraftId]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -255,7 +261,9 @@ export function RepositoryExportPage({
       {commitResult ? (
         <>
           <LocalCommitResult result={commitResult} />
-          <GitHubDraftPrPanel api={githubPublishApi} commit={commitResult} />
+          {showGitHubDraftPr ? (
+            <GitHubDraftPrPanel api={githubPublishApi} commit={commitResult} />
+          ) : null}
         </>
       ) : null}
       <BundleExportPanel repositoryApi={repositoryApi} />

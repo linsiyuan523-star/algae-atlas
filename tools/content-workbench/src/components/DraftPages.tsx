@@ -1,7 +1,9 @@
 import {
+  ArrowLeftRight,
   CheckCircle2,
   CircleAlert,
   Clock3,
+  CloudUpload,
   Copy,
   Eye,
   FilePlus2,
@@ -16,6 +18,12 @@ import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import {
+  DEFAULT_APPLICATION_MODE,
+  SINGLE_USER_DIRECT_OPERATOR_ID,
+  applicationModeFeatures,
+} from "../application-mode";
+import type { ApplicationMode } from "../application-mode";
 import { inspectDraft } from "../drafts";
 import type { Draft, DraftApi } from "../drafts";
 import { getContentFormAdapter } from "../forms/content-forms";
@@ -193,12 +201,21 @@ type DraftsPageProps = {
   api: DraftApi;
   mediaApi?: MediaApi;
   initialDraft?: Draft | null;
+  applicationMode?: ApplicationMode;
+  onExportDraft?: (draftId: string) => void;
+  onPublishToServer?: (
+    draft: Draft,
+    options: { operatorId: string },
+  ) => void;
 };
 
 export function DraftsPage({
   api,
   mediaApi = unavailableMediaApi,
   initialDraft = null,
+  applicationMode = DEFAULT_APPLICATION_MODE,
+  onExportDraft,
+  onPublishToServer,
 }: DraftsPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>(initialDraft ? [initialDraft] : []);
   const [selectedDraft, setSelectedDraft] = useState<Draft | null>(initialDraft);
@@ -358,6 +375,9 @@ export function DraftsPage({
                 draft={selectedDraft}
                 onSaved={handleSaved}
                 onDeleted={handleDeleted}
+                applicationMode={applicationMode}
+                onExportDraft={onExportDraft}
+                onPublishToServer={onPublishToServer}
               />
             ) : (
               <div className="editor-empty-state" role="status">
@@ -378,6 +398,12 @@ type DraftEditorProps = {
   draft: Draft;
   onSaved: (draft: Draft) => void;
   onDeleted: (draftId: string) => void;
+  applicationMode: ApplicationMode;
+  onExportDraft?: (draftId: string) => void;
+  onPublishToServer?: (
+    draft: Draft,
+    options: { operatorId: string },
+  ) => void;
 };
 
 type EditorInput = {
@@ -398,6 +424,9 @@ function DraftEditor({
   draft,
   onSaved,
   onDeleted,
+  applicationMode,
+  onExportDraft,
+  onPublishToServer,
 }: DraftEditorProps) {
   const initialInspection = inspectDraft(draft);
   const initialFormInspection = getContentFormAdapter(initialInspection.fields.contentType)
@@ -441,6 +470,7 @@ function DraftEditor({
   const isDirty =
     !sameEditorInput(editorInput, savedInput) ||
     hasDirtyMedia;
+  const modeFeatures = applicationModeFeatures(applicationMode);
   useUnsavedCloseWarning(isDirty || saveStatus === "saving");
 
   useEffect(() => {
@@ -1250,6 +1280,7 @@ function DraftEditor({
               : SHARED_SCHEMA_VERSION}
           </p>
         </div>
+        {modeFeatures.showLegacyNavigation ? (
         <div className="draft-editor-heading-actions">
           <button
             className="secondary-button"
@@ -1277,6 +1308,7 @@ function DraftEditor({
             {pendingAction === "delete" ? "正在删除..." : "删除"}
           </button>
         </div>
+        ) : null}
       </div>
 
       {viewMode === "edit" ? (
@@ -1361,6 +1393,7 @@ function DraftEditor({
         value={editorInput.zhWorkflow}
         errors={zhWorkflowErrors}
         disabled={isBusy}
+        showReviewControls={modeFeatures.showReviewControls}
         onChange={(field, value) => updateWorkflowField("zh", field, value)}
       />
 
@@ -1415,6 +1448,7 @@ function DraftEditor({
             value={editorInput.enWorkflow}
             errors={enWorkflowErrors}
             disabled={isBusy}
+            showReviewControls={modeFeatures.showReviewControls}
             onChange={(field, value) => updateWorkflowField("en", field, value)}
           />
 
@@ -1463,14 +1497,68 @@ function DraftEditor({
       </dl>
 
       <div className="draft-editor-actions">
-        <button className="primary-button" type="submit" disabled={isBusy}>
-          <Save aria-hidden="true" size={18} />
-          {saveStatus === "saving"
-            ? "正在保存..."
-            : saveStatus === "failed"
-              ? "重试保存"
-              : "保存草稿"}
-        </button>
+        <div className="draft-editor-action-buttons">
+          <button className="primary-button" type="submit" disabled={isBusy}>
+            <Save aria-hidden="true" size={18} />
+            {saveStatus === "saving"
+              ? "正在保存..."
+              : saveStatus === "failed"
+                ? "重试保存"
+                : "保存草稿"}
+          </button>
+          {modeFeatures.showLegacyNavigation ? null : (
+            <>
+              <button
+                className="secondary-button"
+                type="button"
+                aria-pressed={viewMode === "preview"}
+                disabled={isBusy}
+                onClick={() =>
+                  setViewMode((current) => current === "edit" ? "preview" : "edit")
+                }
+              >
+                {viewMode === "edit" ? (
+                  <Eye aria-hidden="true" size={17} />
+                ) : (
+                  <PenLine aria-hidden="true" size={17} />
+                )}
+                {viewMode === "edit" ? "本地预览" : "返回编辑"}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isBusy || !onPublishToServer}
+                title={onPublishToServer ? "发布到服务器" : "服务器发布将在后续阶段接入"}
+                onClick={() =>
+                  onPublishToServer?.(draft, {
+                    operatorId: SINGLE_USER_DIRECT_OPERATOR_ID,
+                  })
+                }
+              >
+                <CloudUpload aria-hidden="true" size={17} />
+                发布到服务器
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isBusy || !onExportDraft}
+                onClick={() => onExportDraft?.(draft.draftId)}
+              >
+                <ArrowLeftRight aria-hidden="true" size={17} />
+                导出
+              </button>
+              <button
+                className="danger-button"
+                type="button"
+                disabled={isBusy}
+                onClick={() => void handleDelete()}
+              >
+                <Trash2 aria-hidden="true" size={17} />
+                {pendingAction === "delete" ? "正在删除..." : "删除草稿"}
+              </button>
+            </>
+          )}
+        </div>
         <SaveStatusIndicator status={saveStatus} error={saveError} />
         {deleteError ? (
           <p className="operation-error" role="alert">

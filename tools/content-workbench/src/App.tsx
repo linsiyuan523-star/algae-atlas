@@ -1,18 +1,30 @@
 import {
+  ArrowLeftRight,
   Archive,
   FilePlus2,
   Files,
   GitBranch,
+  Images,
   Inbox,
+  ListTree,
   RotateCcw,
   Settings,
+  Server,
+  ServerCog,
   X,
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import {
+  DEFAULT_APPLICATION_MODE,
+  applicationModeFeatures,
+} from "./application-mode";
+import type { ApplicationMode } from "./application-mode";
 import { DraftsPage, NewDraftPage } from "./components/DraftPages";
 import { OnboardingPage } from "./components/OnboardingPage";
 import { RepositoryExportPage } from "./components/RepositoryExportPage";
+import { ServerContentPage } from "./components/ServerContentPage";
+import { ServerSettingsPage } from "./components/ServerSettingsPage";
 import { inspectDraft, tauriDraftApi, unavailableDraftApi } from "./drafts";
 import type { Draft, DraftApi } from "./drafts";
 import type { GitHubPublishApi } from "./github-publish";
@@ -31,7 +43,45 @@ import type { OnboardingApi, OnboardingStatus } from "./onboarding";
 
 const APP_VERSION = "0.1.0";
 
-const navigationItems = [
+const singleUserNavigationItems = [
+  {
+    id: "content-list",
+    label: "内容列表",
+    icon: ListTree,
+  },
+  {
+    id: "new-content",
+    label: "新建内容",
+    icon: FilePlus2,
+  },
+  {
+    id: "drafts",
+    label: "草稿箱",
+    icon: Files,
+  },
+  {
+    id: "server-content",
+    label: "服务器内容",
+    icon: Server,
+  },
+  {
+    id: "media-library",
+    label: "媒体库",
+    icon: Images,
+  },
+  {
+    id: "import-export",
+    label: "导入与导出",
+    icon: ArrowLeftRight,
+  },
+  {
+    id: "server-settings",
+    label: "服务器设置",
+    icon: ServerCog,
+  },
+] as const;
+
+const teamReviewNavigationItems = [
   {
     id: "new-content",
     label: "新建内容",
@@ -45,7 +95,6 @@ const navigationItems = [
   {
     id: "submitted",
     label: "已提交",
-    emptyState: "目前没有已提交内容。",
     icon: Archive,
   },
   {
@@ -60,7 +109,9 @@ const navigationItems = [
   },
 ] as const;
 
-type SectionId = (typeof navigationItems)[number]["id"];
+type SectionId =
+  | (typeof singleUserNavigationItems)[number]["id"]
+  | (typeof teamReviewNavigationItems)[number]["id"];
 
 const staticEmptyStates: Partial<Record<SectionId, string>> = {
   submitted: "目前没有已提交内容。",
@@ -73,6 +124,7 @@ type AppProps = {
   repositoryApi?: RepositoryApi;
   githubPublishApi?: GitHubPublishApi;
   onboardingApi?: OnboardingApi;
+  applicationMode?: ApplicationMode;
 };
 
 const recoveryRequests = new WeakMap<DraftApi, Promise<Draft | null>>();
@@ -93,6 +145,7 @@ export default function App({
   repositoryApi,
   githubPublishApi,
   onboardingApi,
+  applicationMode = DEFAULT_APPLICATION_MODE,
 }: AppProps) {
   const activeDraftApi =
     draftApi ?? (isTauri() ? tauriDraftApi : unavailableDraftApi);
@@ -104,16 +157,24 @@ export default function App({
   const supportsOnboarding = Boolean(onboardingApi) || isTauri();
   const activeOnboardingApi =
     onboardingApi ?? (isTauri() ? tauriOnboardingApi : unavailableOnboardingApi);
-  const [activeSection, setActiveSection] = useState<SectionId>("new-content");
+  const features = applicationModeFeatures(applicationMode);
+  const navigationItems = navigationItemsForMode(applicationMode);
+  const [activeSection, setActiveSection] = useState<SectionId>(
+    () => navigationItemsForMode(applicationMode)[0].id,
+  );
   const [initialDraft, setInitialDraft] = useState<Draft | null>(null);
+  const [exportDraftId, setExportDraftId] = useState<string>();
   const [recoveryDraft, setRecoveryDraft] = useState<Draft | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [onboardingStatus, setOnboardingStatus] =
     useState<OnboardingStatus | null>(null);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [onboardingLoading, setOnboardingLoading] = useState(supportsOnboarding);
+  const currentSection = navigationItems.some((item) => item.id === activeSection)
+    ? activeSection
+    : navigationItems[0].id;
   const activeItem =
-    navigationItems.find((item) => item.id === activeSection) ?? navigationItems[0];
+    navigationItems.find((item) => item.id === currentSection) ?? navigationItems[0];
 
   useEffect(() => {
     let isCurrent = true;
@@ -182,6 +243,11 @@ export default function App({
     setOnboardingStatus(next);
     setOnboardingError(null);
     setOnboardingLoading(false);
+  }
+
+  function handleExportDraft(draftId: string) {
+    setExportDraftId(draftId);
+    setActiveSection(features.showLegacyNavigation ? "repository-export" : "import-export");
   }
 
   if (
@@ -271,23 +337,38 @@ export default function App({
         ) : null}
         <section className="workspace-page" aria-labelledby="workspace-title">
           <h2 id="workspace-title">{activeItem.label}</h2>
-          {activeSection === "new-content" ? (
+          {currentSection === "new-content" ? (
             <NewDraftPage api={activeDraftApi} onCreated={handleDraftCreated} />
-          ) : activeSection === "drafts" ? (
+          ) : currentSection === "content-list" ? (
+            <ContentListPage
+              onCreate={() => setActiveSection("new-content")}
+              onImportExport={() => setActiveSection("import-export")}
+            />
+          ) : currentSection === "drafts" ? (
             <DraftsPage
               api={activeDraftApi}
               mediaApi={activeMediaApi}
               initialDraft={initialDraft}
+              applicationMode={applicationMode}
+              onExportDraft={handleExportDraft}
             />
-          ) : activeSection === "repository-export" ? (
+          ) : currentSection === "server-content" ? (
+            <ServerContentPage />
+          ) : currentSection === "media-library" ? (
+            <MediaLibraryPage />
+          ) : currentSection === "import-export" || currentSection === "repository-export" ? (
             <RepositoryExportPage
               draftApi={activeDraftApi}
               mediaApi={activeMediaApi}
               repositoryApi={activeRepositoryApi}
               githubPublishApi={githubPublishApi}
               initialRepositoryPath={onboardingStatus?.configuration?.repositoryPath}
+              initialDraftId={exportDraftId}
+              showGitHubDraftPr={features.showGitHubDraftPr}
             />
-          ) : activeSection === "settings" && supportsOnboarding ? (
+          ) : currentSection === "server-settings" ? (
+            <ServerSettingsPage />
+          ) : currentSection === "settings" && supportsOnboarding ? (
             <OnboardingPage
               api={activeOnboardingApi}
               initialStatus={onboardingStatus}
@@ -298,11 +379,51 @@ export default function App({
           ) : (
             <div className="empty-state" role="status">
               <Inbox aria-hidden="true" size={28} strokeWidth={1.6} />
-              <p>{staticEmptyStates[activeSection]}</p>
+              <p>{staticEmptyStates[currentSection]}</p>
             </div>
           )}
         </section>
       </main>
+    </div>
+  );
+}
+
+function navigationItemsForMode(mode: ApplicationMode) {
+  return applicationModeFeatures(mode).showLegacyNavigation
+    ? teamReviewNavigationItems
+    : singleUserNavigationItems;
+}
+
+function ContentListPage({
+  onCreate,
+  onImportExport,
+}: {
+  onCreate: () => void;
+  onImportExport: () => void;
+}) {
+  return (
+    <div className="workspace-empty-page" role="status">
+      <ListTree aria-hidden="true" size={28} strokeWidth={1.6} />
+      <p>目前没有可显示的内容。</p>
+      <div className="workspace-empty-actions">
+        <button className="primary-button" type="button" onClick={onCreate}>
+          <FilePlus2 aria-hidden="true" size={18} />
+          新建内容
+        </button>
+        <button className="secondary-button" type="button" onClick={onImportExport}>
+          <ArrowLeftRight aria-hidden="true" size={18} />
+          导入与导出
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MediaLibraryPage() {
+  return (
+    <div className="workspace-empty-page" role="status">
+      <Images aria-hidden="true" size={28} strokeWidth={1.6} />
+      <p>目前没有可显示的媒体。</p>
     </div>
   );
 }

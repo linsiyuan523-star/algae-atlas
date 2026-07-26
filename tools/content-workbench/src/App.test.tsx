@@ -131,10 +131,13 @@ test("switches between all workbench pages", async () => {
     screen.getByRole("heading", { name: "藻类团队内容发布工作台" }),
   ).toBeInTheDocument();
   expect(screen.getByText("版本 0.1.0")).toBeVisible();
-  expect(screen.getByRole("button", { name: "新建草稿" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "内容列表", level: 2 })).toBeVisible();
 
   const navigation = screen.getByRole("navigation", { name: "工作台导航" });
-  expect(within(navigation).getAllByRole("button")).toHaveLength(5);
+  expect(within(navigation).getAllByRole("button")).toHaveLength(7);
+
+  await user.click(within(navigation).getByRole("button", { name: "新建内容" }));
+  expect(screen.getByRole("button", { name: "新建草稿" })).toBeVisible();
 
   const draftsButton = within(navigation).getByRole("button", { name: "草稿箱" });
   await user.click(draftsButton);
@@ -142,25 +145,32 @@ test("switches between all workbench pages", async () => {
   expect(screen.getByRole("heading", { name: "草稿箱", level: 2 })).toBeVisible();
   expect(await screen.findByText("目前没有草稿。")).toBeVisible();
 
-  for (const [title, emptyState] of [
-    ["已提交", "目前没有已提交内容。"],
-    ["设置", "当前没有可配置项。"],
-  ] as const) {
+  for (const title of ["服务器内容", "媒体库"] as const) {
     const navigationButton = within(navigation).getByRole("button", { name: title });
     await user.click(navigationButton);
 
     expect(navigationButton).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("heading", { name: title, level: 2 })).toBeVisible();
-    expect(screen.getByText(emptyState)).toBeVisible();
   }
 
+  const serverSettingsButton = within(navigation).getByRole("button", {
+    name: "服务器设置",
+  });
+  await user.click(serverSettingsButton);
+  expect(serverSettingsButton).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("heading", { name: "服务器设置", level: 2 })).toBeVisible();
+  expect(screen.getByText("algae-server")).toBeVisible();
+
   const repositoryButton = within(navigation).getByRole("button", {
-    name: "仓库导出",
+    name: "导入与导出",
   });
   await user.click(repositoryButton);
   expect(repositoryButton).toHaveAttribute("aria-current", "page");
-  expect(screen.getByRole("heading", { name: "仓库导出", level: 2 })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "导入与导出", level: 2 })).toBeVisible();
   expect(await screen.findByText("目前没有可导出的草稿。")).toBeVisible();
+  expect(screen.queryByText("GitHub Draft PR")).not.toBeInTheDocument();
+  expect(within(navigation).queryByRole("button", { name: "已提交" })).not.toBeInTheDocument();
+  expect(within(navigation).queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
 });
 
 test("creates a shared-schema draft and opens it in the drafts page", async () => {
@@ -169,6 +179,11 @@ test("creates a shared-schema draft and opens it in the drafts page", async () =
   api.listDrafts = vi.fn(async () => [draft]);
   render(<App draftApi={api} />);
 
+  await user.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: "新建内容",
+    }),
+  );
   await user.type(screen.getByLabelText("稳定 ID"), "fictional-draft");
   await user.type(screen.getByLabelText("中文标题"), "虚构标题");
   await user.click(screen.getByRole("button", { name: "新建草稿" }));
@@ -229,6 +244,11 @@ test("rehydrates every saved field after leaving and reopening the same draft", 
 
   render(<App draftApi={api} />);
 
+  await user.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: "新建内容",
+    }),
+  );
   await user.type(formControl("new-stable-id"), "reopen-regression");
   await user.type(formControl("new-title-zh"), "Initial title");
   await user.click(
@@ -262,9 +282,8 @@ test("rehydrates every saved field after leaving and reopening the same draft", 
   });
 
   const navigation = screen.getByRole("navigation");
-  const navigationButtons = within(navigation).getAllByRole("button");
-  await user.click(navigationButtons[0]!);
-  await user.click(navigationButtons[1]!);
+  await user.click(within(navigation).getByRole("button", { name: "内容列表" }));
+  await user.click(within(navigation).getByRole("button", { name: "草稿箱" }));
 
   await waitFor(() => {
     const listButton = document.querySelector<HTMLButtonElement>(
@@ -312,7 +331,11 @@ test("uses read-only browser fallbacks when Tauri is unavailable", async () => {
   render(<App />);
 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "仓库导出" }));
+  await user.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: "导入与导出",
+    }),
+  );
 
   expect(await screen.findByText("目前没有可导出的草稿。")).toBeVisible();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
