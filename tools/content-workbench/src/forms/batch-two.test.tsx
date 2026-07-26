@@ -208,6 +208,15 @@ test.each(BATCH_TWO_CONTENT_TYPES)(
   },
 );
 
+test("coastal-observation form permits an empty responsible author", () => {
+  const type = "coastal-observation";
+  const result = batchTwoFormAdapters[type].validate(baseRecord(type), {
+    ...validValues[type],
+    responsibleAuthorId: "",
+  });
+  expect(result.success, JSON.stringify(result, null, 2)).toBe(true);
+});
+
 const invalidCases: Array<{
   type: BatchTwoContentType;
   changes: FormValues;

@@ -101,7 +101,7 @@ export const commonFieldRegistry: readonly FieldDefinition[] = [
     "published-locale",
     { localized: true },
   ),
-  field("authors", "authors", "作者", "Authors", "id-list", "published-locale", {
+  field("authors", "authors", "作者", "Authors", "id-list", "optional", {
     defaultValue: [],
   }),
   field("tags", "tags", "标签", "Tags", "id-list", "optional", {
@@ -223,7 +223,7 @@ const outputFields = {
     field("outputKind", "shared.outputKind", "成果类型", "Output kind", "enum", "always", {
       options: ["publication", "patent", "dataset", "software", "student-research"],
     }),
-    field("contributorIds", "shared.contributorIds", "作者", "Contributors", "id-list", "always"),
+    field("contributorIds", "shared.contributorIds", "作者", "Contributors", "id-list", "optional"),
     field("year", "shared.year", "年份", "Year", "integer", "always"),
     field("publicationDate", "shared.publicationDate", "公开日期", "Publication date", "date", "optional"),
     field("venueKind", "shared.venueKind", "期刊/会议/专利类型", "Venue kind", "enum", "always", {
@@ -268,7 +268,7 @@ const projectFields = {
       options: ["planned", "active", "completed", "suspended", "cancelled"],
     }),
     field("publicProjectCode", "shared.publicProjectCode", "公开项目编号", "Public project code", "text", "optional"),
-    field("leadAuthorId", "shared.leadAuthorId", "负责人", "Lead", "id", "always"),
+    field("leadAuthorId", "shared.leadAuthorId", "负责人", "Lead", "id", "optional"),
     field("startDate", "shared.startDate", "开始日期", "Start date", "date", "always"),
     field("endDate", "shared.endDate", "结束日期", "End date", "date", "optional"),
     field("fundingSources", "shared.fundingSources", "资助来源", "Funding sources", "reference-list", "optional"),
@@ -637,7 +637,7 @@ const observationFields = {
     field("locationPolicy", "shared.locationPolicy", "地点公开策略", "Location policy", "enum", "always", {
       options: ["hidden", "generalized", "exact-approved"],
     }),
-    field("responsibleAuthorId", "shared.responsibleAuthorId", "负责作者", "Responsible author", "id", "always"),
+    field("responsibleAuthorId", "shared.responsibleAuthorId", "负责作者", "Responsible author", "id", "optional"),
     field("disclosureStatus", "shared.disclosureStatus", "公开确认", "Disclosure status", "enum", "always", {
       options: ["pending", "approved"],
     }),
@@ -732,7 +732,7 @@ const articleFields = {
 
 const memberFields = {
   shared: [
-    field("authorId", "shared.authorId", "作者档案 ID", "Author profile ID", "id", "always"),
+    field("authorId", "shared.authorId", "作者档案 ID", "Author profile ID", "id", "optional"),
     field("membershipStatus", "shared.membershipStatus", "成员状态", "Membership status", "enum", "always", {
       options: ["active", "alumni", "guest", "inactive"],
     }),
@@ -988,8 +988,8 @@ export const contentTypeRegistry = {
     sharedFields: outputFields.shared,
     localizedFields: outputFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
-      { path: "shared.contributorIds[]", target: "author", required: true },
+      { path: "authors[]", target: "author" },
+      { path: "shared.contributorIds[]", target: "author" },
       { path: "shared.relatedProjectIds[]", target: "content", expectedContentTypes: ["research-project"] },
     ],
     defaultValues: { shared: { relatedProjectIds: [], verificationSources: [] }, localized: {} },
@@ -1003,8 +1003,8 @@ export const contentTypeRegistry = {
     sharedFields: projectFields.shared,
     localizedFields: projectFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
-      { path: "shared.leadAuthorId", target: "author", required: true },
+      { path: "authors[]", target: "author" },
+      { path: "shared.leadAuthorId", target: "author" },
       { path: "shared.partnerAuthorIds[]", target: "author" },
       { path: "shared.relatedOutputIds[]", target: "content", expectedContentTypes: ["research-output"] },
       {
@@ -1028,7 +1028,7 @@ export const contentTypeRegistry = {
     sharedFields: learningFields.shared,
     localizedFields: learningFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
+      { path: "authors[]", target: "author" },
       { path: "shared.relatedContentIds[]", target: "content" },
       { path: "shared.attachmentMediaIds[]", target: "media" },
     ],
@@ -1046,7 +1046,7 @@ export const contentTypeRegistry = {
     sharedFields: algaeFields.shared,
     localizedFields: algaeFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
+      { path: "authors[]", target: "author" },
       {
         path: "shared.relatedResearchProfileIds[]",
         target: "content",
@@ -1074,7 +1074,7 @@ export const contentTypeRegistry = {
     sharedFields: liveFeedFields.shared,
     localizedFields: liveFeedFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
+      { path: "authors[]", target: "author" },
       { path: "shared.relatedGuideIds[]", target: "content", expectedContentTypes: ["learning-resource"] },
       {
         path: "shared.relatedResearchProfileIds[]",
@@ -1100,8 +1100,8 @@ export const contentTypeRegistry = {
     sharedFields: observationFields.shared,
     localizedFields: observationFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
-      { path: "shared.responsibleAuthorId", target: "author", required: true },
+      { path: "authors[]", target: "author" },
+      { path: "shared.responsibleAuthorId", target: "author" },
       { path: "shared.relatedProjectIds[]", target: "content", expectedContentTypes: ["research-project"] },
       { path: "shared.mediaIds[]", target: "media" },
     ],
@@ -1119,7 +1119,7 @@ export const contentTypeRegistry = {
     sharedFields: articleFields.shared,
     localizedFields: articleFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
+      { path: "authors[]", target: "author" },
       { path: "shared.relatedContentIds[]", target: "content" },
       { path: "shared.coverMediaId", target: "media" },
     ],
@@ -1134,8 +1134,8 @@ export const contentTypeRegistry = {
     sharedFields: memberFields.shared,
     localizedFields: memberFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
-      { path: "shared.authorId", target: "author", required: true },
+      { path: "authors[]", target: "author" },
+      { path: "shared.authorId", target: "author" },
       { path: "shared.portraitMediaId", target: "media" },
       {
         path: "shared.researchProfileIds[]",
@@ -1158,7 +1158,7 @@ export const contentTypeRegistry = {
     sharedFields: collaborationFields.shared,
     localizedFields: collaborationFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
+      { path: "authors[]", target: "author" },
       { path: "shared.partnerOrganizationIds[]", target: "author" },
       {
         path: "shared.relatedResearchProfileIds[]",
@@ -1183,7 +1183,7 @@ export const contentTypeRegistry = {
     sharedFields: researchProfileFields.shared,
     localizedFields: researchProfileFields.localized,
     references: [
-      { path: "authors[]", target: "author", required: true },
+      { path: "authors[]", target: "author" },
       {
         path: "shared.relatedCollaborationIds[]",
         target: "content",

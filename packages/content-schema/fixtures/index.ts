@@ -368,19 +368,21 @@ function invalidFixture(type: ContentType): Record<string, unknown> {
       shared(record).scientificName = "not a scientific name";
       break;
     case "live-feed-profile":
-      shared(record).cultureDisclosureBoundary = "internal-only";
+      shared(record).cultureDisclosureBoundary = "invalid-boundary";
       break;
     case "coastal-observation":
-      shared(record).disclosureStatus = "pending";
+      shared(record).observationEndedAt = "2025-01-01T00:00:00Z";
       break;
     case "science-article":
       delete zhFields(record).topic;
       break;
     case "team-member":
-      shared(record).profileDisclosure = "pending";
+      shared(record).publicStartYear = 2026;
+      shared(record).publicEndYear = 2025;
       break;
     case "collaboration":
-      shared(record).publicAuthorization = "pending";
+      shared(record).startedAt = "2026-01-02";
+      shared(record).endedAt = "2026-01-01";
       break;
     case "research-profile":
       record.id = "unregistered-research-profile";

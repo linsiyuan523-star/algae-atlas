@@ -1,4 +1,3 @@
-import { SINGLE_USER_DIRECT_OPERATOR_ID } from "./constants";
 import type { Locale } from "./constants";
 import type { Eligibility, ValidationIssue } from "./issues";
 import { validateMarkdown } from "./markdown";
@@ -116,17 +115,6 @@ function referencedIds(
   return unique(fromRules);
 }
 
-function localeReviewerIds(record: ContentRecord, locale: Locale): string[] {
-  const localized = record.locales[locale];
-  if (localized.state === "missing") {
-    return [];
-  }
-  return unique([
-    ...localized.review.reviewerIds,
-    ...(localized.humanVerifiedBy ? [localized.humanVerifiedBy] : []),
-  ]);
-}
-
 function publishedLocale(record: ContentRecord, locale: Locale) {
   const localized = record.locales[locale];
   return localized.state === "published" ? localized : undefined;
@@ -164,63 +152,6 @@ export function publicationEligibility(
       ),
     );
     return { eligible: false, issues };
-  }
-
-  for (const authorId of unique(referencedIds(record, "author"))) {
-    const author = resolvedRefs.authors[authorId];
-    if (!author) {
-      issues.push(
-        validationIssue(
-          "AUTHOR_REFERENCE_MISSING",
-          "authors",
-          `找不到作者或审核主体 ${authorId}`,
-          "新增经过批准的公开作者记录，或移除无效引用。",
-          { recordId: record.id, locale },
-        ),
-      );
-      continue;
-    }
-    if (author.publicScope !== "approved") {
-      issues.push(
-        validationIssue(
-          "AUTHOR_PUBLIC_SCOPE_PENDING",
-          "authors",
-          `作者 ${authorId} 尚未批准公开范围`,
-          "由授权来源确认公开范围后再发布。",
-          { recordId: record.id, locale },
-        ),
-      );
-    }
-  }
-
-  for (const reviewerId of unique(localeReviewerIds(record, locale))) {
-    if (reviewerId === SINGLE_USER_DIRECT_OPERATOR_ID) {
-      continue;
-    }
-    const reviewer = resolvedRefs.authors[reviewerId];
-    if (!reviewer) {
-      issues.push(
-        validationIssue(
-          "AUTHOR_REFERENCE_MISSING",
-          `locales.${locale}.review.reviewerIds`,
-          `找不到审核主体 ${reviewerId}`,
-          "新增经过批准的公开作者记录，或移除无效引用。",
-          { recordId: record.id, locale },
-        ),
-      );
-      continue;
-    }
-    if (reviewer.publicScope !== "approved") {
-      issues.push(
-        validationIssue(
-          "AUTHOR_PUBLIC_SCOPE_PENDING",
-          `locales.${locale}.review.reviewerIds`,
-          `审核主体 ${reviewerId} 尚未批准公开范围`,
-          "由授权来源确认公开范围后再发布。",
-          { recordId: record.id, locale },
-        ),
-      );
-    }
   }
 
   for (const mediaId of referencedIds(record, "media")) {
@@ -462,17 +393,6 @@ export function validateRepository(
 
     for (const rule of rulesFor(record)) {
       for (const id of valuesAtPath(record, rule.path)) {
-        if (rule.target === "author" && !authorIndex[id]) {
-          issues.push(
-            validationIssue(
-              "AUTHOR_REFERENCE_MISSING",
-              rule.path.replace(/\[\]$/, ""),
-              `找不到作者 ${id}`,
-              "新增公开作者记录，或移除无效引用。",
-              { recordId: record.id },
-            ),
-          );
-        }
         if (rule.target === "media" && !mediaIndex[id]) {
           issues.push(
             validationIssue(
@@ -510,25 +430,6 @@ export function validateRepository(
               ),
             );
           }
-        }
-      }
-    }
-
-    for (const locale of ["zh", "en"] as const) {
-      for (const reviewerId of localeReviewerIds(record, locale)) {
-        if (reviewerId === SINGLE_USER_DIRECT_OPERATOR_ID) {
-          continue;
-        }
-        if (!authorIndex[reviewerId]) {
-          issues.push(
-            validationIssue(
-              "REVIEWER_REFERENCE_MISSING",
-              `locales.${locale}.review.reviewerIds`,
-              `找不到审核人 ${reviewerId}`,
-              "使用已批准的公开作者 ID 记录审核人或人工复核人。",
-              { recordId: record.id, locale },
-            ),
-          );
         }
       }
     }

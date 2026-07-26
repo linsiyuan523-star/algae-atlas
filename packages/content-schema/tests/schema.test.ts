@@ -28,10 +28,10 @@ const expectedInvalidPath: Record<(typeof CONTENT_TYPES)[number], string> = {
   "learning-resource": "locales.zh.fields.safetyNotice",
   "algae-profile": "shared.scientificName",
   "live-feed-profile": "shared.cultureDisclosureBoundary",
-  "coastal-observation": "shared.disclosureStatus",
+  "coastal-observation": "shared.observationEndedAt",
   "science-article": "locales.zh.fields.topic",
-  "team-member": "shared.profileDisclosure",
-  collaboration: "shared.publicAuthorization",
+  "team-member": "shared.publicEndYear",
+  collaboration: "shared.endedAt",
   "research-profile": "id",
 };
 
@@ -87,57 +87,65 @@ test("团队动态允许中文署名并省略来源与公开确认", () => {
   assert.equal(result.data.locales.zh.fields.authorName, "林思远");
 });
 
-test("团队动态仍要求中文署名或稳定作者引用", () => {
-  const input = structuredClone(validRecordFixtures["team-news"]);
-  input.authors = [];
-  const shared = input.shared as Record<string, unknown>;
-  shared.sources = [];
-  shared.disclosureStatus = "pending";
+for (const type of CONTENT_TYPES) {
+  test(`${type} 发布时允许省略作者与治理审批`, () => {
+    const input = structuredClone(validRecordFixtures[type]);
+    input.authors = [];
+    const shared = input.shared as Record<string, unknown>;
 
-  const result = parseRecord(input);
-  assert.equal(result.success, false);
-  if (!result.success) {
-    assert.ok(
-      result.issues.some(
-        (issue) => issue.code === "AUTHOR_REQUIRED_FOR_PUBLICATION",
-      ),
-    );
-    assert.equal(
-      result.issues.some((issue) => issue.code === "NEWS_DISCLOSURE_REQUIRED"),
-      false,
-    );
-    assert.equal(
-      result.issues.some((issue) => issue.code === "NEWS_SOURCE_REQUIRED"),
-      false,
-    );
-  }
-});
+    switch (type) {
+      case "team-news": {
+        shared.sources = [];
+        shared.disclosureStatus = "pending";
+        const locales = input.locales as Record<string, Record<string, unknown>>;
+        const fields = locales.zh.fields as Record<string, unknown>;
+        delete fields.authorName;
+        break;
+      }
+      case "research-output":
+        shared.contributorIds = [];
+        shared.verificationSources = [];
+        break;
+      case "research-project":
+        delete shared.leadAuthorId;
+        shared.publicScope = "internal";
+        shared.disclosureStatus = "pending";
+        break;
+      case "learning-resource":
+        shared.hazardLevel = "moderate";
+        shared.laboratoryReviewStatus = "pending";
+        break;
+      case "algae-profile":
+        shared.identificationStatus = "unverified";
+        shared.taxonomySources = [];
+        break;
+      case "live-feed-profile":
+        shared.cultureDisclosureBoundary = "internal-only";
+        break;
+      case "coastal-observation":
+        delete shared.responsibleAuthorId;
+        shared.disclosureStatus = "pending";
+        shared.dataSources = [];
+        break;
+      case "team-member":
+        delete shared.authorId;
+        shared.profileDisclosure = "pending";
+        shared.portraitConsent = "pending";
+        break;
+      case "collaboration":
+        shared.publicAuthorization = "pending";
+        shared.collaborationBoundary = "internal-only";
+        shared.disclosureStatus = "pending";
+        break;
+      case "science-article":
+      case "research-profile":
+        break;
+    }
 
-test("团队动态的每个已发布语言都需要本语言署名", () => {
-  const input = structuredClone(validRecordFixtures["team-news"]);
-  input.authors = [];
-  const locales = input.locales as Record<string, Record<string, unknown>>;
-  const zh = locales.zh;
-  const zhFields = zh.fields as Record<string, unknown>;
-  zhFields.authorName = "林思远";
-  locales.en = {
-    ...structuredClone(zh),
-    title: "Fictional team news",
-    summary: "A fictional bilingual team-news fixture.",
-    bodyFile: "en.md",
-    fields: { ...structuredClone(zhFields), authorName: undefined },
-  };
-
-  const result = parseRecord(input);
-  assert.equal(result.success, false);
-  if (!result.success) {
-    assert.ok(
-      result.issues.some(
-        (issue) => issue.code === "AUTHOR_REQUIRED_FOR_PUBLICATION",
-      ),
-    );
-  }
-});
+    const result = parseRecord(input);
+    assert.equal(result.success, true, JSON.stringify(result.issues, null, 2));
+  });
+}
 
 test("英文标记 published 但字段和审核不完整时失败", () => {
   const input = structuredClone(validRecordFixtures["science-article"]);
@@ -239,6 +247,12 @@ test("字段注册表覆盖基础字段和全部内容类型", () => {
   ]) {
     assert.ok(commonKeys.has(key), `缺少基础字段 ${key}`);
   }
+  assert.equal(
+    getFieldRegistry("science-article").common.find(
+      (field) => field.key === "authors",
+    )?.requirement,
+    "optional",
+  );
 
   assert.deepEqual(Object.keys(contentTypeRegistry), [...CONTENT_TYPES]);
   for (const type of CONTENT_TYPES) {
@@ -295,6 +309,21 @@ test("字段注册表覆盖基础字段和全部内容类型", () => {
       localized: true,
     },
   );
+});
+
+test("责任作者字段在所有相关内容类型中均为可选", () => {
+  for (const [type, key] of [
+    ["research-output", "contributorIds"],
+    ["research-project", "leadAuthorId"],
+    ["coastal-observation", "responsibleAuthorId"],
+    ["team-member", "authorId"],
+  ] as const) {
+    const registered = [
+      ...getFieldRegistry(type).shared,
+      ...getFieldRegistry(type).localized,
+    ].find((field) => field.key === key);
+    assert.equal(registered?.requirement, "optional");
+  }
 });
 
 test("草稿默认值区分中文草稿和英文缺失", () => {
