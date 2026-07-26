@@ -33,7 +33,7 @@ const validValues = {
   endDate: "2026-07-24",
   category: "research",
   pinned: true,
-  authorId: "fictional-author",
+  authorName: "张海宁",
   sourceTitle: "虚构来源",
   sourceUrl: "https://example.invalid/team-news",
   disclosureStatus: "pending",
@@ -49,7 +49,7 @@ test("serializes the team-news pilot through the shared schema and round-trips f
   expect(teamNewsRecordSchema.safeParse(result.recordDraft).success).toBe(true);
   expect(result.recordDraft).toMatchObject({
     type: "team-news",
-    authors: ["fictional-author"],
+    authors: [],
     shared: {
       eventDate: "2026-07-23",
       endDate: "2026-07-24",
@@ -70,7 +70,10 @@ test("serializes the team-news pilot through the shared schema and round-trips f
     locales: {
       zh: {
         summary: "仅用于表单往返测试的虚构摘要。",
-        fields: { participantDescription: "虚构参与者说明。" },
+        fields: {
+          authorName: "张海宁",
+          participantDescription: "虚构参与者说明。",
+        },
       },
     },
   });
@@ -97,7 +100,7 @@ test("keeps incomplete team-news fields saveable in draft mode", () => {
     shared: {
       eventDate: "",
       category: "",
-      disclosureStatus: "",
+      disclosureStatus: "pending",
     },
     locales: { zh: { summary: "" } },
   });
@@ -111,8 +114,7 @@ test("maps generic and shared-schema failures back to pilot fields", () => {
     eventDate: "2026-07-25",
     endDate: "2026-07-24",
     category: "unknown",
-    authorId: "Bad ID",
-    sourceTitle: "",
+    sourceTitle: "虚构来源",
     sourceUrl: "http://example.invalid/news",
     disclosureStatus: "",
   });
@@ -124,10 +126,7 @@ test("maps generic and shared-schema failures back to pilot fields", () => {
   expect(result.errors).toMatchObject({
     endDate: "结束日期不能早于事件日期",
     category: "请选择有效的活动类型。",
-    authorId: "负责作者稳定 ID格式无效，必须使用有效的稳定 ID。",
-    sourceTitle: "填写来源链接时必须提供主要来源标题。",
-    sourceUrl: "主要来源链接必须使用有效的 HTTPS URL。",
-    disclosureStatus: "公开确认不能为空。",
+    sourceUrl: "主要来源链接（可选）必须使用有效的 HTTPS URL。",
   });
 });
 
@@ -146,6 +145,43 @@ test("takes team-news enum values from the shared field registry", () => {
       .find((field) => field.id === "disclosureStatus")
       ?.options?.map((option) => option.value),
   ).toEqual(["pending", "approved"]);
+  expect(fields.find((field) => field.id === "authorName")).toMatchObject({
+    control: "text",
+    label: "作者",
+    path: "locales.zh.fields.authorName",
+  });
+});
+
+test("allows a Chinese byline without author references, sources, or disclosure approval", () => {
+  const result = validateTeamNewsRecordDraft(baseRecord(), {
+    ...validValues,
+    authorName: "林思远",
+    sourceTitle: "",
+    sourceUrl: "",
+    disclosureStatus: "",
+  });
+
+  expect(result.success).toBe(true);
+  if (!result.success) {
+    return;
+  }
+  expect(result.recordDraft).toMatchObject({
+    authors: [],
+    shared: { sources: [], disclosureStatus: "pending" },
+    locales: { zh: { fields: { authorName: "林思远" } } },
+  });
+});
+
+test("preserves existing stable author references when editing the byline", () => {
+  const record = baseRecord();
+  record.authors = ["fictional-author"];
+
+  const result = validateTeamNewsRecordDraft(record, validValues);
+  expect(result.success).toBe(true);
+  if (result.success) {
+    expect(result.recordDraft.authors).toEqual(["fictional-author"]);
+    expect(inspectTeamNewsForm(result.recordDraft).values.authorName).toBe("张海宁");
+  }
 });
 
 test("preserves a valid structured source that has no URL", () => {

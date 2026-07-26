@@ -1400,7 +1400,8 @@ function DraftEditor({
     }
   }
 
-  const isBusy = pendingAction !== null || saveStatus === "saving";
+  const isEditorDisabled = pendingAction !== null;
+  const isBusy = isEditorDisabled || saveStatus === "saving";
   const fields = editorInput.fields;
   const serverContent = serverContentItems.find(
     (item) =>
@@ -1436,6 +1437,7 @@ function DraftEditor({
     ),
     locales: {
       zh: {
+        authorName: stringFormValue(editorInput.contentForm.authorName),
         title: fields.titleZh,
         summary: stringFormValue(editorInput.contentForm.summaryZh),
         body: editorInput.bodyZh,
@@ -1446,6 +1448,7 @@ function DraftEditor({
       },
       en: editorInput.enWorkflow
         ? {
+            authorName: stringFormValue(editorInput.englishForm.authorName),
             title: stringFormValue(editorInput.englishForm.titleEn),
             summary: stringFormValue(editorInput.englishForm.summaryEn),
             body: editorInput.bodyEn,
@@ -1511,6 +1514,7 @@ function DraftEditor({
           value={fields.contentType}
           aria-invalid={Boolean(fieldErrors.contentType)}
           aria-describedby={fieldErrors.contentType ? "draft-content-type-error" : undefined}
+          disabled={isEditorDisabled}
           onChange={(event) => updateField("contentType", event.target.value)}
         >
           {!contentTypeLabel(fields.contentType) ? (
@@ -1535,6 +1539,7 @@ function DraftEditor({
           value={fields.stableId}
           aria-invalid={Boolean(fieldErrors.stableId)}
           aria-describedby={fieldErrors.stableId ? "draft-stable-id-error" : undefined}
+          disabled={isEditorDisabled}
           onChange={(event) => updateField("stableId", event.target.value)}
         />
         <FieldError id="draft-stable-id-error" message={fieldErrors.stableId} />
@@ -1548,6 +1553,7 @@ function DraftEditor({
           value={fields.titleZh}
           aria-invalid={Boolean(fieldErrors.titleZh)}
           aria-describedby={fieldErrors.titleZh ? "draft-title-zh-error" : undefined}
+          disabled={isEditorDisabled}
           onChange={(event) => updateField("titleZh", event.target.value)}
         />
         <FieldError id="draft-title-zh-error" message={fieldErrors.titleZh} />
@@ -1570,7 +1576,7 @@ function DraftEditor({
             type="checkbox"
             role="switch"
             checked={Boolean(editorInput.enWorkflow)}
-            disabled={isBusy}
+            disabled={isEditorDisabled}
             onChange={(event) =>
               event.target.checked ? enableEnglishVersion() : disableEnglishVersion()
             }
@@ -1583,7 +1589,7 @@ function DraftEditor({
         locale="zh"
         value={editorInput.zhWorkflow}
         errors={zhWorkflowErrors}
-        disabled={isBusy}
+        disabled={isEditorDisabled}
         showReviewControls={modeFeatures.showReviewControls}
         onChange={(field, value) => updateWorkflowField("zh", field, value)}
       />
@@ -1593,7 +1599,7 @@ function DraftEditor({
           schema={activeFormAdapter.schema}
           values={editorInput.contentForm}
           errors={contentFormErrors}
-          disabled={isBusy}
+          disabled={isEditorDisabled}
           onChange={updateContentFormField}
         />
       ) : null}
@@ -1602,7 +1608,7 @@ function DraftEditor({
         value={editorInput.bodyZh}
         locale="zh"
         error={bodyError}
-        disabled={isBusy}
+        disabled={isEditorDisabled}
         onChange={updateBody}
       />
 
@@ -1612,7 +1618,7 @@ function DraftEditor({
         contentType={fields.contentType}
         images={stagedImages}
         englishEnabled={Boolean(editorInput.enWorkflow)}
-        disabled={isBusy || mediaLoadPending || Boolean(mediaLoadError)}
+        disabled={isEditorDisabled || mediaLoadPending || Boolean(mediaLoadError)}
         loadError={mediaLoadError}
         onStaged={handleImageStaged}
         onUpdated={handleImageUpdated}
@@ -1626,7 +1632,7 @@ function DraftEditor({
             <button
               className="secondary-button"
               type="button"
-              disabled={isBusy}
+              disabled={isEditorDisabled}
               onClick={copyChineseStructureToEnglish}
             >
               <Copy aria-hidden="true" size={17} />
@@ -1638,7 +1644,7 @@ function DraftEditor({
             locale="en"
             value={editorInput.enWorkflow}
             errors={enWorkflowErrors}
-            disabled={isBusy}
+            disabled={isEditorDisabled}
             showReviewControls={modeFeatures.showReviewControls}
             onChange={(field, value) => updateWorkflowField("en", field, value)}
           />
@@ -1647,7 +1653,7 @@ function DraftEditor({
             schema={activeEnglishAdapter.schema}
             values={editorInput.englishForm}
             errors={englishFormErrors}
-            disabled={isBusy}
+            disabled={isEditorDisabled}
             onChange={updateEnglishFormField}
           />
 
@@ -1655,14 +1661,14 @@ function DraftEditor({
             value={editorInput.bodyEn}
             locale="en"
             error={englishBodyError}
-            disabled={isBusy}
+            disabled={isEditorDisabled}
             onChange={updateEnglishBody}
           />
 
           <EnglishMediaTextPlaceholders
             markdown={editorInput.bodyEn}
             errors={englishFormErrors}
-            disabled={isBusy}
+            disabled={isEditorDisabled}
             onChange={updateEnglishImageText}
           />
         </section>

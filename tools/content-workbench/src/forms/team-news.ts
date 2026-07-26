@@ -27,7 +27,7 @@ export type TeamNewsFormValues = FormValues & {
   endDate: string;
   category: string;
   pinned: boolean;
-  authorId: string;
+  authorName: string;
   sourceTitle: string;
   sourceUrl: string;
   disclosureStatus: string;
@@ -93,9 +93,9 @@ const eventDate = registeredField("eventDate");
 const endDate = registeredField("endDate");
 const locationLabel = registeredField("locationLabel");
 const category = registeredField("category");
+const authorName = registeredField("authorName");
 const participantDescription = registeredField("participantDescription");
 const pinned = registeredField("featured");
-const authors = registeredField("authors");
 const sources = registeredField("sources");
 const disclosureStatus = registeredField("disclosureStatus");
 
@@ -141,24 +141,24 @@ export const teamNewsFormSchema: FormSchemaDefinition = {
       id: "responsibility",
       label: "责任与来源",
       fields: [
-        fromRegisteredField(authors, "author-reference", {
-          id: "authorId",
-          path: "authors[0]",
-          label: "负责作者稳定 ID",
-          placeholder: "author-id",
+        fromRegisteredField(authorName, "text", {
+          path: "locales.zh.fields.authorName",
+          label: "作者",
+          placeholder: "例如：张海宁",
         }),
         fromRegisteredField(sources, "text", {
           id: "sourceTitle",
           path: "shared.sources[0].title",
-          label: "主要来源标题",
+          label: "主要来源标题（可选）",
         }),
         fromRegisteredField(sources, "url", {
           id: "sourceUrl",
           path: "shared.sources[0].href",
-          label: "主要来源链接",
+          label: "主要来源链接（可选）",
           placeholder: "https://",
         }),
         fromRegisteredField(disclosureStatus, "enum", {
+          label: "公开状态（可选）",
           options: registeredOptions(disclosureStatus, disclosureLabels),
         }),
       ],
@@ -175,10 +175,10 @@ export function emptyTeamNewsFormValues(): TeamNewsFormValues {
     endDate: "",
     category: "",
     pinned: false,
-    authorId: "",
+    authorName: "",
     sourceTitle: "",
     sourceUrl: "",
-    disclosureStatus: "",
+    disclosureStatus: "pending",
   };
 }
 
@@ -189,7 +189,6 @@ export function inspectTeamNewsForm(recordDraft: unknown) {
   const zh = asRecord(locales?.zh);
   const localizedFields = asRecord(zh?.fields);
   const location = asRecord(shared?.locationLabel);
-  const authorsValue = Array.isArray(record?.authors) ? record.authors : [];
   const sourcesValue = Array.isArray(shared?.sources) ? shared.sources : [];
   const primarySource = asRecord(sourcesValue[0]);
   const values: TeamNewsFormValues = {
@@ -200,10 +199,10 @@ export function inspectTeamNewsForm(recordDraft: unknown) {
     endDate: stringValue(shared?.endDate),
     category: stringValue(shared?.category),
     pinned: shared?.pinned === true,
-    authorId: stringValue(authorsValue[0]),
+    authorName: stringValue(localizedFields?.authorName),
     sourceTitle: stringValue(primarySource?.title),
     sourceUrl: stringValue(primarySource?.href),
-    disclosureStatus: stringValue(shared?.disclosureStatus),
+    disclosureStatus: stringValue(shared?.disclosureStatus) || "pending",
   };
 
   return {
@@ -287,7 +286,7 @@ function applyTeamNewsFormValues(
   setOptionalString(shared, "endDate", values.endDate);
   shared.category = values.category.trim();
   shared.pinned = values.pinned;
-  shared.disclosureStatus = values.disclosureStatus.trim();
+  shared.disclosureStatus = values.disclosureStatus.trim() || "pending";
 
   const locationZh = values.locationZh.trim();
   if (locationZh) {
@@ -297,19 +296,12 @@ function applyTeamNewsFormValues(
     delete shared.locationLabel;
   }
 
+  setOptionalString(localizedFields, "authorName", values.authorName);
   setOptionalString(
     localizedFields,
     "participantDescription",
     values.participantDescription,
   );
-
-  const existingAuthors = Array.isArray(candidate.authors)
-    ? candidate.authors.filter((value): value is string => typeof value === "string")
-    : [];
-  const authorId = values.authorId.trim();
-  candidate.authors = authorId
-    ? [authorId, ...existingAuthors.slice(1).filter((value) => value !== authorId)]
-    : existingAuthors.slice(1);
 
   const existingSources = Array.isArray(shared.sources)
     ? structuredClone(shared.sources)
@@ -357,7 +349,7 @@ function fieldIdForIssue(path: readonly PropertyKey[]) {
     ["shared.endDate", "endDate"],
     ["shared.category", "category"],
     ["shared.pinned", "pinned"],
-    ["authors", "authorId"],
+    ["locales.zh.fields.authorName", "authorName"],
     ["shared.sources.0.title", "sourceTitle"],
     ["shared.sources.0.href", "sourceUrl"],
     ["shared.disclosureStatus", "disclosureStatus"],

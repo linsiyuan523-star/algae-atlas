@@ -656,23 +656,27 @@ test("validates and serializes the team-news pilot before saving", async () => {
   await user.clear(screen.getByLabelText(/中文摘要/));
   await user.type(screen.getByLabelText(/中文摘要/), "更新后的虚构摘要。");
   await user.click(screen.getByLabelText("精选内容"));
-  await user.type(screen.getByLabelText("负责作者稳定 ID"), "fictional-author");
-  await user.type(screen.getByLabelText("主要来源标题"), "虚构来源");
+  await user.type(screen.getByLabelText("作者"), "张海宁");
+  await user.type(screen.getByLabelText("主要来源标题（可选）"), "虚构来源");
   await user.type(
-    screen.getByLabelText("主要来源链接"),
+    screen.getByLabelText("主要来源链接（可选）"),
     "https://example.invalid/news",
   );
   await user.click(screen.getByRole("button", { name: "保存草稿" }));
 
   await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
   expect(vi.mocked(api.saveDraft).mock.calls[0]?.[0].recordDraft).toMatchObject({
-    authors: ["fictional-author"],
     shared: {
       eventDate: "2026-07-25",
       pinned: true,
       sources: [{ href: "https://example.invalid/news" }],
     },
-    locales: { zh: { summary: "更新后的虚构摘要。" } },
+    locales: {
+      zh: {
+        summary: "更新后的虚构摘要。",
+        fields: { authorName: "张海宁" },
+      },
+    },
   });
 });
 
@@ -734,7 +738,7 @@ test("saves a minimum draft without publication fields", async () => {
       shared: {
         eventDate: "",
         category: "",
-        disclosureStatus: "",
+        disclosureStatus: "pending",
       },
     },
   });
@@ -1003,6 +1007,66 @@ test("debounces autosave, reports progress and failure, and warns while dirty", 
     }),
   ).toBeVisible();
   expect(screen.getByRole("button", { name: "重试保存" })).toBeEnabled();
+});
+
+test("keeps a schema input focused and editable during autosave", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const resolveSaves: Array<() => void> = [];
+  vi.mocked(api.saveDraft).mockImplementation(
+    (input) =>
+      new Promise((resolve) => {
+        resolveSaves.push(() =>
+          resolve({
+            ...draft,
+            recordDraft: input.recordDraft,
+            bodyZh: input.bodyZh,
+            bodyEn: input.bodyEn,
+            parkedEnglishLocale: input.parkedEnglishLocale,
+            updatedAt: "2026-07-23T09:00:00Z",
+          }),
+        );
+      }),
+  );
+  render(<DraftsPage api={api} initialDraft={draft} />);
+
+  const summaryInput = screen.getByLabelText(/中文摘要/);
+  await user.type(summaryInput, "自动保存前。");
+
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce(), {
+    timeout: AUTOSAVE_DELAY_MS + 1_000,
+  });
+  expect(summaryInput).toBeEnabled();
+  expect(summaryInput).toHaveFocus();
+  expect(screen.getByRole("button", { name: "正在保存..." })).toBeDisabled();
+
+  await user.type(summaryInput, "保存期间继续输入。");
+  expect(summaryInput).toHaveFocus();
+  expect(summaryInput).toHaveValue(
+    "仅用于组件测试的虚构摘要。自动保存前。保存期间继续输入。",
+  );
+
+  await act(async () => {
+    resolveSaves[0]?.();
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledTimes(2), {
+    timeout: AUTOSAVE_DELAY_MS + 1_000,
+  });
+  expect(vi.mocked(api.saveDraft).mock.calls[1]?.[0].recordDraft).toMatchObject({
+    locales: {
+      zh: {
+        summary: "仅用于组件测试的虚构摘要。自动保存前。保存期间继续输入。",
+      },
+    },
+  });
+
+  await act(async () => {
+    resolveSaves[1]?.();
+    await Promise.resolve();
+  });
+  expect(await screen.findByText("已保存")).toBeVisible();
+  expect(summaryInput).toHaveFocus();
 });
 
 test("shows field errors for an invalid stored record without invoking save", async () => {

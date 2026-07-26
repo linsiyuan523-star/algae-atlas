@@ -56,6 +56,40 @@ test("中文可发布而英文 missing 不可发布且互不影响", () => {
   assert.equal(en.issues[0]?.code, "LOCALE_MISSING");
 });
 
+test("团队动态仅使用中文署名时无需作者目录或来源即可发布", () => {
+  const input = structuredClone(validRecordFixtures["team-news"]);
+  input.authors = [];
+  const shared = input.shared as Record<string, unknown>;
+  shared.sources = [];
+  shared.disclosureStatus = "pending";
+  const locales = input.locales as Record<string, Record<string, unknown>>;
+  const zh = locales.zh;
+  const fields = zh.fields as Record<string, unknown>;
+  fields.authorName = "林思远";
+  const review = zh.review as Record<string, unknown>;
+  review.reviewerIds = ["workbench-single-user"];
+
+  const record = parseRecord(input);
+  assert.equal(record.success, true, JSON.stringify(record.issues, null, 2));
+  if (!record.success) {
+    assert.fail("中文署名的团队动态应通过结构校验");
+  }
+
+  const eligibility = publicationEligibility(record.data, "zh", {
+    records: { [record.data.id]: record.data },
+    authors: {},
+    media: {},
+    markdown: {
+      "team-news/fictional-team-news/zh.md": validMarkdownFixture,
+    },
+  });
+  assert.equal(
+    eligibility.eligible,
+    true,
+    JSON.stringify(eligibility.issues, null, 2),
+  );
+});
+
 test("URL 声明冲突被定位", () => {
   const snapshot = structuredClone(validRepositorySnapshotFixture);
   snapshot.urlClaims = [

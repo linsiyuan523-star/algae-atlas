@@ -148,6 +148,11 @@ export function StructuredContentPage({ record }: { record: PublicRecord }) {
   const definition = contentTypeRegistry[record.type];
   const sectionPath = definition.sectionPath.replace("[locale]", record.locale);
   const body = record.content.body?.trim() ?? "";
+  const authorName =
+    record.type === "team-news" &&
+    typeof record.content.fields.authorName === "string"
+      ? record.content.fields.authorName.trim()
+      : "";
   return (
     <article className="article-page structured-content-page">
       <header className="article-header section-shell">
@@ -156,6 +161,11 @@ export function StructuredContentPage({ record }: { record: PublicRecord }) {
         </Link>
         <p className="eyebrow">{definition.label[record.locale]}</p>
         <h1>{record.content.title}</h1>
+        {authorName ? (
+          <p className="article-byline">
+            {record.locale === "zh" ? "作者" : "Author"}: {authorName}
+          </p>
+        ) : null}
         <p>{record.content.summary}</p>
       </header>
       <div className="article-body prose">
