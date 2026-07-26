@@ -2501,6 +2501,41 @@ button:disabled {
   animation: save-status-spin 0.9s linear infinite;
 }
 
+.publish-result {
+  flex: 1 1 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #9ec6b4;
+  border-radius: 6px;
+  color: #245b48;
+  background: #edf7f1;
+  font-size: 12px;
+}
+
+.publish-result code,
+.publish-result time {
+  overflow-wrap: anywhere;
+  color: #36594c;
+  font-size: 11px;
+}
+
+.publish-result a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: #245b48;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.publish-result a:hover {
+  text-decoration: underline;
+}
+
 @keyframes save-status-spin {
   to {
     transform: rotate(360deg);

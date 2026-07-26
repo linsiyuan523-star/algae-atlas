@@ -14,15 +14,21 @@ type RouteRegistration = {
 };
 
 const routeRegistrations = [
+  { type: "team-news", section: "news" },
+  { type: "research-output", section: "outputs" },
+  { type: "research-project", section: "projects" },
   {
     type: "research-profile",
     section: "research",
-    allowedIds: ["microalgae", "macroalgae", "algal-blooms"],
+    allowedIds: ["microalgae", "macroalgae", "live-feeds", "algal-blooms"],
   },
   { type: "live-feed-profile", section: "live-feeds" },
   { type: "learning-resource", section: "tutorials" },
   { type: "algae-profile", section: "algae" },
+  { type: "coastal-observation", section: "observations" },
   { type: "science-article", section: "insights" },
+  { type: "team-member", section: "team" },
+  { type: "collaboration", section: "collaboration" },
 ] as const satisfies readonly RouteRegistration[];
 
 export type WebsiteContentRoute = {

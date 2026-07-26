@@ -51,6 +51,10 @@ export const REVIEW_STATUSES = [
   "reviewed",
 ] as const;
 
+// Internal workbench automation is not a public article author. It may be
+// recorded in legacy reviewer fields when direct publishing is enabled.
+export const SINGLE_USER_DIRECT_OPERATOR_ID = "workbench-single-user" as const;
+
 export const REFERENCE_KINDS = [
   "article",
   "dataset",

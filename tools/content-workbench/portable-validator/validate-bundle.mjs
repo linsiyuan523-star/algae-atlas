@@ -184,11 +184,13 @@ function validObjectId(value) {
 }
 
 function parseBranch(value) {
-  const match = /^content\/(\d{8})-([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(value);
-  if (!match || match[2].length > 200) {
+  const offline = /^content\/(\d{8})-([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(value);
+  const direct = /^content\/direct-([a-f0-9]{32})-([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(value);
+  const recordId = offline?.[2] ?? direct?.[2];
+  if (!recordId || recordId.length > 200) {
     fail("MANIFEST", "Branch is not an approved content branch");
   }
-  return { branch: value, recordId: match[2] };
+  return { branch: value, recordId };
 }
 
 function decimal(value, label, stage = "MANIFEST") {
@@ -399,10 +401,13 @@ function forbiddenPath(path) {
   return false;
 }
 
+const publicUploadPathPattern =
+  /^public\/images\/uploads\/[0-9]{4}\/(?:0[1-9]|1[0-2])\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\.thumbnail\.webp|\.webp|\.jpeg|\.jpg|\.png|\.avif)$/u;
+
 function allowedChangedPath(path) {
   return path.startsWith("content/records/")
     || path.startsWith("content/media/")
-    || path.startsWith("public/images/uploads/");
+    || publicUploadPathPattern.test(path);
 }
 
 function validateChangedFileList(text) {

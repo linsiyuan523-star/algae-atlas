@@ -1,3 +1,4 @@
+import { SINGLE_USER_DIRECT_OPERATOR_ID } from "./constants";
 import type { Locale } from "./constants";
 import type { Eligibility, ValidationIssue } from "./issues";
 import { validateMarkdown } from "./markdown";
@@ -165,10 +166,7 @@ export function publicationEligibility(
     return { eligible: false, issues };
   }
 
-  for (const authorId of unique([
-    ...referencedIds(record, "author"),
-    ...localeReviewerIds(record, locale),
-  ])) {
+  for (const authorId of unique(referencedIds(record, "author"))) {
     const author = resolvedRefs.authors[authorId];
     if (!author) {
       issues.push(
@@ -188,6 +186,36 @@ export function publicationEligibility(
           "AUTHOR_PUBLIC_SCOPE_PENDING",
           "authors",
           `作者 ${authorId} 尚未批准公开范围`,
+          "由授权来源确认公开范围后再发布。",
+          { recordId: record.id, locale },
+        ),
+      );
+    }
+  }
+
+  for (const reviewerId of unique(localeReviewerIds(record, locale))) {
+    if (reviewerId === SINGLE_USER_DIRECT_OPERATOR_ID) {
+      continue;
+    }
+    const reviewer = resolvedRefs.authors[reviewerId];
+    if (!reviewer) {
+      issues.push(
+        validationIssue(
+          "AUTHOR_REFERENCE_MISSING",
+          `locales.${locale}.review.reviewerIds`,
+          `找不到审核主体 ${reviewerId}`,
+          "新增经过批准的公开作者记录，或移除无效引用。",
+          { recordId: record.id, locale },
+        ),
+      );
+      continue;
+    }
+    if (reviewer.publicScope !== "approved") {
+      issues.push(
+        validationIssue(
+          "AUTHOR_PUBLIC_SCOPE_PENDING",
+          `locales.${locale}.review.reviewerIds`,
+          `审核主体 ${reviewerId} 尚未批准公开范围`,
           "由授权来源确认公开范围后再发布。",
           { recordId: record.id, locale },
         ),
@@ -488,6 +516,9 @@ export function validateRepository(
 
     for (const locale of ["zh", "en"] as const) {
       for (const reviewerId of localeReviewerIds(record, locale)) {
+        if (reviewerId === SINGLE_USER_DIRECT_OPERATOR_ID) {
+          continue;
+        }
         if (!authorIndex[reviewerId]) {
           issues.push(
             validationIssue(

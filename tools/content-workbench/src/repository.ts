@@ -68,6 +68,7 @@ export type RepositoryDryRunRequest = {
   branchName: string;
   contentTargets: string[];
   imageTargets: string[];
+  directPublish?: boolean;
 };
 
 export type RepositoryDryRunResult = {
@@ -153,6 +154,7 @@ export type ExportSchemaResult = {
 export type ExportDryRunResult = RepositoryDryRunResult & {
   schema: ExportSchemaResult;
   ready: boolean;
+  plannedRequest?: Omit<RepositoryDryRunRequest, "repositoryPath">;
 };
 
 export type RepositoryApi = {
@@ -202,14 +204,20 @@ type ExportPlan = {
   imageFiles: RepositoryImageFile[];
 };
 
+export type ExportPlanOptions = {
+  directPublish?: boolean;
+  branchName?: string;
+};
+
 export async function runRepositoryExportDryRun(
   api: RepositoryApi,
   repositoryPath: string,
   draft: Draft,
   stagedImages: readonly StagedImage[],
   now = new Date(),
+  options: ExportPlanOptions = {},
 ): Promise<ExportDryRunResult> {
-  const plan = createExportPlan(draft, stagedImages, now);
+  const plan = createExportPlan(draft, stagedImages, now, options);
   const repository = await api.dryRun({
     repositoryPath,
     ...plan.request,
@@ -218,6 +226,7 @@ export async function runRepositoryExportDryRun(
     ...repository,
     schema: plan.schema,
     ready: repository.repositoryReady && plan.schema.valid,
+    plannedRequest: plan.request,
   };
 }
 
@@ -228,8 +237,25 @@ export async function runRepositoryLocalCommit(
   stagedImages: readonly StagedImage[],
   dryRun: ExportDryRunResult,
   now = new Date(),
+  options: ExportPlanOptions = {},
 ): Promise<RepositoryLocalCommitResult> {
-  const plan = createExportPlan(draft, stagedImages, now);
+  const plannedRequest = dryRun.plannedRequest;
+  const plan = createExportPlan(draft, stagedImages, now, {
+    ...options,
+    ...(options.directPublish && !options.branchName && plannedRequest
+      ? { branchName: plannedRequest.branchName }
+      : {}),
+  });
+  if (plannedRequest) {
+    if (
+      plannedRequest.recordId !== plan.request.recordId ||
+      plannedRequest.contentType !== plan.request.contentType ||
+      plannedRequest.branchName !== plan.request.branchName ||
+      Boolean(plannedRequest.directPublish) !== Boolean(plan.request.directPublish)
+    ) {
+      throw new Error("预演结果已失效，请重新诊断后再提交。");
+    }
+  }
   const expectedHeadSha = dryRun.diagnostics.headSha;
   const expectedBaseBranch = dryRun.diagnostics.currentBranch;
   if (
@@ -307,6 +333,7 @@ export function createExportPlan(
   draft: Draft,
   stagedImages: readonly StagedImage[],
   now = new Date(),
+  options: ExportPlanOptions = {},
 ): ExportPlan {
   const rawRecord = asRecord(draft.recordDraft);
   const recordId = requiredString(rawRecord?.id, "草稿缺少稳定 ID。");
@@ -441,13 +468,20 @@ export function createExportPlan(
       : []),
   ]);
 
+  const branchName =
+    options.branchName ??
+    (options.directPublish
+      ? createDirectPublishBranchName(recordId)
+      : `content/${localDateStamp(now)}-${recordId}`);
+
   return {
     request: {
       recordId,
       contentType,
-      branchName: `content/${localDateStamp(now)}-${recordId}`,
+      branchName,
       contentTargets: unique(contentTargets),
       imageTargets: unique(imageTargets),
+      ...(options.directPublish ? { directPublish: true } : {}),
     },
     schema: {
       valid: !issues.some((issue) => issue.severity === "error"),
@@ -457,6 +491,14 @@ export function createExportPlan(
     textFiles,
     imageFiles,
   };
+}
+
+export function createDirectPublishBranchName(recordId: string) {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const nonce = [...bytes]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  return `content/direct-${nonce}-${recordId}`;
 }
 
 function serializeMarkdown(body: string) {

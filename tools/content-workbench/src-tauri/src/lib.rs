@@ -2,6 +2,7 @@ mod drafts;
 mod media;
 mod onboarding;
 mod repository;
+mod server;
 mod session;
 
 use tauri::Manager;
@@ -52,6 +53,11 @@ pub fn run() {
             repository::repository_local_commit,
             repository::repository_bundle_preflight,
             repository::repository_export_bundle,
+            server::test_server_connection,
+            server::get_server_status,
+            server::list_server_content,
+            server::publish_content_to_server,
+            server::delete_server_content,
             onboarding::onboarding_status,
             onboarding::save_onboarding_configuration,
             session::take_recovery_draft,

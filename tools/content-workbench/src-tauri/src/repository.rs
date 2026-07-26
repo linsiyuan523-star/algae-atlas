@@ -10,7 +10,7 @@ use std::{
     io::Write,
     path::{Component, Path, PathBuf},
     process::{Command, Output},
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
 };
 use thiserror::Error;
 use uuid::{Uuid, Version};
@@ -47,6 +47,8 @@ pub struct RepositoryDryRunRequest {
     pub record_id: String,
     pub content_type: String,
     pub branch_name: String,
+    #[serde(default)]
+    pub direct_publish: bool,
     pub content_targets: Vec<String>,
     pub image_targets: Vec<String>,
 }
@@ -211,7 +213,7 @@ pub struct RepositoryBundleExportResult {
 }
 
 #[derive(Debug, Error)]
-enum RepositoryError {
+pub(crate) enum RepositoryError {
     #[error("repository path must be an existing absolute directory")]
     InvalidRepositoryPath,
     #[error("repository path contains a link or reparse point")]
@@ -243,18 +245,19 @@ enum RepositoryError {
     InjectedFailure,
 }
 
-type RepositoryResult<T> = Result<T, RepositoryError>;
+pub(crate) type RepositoryResult<T> = Result<T, RepositoryError>;
 
+#[derive(Clone)]
 pub struct RepositoryPublisher {
     staging_root: PathBuf,
-    operation_lock: Mutex<()>,
+    operation_lock: Arc<Mutex<()>>,
 }
 
 impl RepositoryPublisher {
     pub fn new(staging_root: PathBuf) -> Self {
         Self {
             staging_root,
-            operation_lock: Mutex::new(()),
+            operation_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -347,6 +350,7 @@ fn inspect_repository_export(
         project_scripts,
     };
     let mut target_root = None;
+    let mut allow_existing_targets = false;
 
     if diagnostics.git.available {
         match git_stdout(&selected, &["rev-parse", "--show-toplevel"]) {
@@ -389,6 +393,7 @@ fn inspect_repository_export(
                         "仓库当前处于 detached HEAD 状态。",
                     ));
                 }
+                allow_existing_targets = request.direct_publish;
 
                 diagnostics.status = git_stdout(
                     &canonical_root,
@@ -460,6 +465,16 @@ fn inspect_repository_export(
         "image",
         &mut conflicts,
     )?;
+    if allow_existing_targets {
+        conflicts.retain(|candidate| candidate.code != "TARGET_EXISTS");
+        if let Some(root) = target_root.as_deref() {
+            validate_existing_overwrites(
+                root,
+                request.content_targets.iter().chain(&request.image_targets),
+                &mut conflicts,
+            )?;
+        }
+    }
     let planned_git_operations = planned_git_operations(&request);
     let repository_ready = diagnostics.is_git_repository && conflicts.is_empty();
 
@@ -473,7 +488,7 @@ fn inspect_repository_export(
     })
 }
 
-fn inspect_repository_bundle(
+pub(crate) fn inspect_repository_bundle(
     request: RepositoryBundlePreflightRequest,
 ) -> RepositoryResult<RepositoryBundlePreflightResult> {
     validate_bundle_preflight_request(&request)?;
@@ -776,7 +791,11 @@ fn validate_request(request: &RepositoryDryRunRequest) -> RepositoryResult<()> {
     if !CONTENT_TYPES.contains(&request.content_type.as_str()) {
         return Err(RepositoryError::InvalidRequest("contentType"));
     }
-    if !valid_branch_name(&request.branch_name, &request.record_id) {
+    if !valid_branch_name(
+        &request.branch_name,
+        &request.record_id,
+        request.direct_publish,
+    ) {
         return Err(RepositoryError::InvalidRequest("branchName"));
     }
     let count = request.content_targets.len() + request.image_targets.len();
@@ -929,11 +948,34 @@ fn path_is_within(path: &Path, ancestor: &Path) -> bool {
     }
 }
 
-fn bundle_record_id(branch: &str) -> Option<&str> {
+fn offline_bundle_record_id(branch: &str) -> Option<&str> {
     let suffix = branch.strip_prefix("content/")?;
     let (date, record_id) = suffix.split_once('-')?;
     (date.len() == 8 && date.bytes().all(|byte| byte.is_ascii_digit()) && is_stable_id(record_id))
         .then_some(record_id)
+}
+
+fn direct_bundle_record_id(branch: &str) -> Option<&str> {
+    let suffix = branch.strip_prefix("content/direct-")?;
+    let (nonce, record_id) = suffix.split_once('-')?;
+    (nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && is_stable_id(record_id))
+    .then_some(record_id)
+}
+
+pub(crate) fn bundle_record_id(branch: &str) -> Option<&str> {
+    offline_bundle_record_id(branch).or_else(|| direct_bundle_record_id(branch))
+}
+
+fn valid_branch_name(value: &str, record_id: &str, direct_publish: bool) -> bool {
+    if direct_publish {
+        direct_bundle_record_id(value) == Some(record_id)
+    } else {
+        offline_bundle_record_id(value) == Some(record_id)
+    }
 }
 
 fn bundle_file_name(branch: &str) -> Option<String> {
@@ -1138,6 +1180,31 @@ fn inspect_target(root: &Path, relative: &str) -> RepositoryResult<TargetInspect
     Ok(TargetInspection::Existing)
 }
 
+fn validate_existing_overwrites<'a, I>(
+    root: &Path,
+    paths: I,
+    conflicts: &mut Vec<DryRunConflict>,
+) -> RepositoryResult<()>
+where
+    I: IntoIterator<Item = &'a String>,
+{
+    for relative in paths {
+        if inspect_target(root, relative)? != TargetInspection::Existing {
+            continue;
+        }
+        let target = join_relative(root, relative);
+        let metadata = fs::symlink_metadata(&target)?;
+        if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+            conflicts.push(conflict(
+                "UNSAFE_TARGET_PATH",
+                Some(relative),
+                "Target overwrite requires a regular file.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn planned_git_operations(request: &RepositoryDryRunRequest) -> Vec<PlannedGitOperation> {
     let mut paths = request
         .content_targets
@@ -1329,16 +1396,6 @@ fn is_stable_id(value: &str) -> bool {
         })
 }
 
-fn valid_branch_name(value: &str, record_id: &str) -> bool {
-    let Some(suffix) = value.strip_prefix("content/") else {
-        return false;
-    };
-    let Some((date, id)) = suffix.split_once('-') else {
-        return false;
-    };
-    date.len() == 8 && date.bytes().all(|byte| byte.is_ascii_digit()) && id == record_id
-}
-
 fn tool_diagnostic(program: &str, args: &[&str]) -> ToolDiagnostic {
     match Command::new(program).args(args).output() {
         Ok(output) if output.status.success() => ToolDiagnostic {
@@ -1501,14 +1558,21 @@ struct RepositoryMutation {
     index_touched: bool,
     commit_created: bool,
     installed_files: Vec<PathBuf>,
+    replaced_files: Vec<ReplacedFile>,
     temporary_files: Vec<PathBuf>,
     created_directories: Vec<PathBuf>,
+}
+
+struct ReplacedFile {
+    target: PathBuf,
+    backup: PathBuf,
 }
 
 struct TargetCopy {
     relative: String,
     temporary: PathBuf,
     target: PathBuf,
+    backup: Option<PathBuf>,
 }
 
 fn publish_local_commit<F>(
@@ -1596,6 +1660,7 @@ where
             &repository_root,
             &staging.root,
             &prepared_files,
+            request.plan.direct_publish,
             &mut mutation,
         )?;
 
@@ -1603,11 +1668,12 @@ where
         add_args.extend(expected_paths.iter().cloned());
         mutation.index_touched = true;
         controlled_git_checked(&repository_root, &hooks_root, &add_args, "stage files")?;
-        verify_staged_files(
+        let committed_paths = verify_staged_files(
             &repository_root,
             &hooks_root,
             &prepared_files,
             &expected_paths,
+            request.plan.direct_publish,
         )?;
 
         #[cfg(test)]
@@ -1638,11 +1704,9 @@ where
             &hooks_root,
             &request,
             &commit_sha,
-            &expected_paths,
+            &committed_paths,
         )?;
 
-        let mut committed_paths = expected_paths;
-        committed_paths.sort();
         Ok(RepositoryLocalCommitResult {
             branch_name: request.plan.branch_name.clone(),
             previous_head_sha: request.expected_head_sha.clone(),
@@ -1662,7 +1726,7 @@ where
     }
 }
 
-fn export_repository_bundle(
+pub(crate) fn export_repository_bundle(
     publisher: &RepositoryPublisher,
     request: RepositoryBundleExportRequest,
 ) -> RepositoryResult<RepositoryBundleExportResult> {
@@ -2329,6 +2393,7 @@ fn install_prepared_files(
     repository_root: &Path,
     staging_root: &Path,
     files: &[PreparedFile],
+    allow_overwrite: bool,
     mutation: &mut RepositoryMutation,
 ) -> RepositoryResult<()> {
     let operation_id = staging_root
@@ -2338,7 +2403,10 @@ fn install_prepared_files(
     let mut copies = Vec::new();
 
     for (index, file) in files.iter().enumerate() {
-        if inspect_target(repository_root, &file.relative)? != TargetInspection::New {
+        let inspection = inspect_target(repository_root, &file.relative)?;
+        if inspection != TargetInspection::New
+            && !(allow_overwrite && inspection == TargetInspection::Existing)
+        {
             return Err(RepositoryError::RepositoryChanged);
         }
         let target = join_relative(repository_root, &file.relative);
@@ -2348,6 +2416,13 @@ fn install_prepared_files(
         create_safe_directories(repository_root, parent, &mut mutation.created_directories)?;
 
         let temporary = parent.join(format!(".algae-publish-{operation_id}-{index}.tmp"));
+        let backup = if inspection == TargetInspection::Existing {
+            let backup = staging_root.join(format!(".algae-publish-{operation_id}-{index}.bak"));
+            copy_regular_file(&target, &backup)?;
+            Some(backup)
+        } else {
+            None
+        };
         let mut source = File::open(&file.staged_path)?;
         let mut destination = OpenOptions::new()
             .write(true)
@@ -2360,19 +2435,49 @@ fn install_prepared_files(
             relative: file.relative.clone(),
             temporary,
             target,
+            backup,
         });
     }
 
     for copy in copies {
-        if inspect_target(repository_root, &copy.relative)? != TargetInspection::New {
-            return Err(RepositoryError::RepositoryChanged);
+        match (
+            inspect_target(repository_root, &copy.relative)?,
+            copy.backup.as_ref(),
+        ) {
+            (TargetInspection::New, None) => {}
+            (TargetInspection::Existing, Some(backup))
+                if fs::read(&copy.target)? == fs::read(backup)? => {}
+            _ => return Err(RepositoryError::RepositoryChanged),
         }
-        install_atomically(&copy.temporary, &copy.target, true)?;
-        mutation.installed_files.push(copy.target.clone());
+        let replacing = copy.backup.is_some();
+        install_atomically(&copy.temporary, &copy.target, !replacing)?;
+        if let Some(backup) = copy.backup {
+            mutation.replaced_files.push(ReplacedFile {
+                target: copy.target.clone(),
+                backup,
+            });
+        } else {
+            mutation.installed_files.push(copy.target.clone());
+        }
         if let Some(parent) = copy.target.parent() {
             sync_directory(parent)?;
         }
     }
+    Ok(())
+}
+
+fn copy_regular_file(source: &Path, destination: &Path) -> RepositoryResult<()> {
+    let source_metadata = fs::symlink_metadata(source)?;
+    if !source_metadata.is_file() || is_link_or_reparse_point(&source_metadata) {
+        return Err(RepositoryError::RepositoryChanged);
+    }
+    let mut input = File::open(source)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
     Ok(())
 }
 
@@ -2425,7 +2530,8 @@ fn verify_staged_files(
     hooks_root: &Path,
     prepared: &[PreparedFile],
     expected_paths: &[String],
-) -> RepositoryResult<()> {
+    allow_existing: bool,
+) -> RepositoryResult<Vec<String>> {
     let output = controlled_git_checked(
         root,
         hooks_root,
@@ -2440,7 +2546,10 @@ fn verify_staged_files(
     )?;
     let actual = nul_paths(&output.stdout)?;
     let expected = expected_paths.iter().cloned().collect::<BTreeSet<_>>();
-    if actual != expected {
+    if actual.is_empty()
+        || (!allow_existing && actual != expected)
+        || (allow_existing && !actual.is_subset(&expected))
+    {
         return Err(RepositoryError::Git("unexpected staged paths"));
     }
 
@@ -2471,18 +2580,20 @@ fn verify_staged_files(
         hooks_root,
         &["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
-    let actual_status = status.lines().map(str::to_owned).collect::<BTreeSet<_>>();
-    let expected_status = expected_paths
-        .iter()
-        .map(|path| format!("A  {path}"))
-        .collect::<BTreeSet<_>>();
-    if actual_status != expected_status
+    let mut status_paths = BTreeSet::new();
+    for line in status.lines() {
+        if line.len() < 4 || !matches!(&line[..2], "A " | "M ") {
+            return Err(RepositoryError::Git("unexpected worktree state"));
+        }
+        status_paths.insert(line[3..].to_owned());
+    }
+    if status_paths != actual
         || !controlled_git_stdout(root, hooks_root, &["remote"])?.is_empty()
         || git_operation_in_progress(root)
     {
         return Err(RepositoryError::Git("unexpected worktree state"));
     }
-    Ok(())
+    Ok(actual.into_iter().collect())
 }
 
 fn ensure_no_git_filters(
@@ -2570,9 +2681,9 @@ fn rollback_repository_mutation(
     let mut succeeded = true;
     if mutation.index_touched {
         let mut args = vec![
-            "rm".to_owned(),
-            "--cached".to_owned(),
-            "--ignore-unmatch".to_owned(),
+            "reset".to_owned(),
+            "--quiet".to_owned(),
+            "HEAD".to_owned(),
             "--".to_owned(),
         ];
         args.extend(
@@ -2588,6 +2699,9 @@ fn rollback_repository_mutation(
             .unwrap_or(false);
     }
 
+    for replaced in mutation.replaced_files.iter().rev() {
+        succeeded &= restore_replaced_file(replaced);
+    }
     for path in mutation.installed_files.iter().rev() {
         succeeded &= remove_operation_file(path);
     }
@@ -2641,6 +2755,26 @@ fn rollback_repository_mutation(
     } else {
         Err(RepositoryError::RollbackFailed)
     }
+}
+
+fn restore_replaced_file(replaced: &ReplacedFile) -> bool {
+    let Some(parent) = replaced.target.parent() else {
+        return false;
+    };
+    let temporary = parent.join(format!(".algae-rollback-{}.tmp", Uuid::new_v4().simple()));
+    let restored = (|| -> RepositoryResult<()> {
+        let target_metadata = fs::symlink_metadata(&replaced.target)?;
+        if !target_metadata.is_file() || is_link_or_reparse_point(&target_metadata) {
+            return Err(RepositoryError::RepositoryChanged);
+        }
+        copy_regular_file(&replaced.backup, &temporary)?;
+        install_atomically(&temporary, &replaced.target, false)?;
+        sync_directory(parent)?;
+        Ok(())
+    })()
+    .is_ok();
+    let cleaned = remove_operation_file(&temporary);
+    restored && cleaned
 }
 
 fn remove_operation_file(path: &Path) -> bool {
@@ -2824,6 +2958,7 @@ mod tests {
             record_id: RECORD_ID.to_owned(),
             content_type: "science-article".to_owned(),
             branch_name: format!("content/20260724-{RECORD_ID}"),
+            direct_publish: false,
             content_targets: vec![
                 format!("content/records/science-article/{RECORD_ID}/record.json"),
                 format!("content/records/science-article/{RECORD_ID}/zh.md"),
@@ -2847,6 +2982,7 @@ mod tests {
                 record_id: RECORD_ID.to_owned(),
                 content_type: "science-article".to_owned(),
                 branch_name: format!("content/20260724-{RECORD_ID}"),
+                direct_publish: false,
                 content_targets: vec![
                     record_path.clone(),
                     body_path.clone(),
@@ -2977,6 +3113,7 @@ mod tests {
                 record_id: ACCEPTANCE_RECORD_ID.to_owned(),
                 content_type: "team-news".to_owned(),
                 branch_name: format!("content/20260724-{ACCEPTANCE_RECORD_ID}"),
+                direct_publish: false,
                 content_targets: vec![
                     record_path.clone(),
                     body_path.clone(),
@@ -3202,6 +3339,146 @@ mod tests {
     }
 
     #[test]
+    fn direct_publish_updates_the_same_record_with_unique_branches_and_rolls_back_overwrites() {
+        let (temporary, root) = repository_fixture();
+        let publisher = RepositoryPublisher::new(temporary.path().join("publication-staging"));
+        let image_loader = |draft_id: &str, staged_name: &str| {
+            assert_eq!(draft_id, DRAFT_ID);
+            assert_eq!(staged_name, format!("{IMAGE_ID}.webp"));
+            Ok(vec![0x52, 0x49, 0x46, 0x46, 0x2d, 0x57, 0x45, 0x42, 0x50])
+        };
+
+        let mut first = local_commit_request(&root);
+        first.plan.direct_publish = true;
+        first.plan.branch_name = format!("content/direct-{}-{RECORD_ID}", "a".repeat(32));
+        assert!(
+            inspect_repository_export(first.plan.clone())
+                .expect("preflights first direct publish")
+                .repository_ready
+        );
+        let first_result =
+            publish_local_commit(&publisher, first, image_loader, PublishFault::None)
+                .expect("creates first direct branch");
+
+        let mut second = local_commit_request(&root);
+        second.plan.direct_publish = true;
+        second.plan.branch_name = format!("content/direct-{}-{RECORD_ID}", "b".repeat(32));
+        for file in &mut second.text_files {
+            if file.path.ends_with("/record.json") {
+                file.contents = format!(
+                    "{{\n  \"schemaVersion\": 1,\n  \"id\": \"{RECORD_ID}\",\n  \"type\": \"science-article\",\n  \"revision\": 2\n}}\n"
+                );
+            } else if file.path.ends_with("/zh.md") {
+                file.contents = "# Updated direct content\n".to_owned();
+            }
+        }
+        let second_preflight =
+            inspect_repository_export(second.plan.clone()).expect("preflights direct update");
+        assert!(second_preflight.repository_ready, "{second_preflight:#?}");
+        assert!(second_preflight
+            .content_targets
+            .iter()
+            .all(|target| target.state == "existing"));
+        let second_result =
+            publish_local_commit(&publisher, second, image_loader, PublishFault::None)
+                .expect("creates unique update branch");
+        assert_eq!(
+            second_result.branch_name,
+            format!("content/direct-{}-{RECORD_ID}", "b".repeat(32))
+        );
+        assert_eq!(
+            git(&root, &["branch", "--show-current"]),
+            second_result.branch_name
+        );
+        assert_eq!(git(&root, &["rev-parse", "HEAD^"]), first_result.commit_sha);
+        assert_eq!(second_result.committed_paths.len(), 2);
+        assert!(git(&root, &["branch", "--list", &first_result.branch_name])
+            .contains(&first_result.branch_name));
+
+        let usb_root = temporary.path().join("usb");
+        fs::create_dir(&usb_root).expect("creates USB parent");
+        let destination = usb_root.join("direct-update");
+        let preflight_request = RepositoryBundlePreflightRequest {
+            repository_path: root.to_string_lossy().into_owned(),
+            destination_directory: destination.to_string_lossy().into_owned(),
+        };
+        let bundle_preflight =
+            inspect_repository_bundle(preflight_request.clone()).expect("preflights direct Bundle");
+        assert!(bundle_preflight.ready, "{bundle_preflight:#?}");
+        assert!(bundle_preflight
+            .bundle_file_name
+            .as_deref()
+            .is_some_and(|name| name.starts_with("content-direct-")));
+        let bundle = export_repository_bundle(
+            &publisher,
+            RepositoryBundleExportRequest {
+                repository_path: preflight_request.repository_path,
+                destination_directory: preflight_request.destination_directory,
+                expected_branch_name: second_result.branch_name.clone(),
+                expected_head_sha: second_result.commit_sha.clone(),
+                confirmed: true,
+            },
+        )
+        .expect("exports direct update Bundle");
+        let validator = run_bundle_validator(
+            &destination.join("validate-bundle.mjs"),
+            &destination.join(&bundle.bundle_file_name),
+            &destination,
+        );
+        assert!(
+            validator.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&validator.stdout),
+            String::from_utf8_lossy(&validator.stderr)
+        );
+
+        let mut failed = local_commit_request(&root);
+        failed.plan.direct_publish = true;
+        failed.plan.branch_name = format!("content/direct-{}-{RECORD_ID}", "c".repeat(32));
+        for file in &mut failed.text_files {
+            if file.path.ends_with("/record.json") {
+                file.contents = format!(
+                    "{{\n  \"schemaVersion\": 1,\n  \"id\": \"{RECORD_ID}\",\n  \"type\": \"science-article\",\n  \"revision\": 3\n}}\n"
+                );
+            } else if file.path.ends_with("/zh.md") {
+                file.contents = "# Failed direct update\n".to_owned();
+            }
+        }
+        let record_path = root.join(format!(
+            "content/records/science-article/{RECORD_ID}/record.json"
+        ));
+        let body_path = root.join(format!("content/records/science-article/{RECORD_ID}/zh.md"));
+        let record_before = fs::read(&record_path).expect("reads record before rollback");
+        let body_before = fs::read(&body_path).expect("reads body before rollback");
+        let head_before = git(&root, &["rev-parse", "HEAD"]);
+        let branch_before = git(&root, &["branch", "--show-current"]);
+        let failed_result =
+            publish_local_commit(&publisher, failed, image_loader, PublishFault::AfterStage)
+                .expect_err("rolls back failed direct overwrite");
+        assert!(matches!(failed_result, RepositoryError::InjectedFailure));
+        assert_eq!(
+            fs::read(&record_path).expect("reads restored record"),
+            record_before
+        );
+        assert_eq!(
+            fs::read(&body_path).expect("reads restored body"),
+            body_before
+        );
+        assert_eq!(git(&root, &["rev-parse", "HEAD"]), head_before);
+        assert_eq!(git(&root, &["branch", "--show-current"]), branch_before);
+        assert!(git(
+            &root,
+            &[
+                "branch",
+                "--list",
+                &format!("content/direct-{}-{RECORD_ID}", "c".repeat(32))
+            ]
+        )
+        .is_empty());
+        assert!(git(&root, &["status", "--short"]).is_empty());
+    }
+
+    #[test]
     fn protected_main_target_is_rejected_before_any_write() {
         let (temporary, root) = repository_fixture();
         let publisher = RepositoryPublisher::new(temporary.path().join("publication-staging"));
@@ -3329,6 +3606,28 @@ mod tests {
             .content_targets
             .retain(|path| !path.starts_with("content/media/"));
         assert!(inspect_repository_export(missing_metadata).is_err());
+    }
+
+    #[test]
+    fn direct_and_offline_branch_formats_remain_isolated() {
+        let (_temporary, root) = repository_fixture();
+        let mut direct_with_offline_branch = request(&root);
+        direct_with_offline_branch.direct_publish = true;
+        assert!(inspect_repository_export(direct_with_offline_branch).is_err());
+
+        let mut offline_with_direct_branch = request(&root);
+        offline_with_direct_branch.branch_name =
+            format!("content/direct-{}-{RECORD_ID}", "a".repeat(32));
+        assert!(inspect_repository_export(offline_with_direct_branch).is_err());
+
+        let mut direct = request(&root);
+        direct.direct_publish = true;
+        direct.branch_name = format!("content/direct-{}-{RECORD_ID}", "b".repeat(32));
+        assert!(
+            inspect_repository_export(direct)
+                .expect("accepts the direct branch format")
+                .repository_ready
+        );
     }
 
     #[test]

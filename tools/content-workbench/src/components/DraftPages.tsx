@@ -6,6 +6,7 @@ import {
   CloudUpload,
   Copy,
   Eye,
+  ExternalLink,
   FilePlus2,
   Files,
   LoaderCircle,
@@ -22,6 +23,7 @@ import {
   DEFAULT_APPLICATION_MODE,
   SINGLE_USER_DIRECT_OPERATOR_ID,
   applicationModeFeatures,
+  normalizeDirectPublishWorkflow,
 } from "../application-mode";
 import type { ApplicationMode } from "../application-mode";
 import { inspectDraft } from "../drafts";
@@ -197,6 +199,43 @@ export function NewDraftPage({ api, onCreated }: NewDraftPageProps) {
   );
 }
 
+export type DirectPublishProgressStage =
+  | "saving"
+  | "checking"
+  | "materializing"
+  | "committing"
+  | "publishing";
+
+export type DirectPublishSnapshot = {
+  draft: Draft;
+  stagedImages: StagedImage[];
+};
+
+export type DirectPublishResult = {
+  message: string;
+  url?: string;
+  releaseSha?: string;
+  publishedAt?: string;
+};
+
+export type DirectServerContent = {
+  stableId: string;
+  contentType: string;
+  titleZh?: string;
+  urlZh?: string;
+};
+
+export type DirectPublishServerState =
+  | "unchecked"
+  | "checking"
+  | "available"
+  | "unavailable";
+
+export type DirectPublishOptions = {
+  operatorId: string;
+  onProgress?: (stage: DirectPublishProgressStage) => void;
+};
+
 type DraftsPageProps = {
   api: DraftApi;
   mediaApi?: MediaApi;
@@ -204,9 +243,14 @@ type DraftsPageProps = {
   applicationMode?: ApplicationMode;
   onExportDraft?: (draftId: string) => void;
   onPublishToServer?: (
-    draft: Draft,
-    options: { operatorId: string },
-  ) => void;
+    snapshot: DirectPublishSnapshot,
+    options: DirectPublishOptions,
+  ) => Promise<DirectPublishResult | void> | DirectPublishResult | void;
+  serverConnectionState?: DirectPublishServerState;
+  serverConnectionError?: string | null;
+  serverContentItems?: readonly DirectServerContent[];
+  onViewServerContent?: (item: DirectServerContent) => void;
+  onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
 };
 
 export function DraftsPage({
@@ -216,6 +260,11 @@ export function DraftsPage({
   applicationMode = DEFAULT_APPLICATION_MODE,
   onExportDraft,
   onPublishToServer,
+  serverConnectionState = "available",
+  serverConnectionError = null,
+  serverContentItems = [],
+  onViewServerContent,
+  onDeleteServerContent,
 }: DraftsPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>(initialDraft ? [initialDraft] : []);
   const [selectedDraft, setSelectedDraft] = useState<Draft | null>(initialDraft);
@@ -378,6 +427,11 @@ export function DraftsPage({
                 applicationMode={applicationMode}
                 onExportDraft={onExportDraft}
                 onPublishToServer={onPublishToServer}
+                serverConnectionState={serverConnectionState}
+                serverConnectionError={serverConnectionError}
+                serverContentItems={serverContentItems}
+                onViewServerContent={onViewServerContent}
+                onDeleteServerContent={onDeleteServerContent}
               />
             ) : (
               <div className="editor-empty-state" role="status">
@@ -401,9 +455,14 @@ type DraftEditorProps = {
   applicationMode: ApplicationMode;
   onExportDraft?: (draftId: string) => void;
   onPublishToServer?: (
-    draft: Draft,
-    options: { operatorId: string },
-  ) => void;
+    snapshot: DirectPublishSnapshot,
+    options: DirectPublishOptions,
+  ) => Promise<DirectPublishResult | void> | DirectPublishResult | void;
+  serverConnectionState: DirectPublishServerState;
+  serverConnectionError: string | null;
+  serverContentItems: readonly DirectServerContent[];
+  onViewServerContent?: (item: DirectServerContent) => void;
+  onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
 };
 
 type EditorInput = {
@@ -427,6 +486,11 @@ function DraftEditor({
   applicationMode,
   onExportDraft,
   onPublishToServer,
+  serverConnectionState,
+  serverConnectionError,
+  serverContentItems,
+  onViewServerContent,
+  onDeleteServerContent,
 }: DraftEditorProps) {
   const initialInspection = inspectDraft(draft);
   const initialFormInspection = getContentFormAdapter(initialInspection.fields.contentType)
@@ -451,8 +515,13 @@ function DraftEditor({
   const [enWorkflowErrors, setEnWorkflowErrors] = useState<LocaleWorkflowErrors>({});
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<"delete" | null>(null);
+  const [pendingAction, setPendingAction] = useState<
+    "delete" | "publish" | "server-delete" | null
+  >(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishProgress, setPublishProgress] = useState<DirectPublishProgressStage>();
+  const [publishResult, setPublishResult] = useState<DirectPublishResult | null>(null);
   const [stagedImages, setStagedImages] = useState<StagedImage[]>([]);
   const [mediaLoadPending, setMediaLoadPending] = useState(true);
   const [mediaLoadError, setMediaLoadError] = useState<string | null>(null);
@@ -583,12 +652,32 @@ function DraftEditor({
   }, []);
 
   const persist = useCallback(
-    async (snapshot: EditorInput) => {
+    async (
+      requestedSnapshot: EditorInput,
+      directPublish = false,
+      persistToStorage = true,
+    ) => {
       if (saveInFlightRef.current) {
-        return;
+        return undefined;
       }
 
       const now = new Date().toISOString();
+      const snapshot = directPublish
+        ? {
+            ...requestedSnapshot,
+            zhWorkflow: normalizeDirectPublishWorkflow(
+              requestedSnapshot.zhWorkflow,
+              new Date(now),
+            ),
+            enWorkflow:
+              requestedSnapshot.enWorkflow?.state === "published"
+              ? normalizeDirectPublishWorkflow(
+                  requestedSnapshot.enWorkflow,
+                  new Date(now),
+                )
+                : requestedSnapshot.enWorkflow,
+          }
+        : requestedSnapshot;
       const prepared = updateSharedRecordDraft(
         recordDraftRef.current,
         snapshot.fields,
@@ -616,8 +705,9 @@ function DraftEditor({
         return;
       }
       const zhMediaError =
-        snapshot.zhWorkflow.state === "approved" ||
-        snapshot.zhWorkflow.state === "published"
+        !directPublish &&
+        (snapshot.zhWorkflow.state === "approved" ||
+          snapshot.zhWorkflow.state === "published")
           ? mediaCandidateError("zh")
           : undefined;
       if (zhMediaError) {
@@ -698,8 +788,9 @@ function DraftEditor({
         }
 
         const enMediaError =
-          snapshot.enWorkflow.state === "approved" ||
-          snapshot.enWorkflow.state === "published"
+          !directPublish &&
+          (snapshot.enWorkflow.state === "approved" ||
+            snapshot.enWorkflow.state === "published")
             ? mediaCandidateError("en")
             : undefined;
         if (enMediaError) {
@@ -752,6 +843,7 @@ function DraftEditor({
 
         if (
           snapshot.enWorkflow.state === "published" &&
+          !directPublish &&
           extractArticleMediaText(preparedEnglishBody).some(
             (image) => !image.alt.trim(),
           )
@@ -786,11 +878,18 @@ function DraftEditor({
         nextRecordDraft = completeRecord.recordDraft;
       }
 
-      saveInFlightRef.current = true;
-      setSaveStatus("saving");
-      setSaveError(null);
-      try {
-        const saved = await api.saveDraft({
+      const saveInput = {
+        draftId: draft.draftId,
+        recordDraft: nextRecordDraft,
+        bodyZh: preparedBody.markdown,
+        bodyEn: preparedEnglishBody,
+        ...(snapshot.parkedEnglishLocale !== undefined
+          ? { parkedEnglishLocale: snapshot.parkedEnglishLocale }
+          : {}),
+      };
+      if (!persistToStorage) {
+        return {
+          formatVersion: draft.formatVersion,
           draftId: draft.draftId,
           recordDraft: nextRecordDraft,
           bodyZh: preparedBody.markdown,
@@ -798,7 +897,16 @@ function DraftEditor({
           ...(snapshot.parkedEnglishLocale !== undefined
             ? { parkedEnglishLocale: snapshot.parkedEnglishLocale }
             : {}),
-        });
+          createdAt: draft.createdAt,
+          updatedAt: now,
+        };
+      }
+
+      saveInFlightRef.current = true;
+      setSaveStatus("saving");
+      setSaveError(null);
+      try {
+        const saved = await api.saveDraft(saveInput);
         const persistedInspection = inspectDraft(saved);
         const persistedForm = getContentFormAdapter(
           persistedInspection.fields.contentType,
@@ -809,7 +917,7 @@ function DraftEditor({
         }
         const unchangedDuringSave = sameEditorInput(
           editorInputRef.current,
-          snapshot,
+          requestedSnapshot,
         );
         if (unchangedDuringSave) {
           editorInputRef.current = persistedInput;
@@ -830,20 +938,22 @@ function DraftEditor({
         recordDraftRef.current = saved.recordDraft;
         onSaved(saved);
         setSaveStatus(unchangedDuringSave ? "saved" : "pending");
+        return saved;
       } catch (caught) {
         if (mountedRef.current) {
           setSaveError(describeError(caught));
           setSaveStatus("failed");
         }
+        return undefined;
       } finally {
         saveInFlightRef.current = false;
       }
     },
-    [api, draft.draftId, mediaCandidateError, onSaved],
+    [api, draft, mediaCandidateError, onSaved],
   );
 
   useEffect(() => {
-    if (saveStatus !== "pending" || pendingAction === "delete") {
+    if (saveStatus !== "pending" || pendingAction !== null) {
       return;
     }
 
@@ -1208,6 +1318,54 @@ function DraftEditor({
     await persist(editorInputRef.current);
   }
 
+  async function handlePublish() {
+    if (!onPublishToServer) {
+      return;
+    }
+
+    setPendingAction("publish");
+    setPublishError(null);
+    setPublishResult(null);
+    setPublishProgress("saving");
+    try {
+      const saved = await persist(editorInputRef.current);
+      if (!saved) {
+        return;
+      }
+
+      const candidate = await persist(editorInputFromDraft(saved), true, false);
+      if (!candidate) {
+        return;
+      }
+
+      const result = await onPublishToServer(
+        {
+          draft: candidate,
+          stagedImages: [...stagedImagesRef.current],
+        },
+        {
+          operatorId: SINGLE_USER_DIRECT_OPERATOR_ID,
+          onProgress: setPublishProgress,
+        },
+      );
+
+      const publishedInput = editorInputFromDraft(candidate);
+      commitEditorInput(publishedInput);
+      const finalized = await persist(publishedInput, true);
+      if (!finalized) {
+        setPublishError("服务器已发布成功，但本地草稿未能记录发布状态，请重试本地保存。");
+      }
+      if (result) {
+        setPublishResult(result);
+      }
+    } catch (caught) {
+      setPublishError(describeError(caught));
+    } finally {
+      setPublishProgress(undefined);
+      setPendingAction(null);
+    }
+  }
+
   async function handleDelete() {
     const title = editorInput.fields.titleZh.trim() || "未命名草稿";
     if (!window.confirm(`确定删除“${title}”？`)) {
@@ -1226,8 +1384,41 @@ function DraftEditor({
     }
   }
 
+  async function handleServerDelete(item: DirectServerContent) {
+    if (!onDeleteServerContent) {
+      return;
+    }
+    setPendingAction("server-delete");
+    setPublishError(null);
+    try {
+      await onDeleteServerContent(item);
+      setPublishResult(null);
+    } catch (caught) {
+      setPublishError(describeError(caught));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   const isBusy = pendingAction !== null || saveStatus === "saving";
   const fields = editorInput.fields;
+  const serverContent = serverContentItems.find(
+    (item) =>
+      item.stableId === fields.stableId && item.contentType === fields.contentType,
+  );
+  const serverAvailable = serverConnectionState === "available";
+  const serverChecking =
+    serverConnectionState === "unchecked" || serverConnectionState === "checking";
+  const publishButtonLabel =
+    pendingAction === "publish"
+      ? "正在发布..."
+      : serverChecking
+        ? "正在检查服务器"
+        : !serverAvailable
+          ? "服务器不可用"
+          : serverContent
+            ? "保存并更新服务器"
+            : "发布到服务器";
   const activeFormAdapter = getContentFormAdapter(fields.contentType);
   const activeEnglishAdapter = getEnglishContentFormAdapter(fields.contentType);
   const contentTypeOption = contentTypeOptions.find(
@@ -1527,17 +1718,30 @@ function DraftEditor({
               <button
                 className="secondary-button"
                 type="button"
-                disabled={isBusy || !onPublishToServer}
-                title={onPublishToServer ? "发布到服务器" : "服务器发布将在后续阶段接入"}
-                onClick={() =>
-                  onPublishToServer?.(draft, {
-                    operatorId: SINGLE_USER_DIRECT_OPERATOR_ID,
-                  })
+                disabled={isBusy || !onPublishToServer || !serverAvailable}
+                title={
+                  serverAvailable
+                    ? serverContent
+                      ? "保存并更新服务器"
+                      : "发布到服务器"
+                    : serverConnectionError ?? "请先检查服务器连接。"
                 }
+                onClick={() => void handlePublish()}
               >
                 <CloudUpload aria-hidden="true" size={17} />
-                发布到服务器
+                {publishButtonLabel}
               </button>
+              {serverContent?.urlZh && onViewServerContent ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => onViewServerContent(serverContent)}
+                >
+                  <ExternalLink aria-hidden="true" size={17} />
+                  查看线上页面
+                </button>
+              ) : null}
               <button
                 className="secondary-button"
                 type="button"
@@ -1547,19 +1751,67 @@ function DraftEditor({
                 <ArrowLeftRight aria-hidden="true" size={17} />
                 导出
               </button>
-              <button
-                className="danger-button"
-                type="button"
-                disabled={isBusy}
-                onClick={() => void handleDelete()}
-              >
-                <Trash2 aria-hidden="true" size={17} />
-                {pendingAction === "delete" ? "正在删除..." : "删除草稿"}
-              </button>
+              {serverContent && onDeleteServerContent ? (
+                <button
+                  className="danger-button"
+                  type="button"
+                  disabled={isBusy || !serverAvailable}
+                  title={
+                    serverAvailable
+                      ? "从服务器删除"
+                      : serverConnectionError ?? "服务器不可用"
+                  }
+                  onClick={() => void handleServerDelete(serverContent)}
+                >
+                  <Trash2 aria-hidden="true" size={17} />
+                  {pendingAction === "server-delete"
+                    ? "正在删除..."
+                    : "从服务器删除"}
+                </button>
+              ) : (
+                <button
+                  className="danger-button"
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => void handleDelete()}
+                >
+                  <Trash2 aria-hidden="true" size={17} />
+                  {pendingAction === "delete" ? "正在删除..." : "删除草稿"}
+                </button>
+              )}
             </>
           )}
         </div>
         <SaveStatusIndicator status={saveStatus} error={saveError} />
+        {publishProgress ? (
+          <p className="save-status save-status-saving" role="status" aria-live="polite">
+            <LoaderCircle className="save-status-spinner" aria-hidden="true" size={17} />
+            {publishProgressLabel(publishProgress)}
+          </p>
+        ) : null}
+        {publishError ? (
+          <p className="operation-error" role="alert">
+            {publishError}
+          </p>
+        ) : null}
+        {publishResult ? (
+          <div className="publish-result" role="status">
+            <CheckCircle2 aria-hidden="true" size={17} />
+            <span>{publishResult.message}</span>
+            {publishResult.publishedAt ? (
+              <time dateTime={publishResult.publishedAt}>
+                {formatTimestamp(publishResult.publishedAt)}
+              </time>
+            ) : null}
+            {publishResult.releaseSha ? <code>{publishResult.releaseSha}</code> : null}
+            {publishResult.url ? (
+              <a href={publishResult.url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink aria-hidden="true" size={16} />
+                打开线上页面
+              </a>
+            ) : null}
+          </div>
+        ) : null}
         {deleteError ? (
           <p className="operation-error" role="alert">
             {deleteError}
@@ -1895,6 +2147,17 @@ function formatTimestamp(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(parsed);
+}
+
+function publishProgressLabel(stage: DirectPublishProgressStage) {
+  const labels: Record<DirectPublishProgressStage, string> = {
+    saving: "正在保存当前内容",
+    checking: "正在检查服务器",
+    materializing: "正在生成并验证 Bundle",
+    committing: "正在创建本地内容提交",
+    publishing: "正在上传、构建并切换版本",
+  };
+  return labels[stage];
 }
 
 function describeError(error: unknown) {
