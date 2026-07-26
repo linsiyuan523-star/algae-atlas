@@ -5,7 +5,13 @@ import { expect, test, vi } from "vitest";
 import App from "./App";
 import type { Draft, DraftApi } from "./drafts";
 import type { OnboardingApi, OnboardingStatus } from "./onboarding";
+import type { RepositoryApi } from "./repository";
 import { createSharedRecordDraft } from "./schema-drafts";
+import type { ServerApi } from "./server";
+import {
+  emptyTeamNewsFormValues,
+  validateTeamNewsRecordDraft,
+} from "./forms/team-news";
 
 function makeDraft(titleZh = "虚构标题"): Draft {
   const prepared = createSharedRecordDraft(
@@ -105,6 +111,116 @@ function createApi(): DraftApi {
     })),
     deleteDraft: vi.fn(async () => undefined),
     takeRecoveryDraft: vi.fn(async () => null),
+  };
+}
+
+function createServerApi(): ServerApi {
+  return {
+    testConnection: vi.fn(async () => ({
+      ok: true,
+      action: "connection",
+      message: "SSH available",
+    })),
+    getStatus: vi.fn(async () => ({
+      ok: true,
+      action: "status",
+      message: "Server ready",
+      ready: true,
+      contentRepositoryReady: true,
+      serviceActive: true,
+      healthy: true,
+    })),
+    listContent: vi.fn(async () => ({
+      ok: true,
+      action: "list",
+      message: "Listed",
+      items: [],
+    })),
+    publishContent: vi.fn(async () => ({
+      ok: true,
+      action: "publish",
+      message: "Published",
+    })),
+    deleteContent: vi.fn(async () => ({
+      ok: true,
+      action: "delete",
+      message: "Deleted",
+    })),
+  };
+}
+
+function makePublishableDraft(): Draft {
+  const base = makeDraft("可发布虚构标题");
+  const prepared = validateTeamNewsRecordDraft(base.recordDraft, {
+    ...emptyTeamNewsFormValues(),
+    summaryZh: "仅用于直发集成测试的虚构摘要。",
+    eventDate: "2026-07-26",
+    category: "research",
+    authorId: "fictional-author",
+    sourceTitle: "Fictional verified source",
+    sourceUrl: "https://example.invalid/source",
+    disclosureStatus: "approved",
+  });
+  if (!prepared.success) {
+    throw new Error("publishable test draft must be valid");
+  }
+  const recordDraft = structuredClone(prepared.recordDraft) as Record<string, unknown>;
+  const shared = recordDraft.shared as Record<string, unknown>;
+  const sources = shared.sources as Array<Record<string, unknown>>;
+  sources[0] = {
+    ...sources[0],
+    verificationStatus: "verified",
+    verifiedAt: "2026-07-26",
+  };
+  return {
+    ...base,
+    recordDraft,
+    bodyZh: "## 仅用于测试的虚构正文\n",
+  };
+}
+
+function createRepositoryApi(): RepositoryApi {
+  return {
+    dryRun: vi.fn(async (request) => ({
+      diagnostics: {
+        selectedPath: request.repositoryPath,
+        canonicalRoot: request.repositoryPath,
+        isGitRepository: true,
+        currentBranch: "main",
+        headSha: "a".repeat(40),
+        worktreeClean: true,
+        status: [],
+        remotes: [],
+        git: { available: true, version: "git version test" },
+        node: { available: true, version: "v22.0.0" },
+        projectScripts: [],
+      },
+      contentTargets: request.contentTargets.map((path: string) => ({
+        path,
+        category: "content" as const,
+        state: "new" as const,
+      })),
+      imageTargets: request.imageTargets.map((path: string) => ({
+        path,
+        category: "image" as const,
+        state: "new" as const,
+      })),
+      conflicts: [],
+      plannedGitOperations: [],
+      repositoryReady: true,
+    })),
+    commit: vi.fn(async (request) => ({
+      branchName: request.plan.branchName,
+      previousHeadSha: request.expectedHeadSha,
+      commitSha: "b".repeat(40),
+      commitMessage: `content: publish ${request.plan.recordId}`,
+      committedPaths: [
+        ...request.plan.contentTargets,
+        ...request.plan.imageTargets,
+      ],
+    })),
+    bundlePreflight: vi.fn(),
+    exportBundle: vi.fn(),
   };
 }
 
@@ -358,4 +474,184 @@ test("holds the workbench behind first-run configuration until local paths are s
     draftsDirectory: "D:\\drafts",
     stagingDirectory: "D:\\staging",
   });
+});
+
+test("tests the SSH connection and reads server status", async () => {
+  const user = userEvent.setup();
+  const serverApi = createServerApi();
+  render(<App draftApi={createApi()} serverApi={serverApi} />);
+
+  await user.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: "服务器设置",
+    }),
+  );
+  expect(screen.getByText("尚未检测")).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "测试连接" }));
+
+  expect(await screen.findByText("连接可用")).toBeVisible();
+  expect(serverApi.testConnection).toHaveBeenCalledOnce();
+  expect(serverApi.getStatus).toHaveBeenCalledOnce();
+});
+
+test("loads server aliases and opens or edits matching content", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  api.listDrafts = vi.fn(async () => [draft]);
+  api.openDraft = vi.fn(async () => draft);
+  const serverApi = createServerApi();
+  serverApi.listContent = vi.fn(async () => ({
+    ok: true,
+    action: "list",
+    message: "Listed",
+    items: [
+      {
+        contentType: "team-news" as const,
+        stableId: "fictional-draft",
+        title: "服务器虚构标题",
+        urlZh: "https://example.invalid/zh/fictional-draft",
+        status: "online",
+        updatedAt: "2026-07-25T08:00:00Z",
+      },
+    ],
+  }));
+  const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  render(<App draftApi={api} serverApi={serverApi} />);
+
+  await user.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: "服务器内容",
+    }),
+  );
+
+  expect(await screen.findByText("服务器虚构标题")).toBeVisible();
+  expect(screen.getByText("https://example.invalid/zh/fictional-draft")).toBeVisible();
+  expect(screen.getByText("已发布")).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "查看 服务器虚构标题" }));
+  expect(open).toHaveBeenCalledWith(
+    "https://example.invalid/zh/fictional-draft",
+    "_blank",
+    "noopener,noreferrer",
+  );
+
+  await user.click(screen.getByRole("button", { name: "编辑 服务器虚构标题" }));
+  expect(await screen.findByRole("heading", { name: "草稿箱", level: 2 })).toBeVisible();
+  expect(screen.getByDisplayValue("虚构标题")).toBeVisible();
+  expect(api.openDraft).toHaveBeenCalledWith(draft.draftId);
+});
+
+test("deletes server content after the exact single confirmation", async () => {
+  const user = userEvent.setup();
+  const serverApi = createServerApi();
+  serverApi.listContent = vi.fn(async () => ({
+    ok: true,
+    action: "list",
+    message: "Listed",
+    items: [
+      {
+        contentType: "team-news" as const,
+        stableId: "fictional-draft",
+        titleZh: "待删除内容",
+        zhUrl: "https://example.invalid/zh/fictional-draft",
+      },
+    ],
+  }));
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<App draftApi={createApi()} serverApi={serverApi} />);
+
+  await user.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: "服务器内容",
+    }),
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "删除 待删除内容" }),
+  );
+
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(confirm).toHaveBeenCalledWith(
+    "删除后该网页将从线上移除，但服务器会保留历史版本。确认删除？",
+  );
+  expect(serverApi.deleteContent).toHaveBeenCalledWith({
+    contentType: "team-news" as const,
+    stableId: "fictional-draft",
+  });
+  await waitFor(() =>
+    expect(screen.queryByText("待删除内容")).not.toBeInTheDocument(),
+  );
+});
+
+test("checks SSH before creating one direct Bundle commit and publishing it", async () => {
+  const user = userEvent.setup();
+  const publishable = makePublishableDraft();
+  const draftApi = createApi();
+  draftApi.listDrafts = vi.fn(async () => [publishable]);
+  draftApi.openDraft = vi.fn(async () => publishable);
+  const onboardingApi = createOnboardingApi();
+  onboardingApi.status = vi.fn(async () => onboardingStatus(true));
+  const repositoryApi = createRepositoryApi();
+  const serverApi = createServerApi();
+  serverApi.publishContent = vi.fn<ServerApi["publishContent"]>(async () => ({
+    ok: true,
+    action: "publish",
+    message: "Published",
+    contentType: "team-news",
+    stableId: "fictional-draft",
+    url: "https://example.invalid/zh/news/fictional-draft",
+    releaseSha: "c".repeat(40),
+    publishedAt: "2026-07-26T09:00:00Z",
+  }));
+
+  render(
+    <App
+      draftApi={draftApi}
+      onboardingApi={onboardingApi}
+      repositoryApi={repositoryApi}
+      serverApi={serverApi}
+    />,
+  );
+
+  const navigation = await screen.findByRole("navigation", {
+    name: "工作台导航",
+  });
+  await user.click(within(navigation).getByRole("button", { name: "草稿箱" }));
+  await user.click(await screen.findByRole("button", { name: "打开 可发布虚构标题" }));
+  await user.click(
+    await screen.findByRole("button", { name: "发布到服务器" }),
+  );
+
+  await waitFor(() => expect(serverApi.testConnection).toHaveBeenCalled());
+  await waitFor(() => expect(repositoryApi.dryRun).toHaveBeenCalledOnce());
+  await waitFor(() => expect(repositoryApi.commit).toHaveBeenCalledOnce());
+  await waitFor(() => expect(serverApi.publishContent).toHaveBeenCalledOnce());
+  const dryRunRequest = vi.mocked(repositoryApi.dryRun).mock.calls[0]?.[0];
+  const commitRequest = vi.mocked(repositoryApi.commit).mock.calls[0]?.[0];
+  expect(dryRunRequest).toMatchObject({
+    repositoryPath: "D:\\fictional-worktree",
+    recordId: "fictional-draft",
+    contentType: "team-news",
+    directPublish: true,
+  });
+  expect(dryRunRequest?.branchName).toMatch(
+    /^content\/direct-[0-9a-f]{32}-fictional-draft$/,
+  );
+  expect(commitRequest?.plan.branchName).toBe(dryRunRequest?.branchName);
+  expect(serverApi.publishContent).toHaveBeenCalledWith({
+    repositoryPath: "D:\\fictional-worktree",
+    contentType: "team-news",
+    stableId: "fictional-draft",
+  });
+  expect(vi.mocked(serverApi.testConnection).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(repositoryApi.dryRun).mock.invocationCallOrder[0]!,
+  );
+  expect(vi.mocked(repositoryApi.dryRun).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(repositoryApi.commit).mock.invocationCallOrder[0]!,
+  );
+  expect(vi.mocked(repositoryApi.commit).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(serverApi.publishContent).mock.invocationCallOrder[0]!,
+  );
+  expect(await screen.findByText("Published")).toBeVisible();
+  expect(screen.getByRole("button", { name: "保存并更新服务器" })).toBeEnabled();
 });

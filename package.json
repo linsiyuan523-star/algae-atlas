@@ -33,6 +33,7 @@
     "desktop:check": "npm run check --workspace @algae-atlas/content-workbench",
     "desktop:test:scaffold": "node --test tests/content-workbench-scaffold.test.mjs",
     "desktop:test:bundle-validator": "node --test tests/content-workbench-bundle-validator.test.mjs",
+    "test:server-controller": "bash ops/algae-contentctl/tests/test-algae-contentctl.sh",
     "desktop:test": "npm run desktop:test:scaffold && npm run desktop:test:bundle-validator && npm run test --workspace @algae-atlas/content-workbench",
     "desktop:frontend:build": "npm run build --workspace @algae-atlas/content-workbench",
     "desktop:rust:fmt": "npm run rust:fmt --workspace @algae-atlas/content-workbench",

@@ -43,18 +43,6 @@ const manifestKeys = [
   "ChangedFileCount",
   "Artifacts",
 ];
-const artifacts = [
-  bundleName,
-  `${bundleName}.sha256.txt`,
-  "MANIFEST.txt",
-  "HANDOFF.md",
-  "TEST-SUMMARY.txt",
-  "CHANGED-FILES.txt",
-  "Import-Bundle.ps1",
-  "Validate-Bundle.sh",
-  "validate-bundle.mjs",
-];
-
 function git(cwd, args, encoding = "utf8") {
   return execFileSync("git", args, {
     cwd,
@@ -99,8 +87,8 @@ function refreshBundleIntegrity(fixture) {
   fixture.manifest.BundleSizeBytes = String(statSync(fixture.bundlePath).size);
   fixture.manifest.BundleSha256 = sha256(fixture.bundlePath);
   writeFileSync(
-    join(fixture.delivery, `${bundleName}.sha256.txt`),
-    `${fixture.manifest.BundleSha256}  ${bundleName}\r\n`,
+    join(fixture.delivery, `${fixture.bundleName}.sha256.txt`),
+    `${fixture.manifest.BundleSha256}  ${fixture.bundleName}\r\n`,
   );
   writeManifest(fixture);
 }
@@ -122,29 +110,43 @@ function createFixture(options = {}) {
   git(source, ["add", "--", "package.json", ".github/workflows/base.yml"]);
   git(source, ["commit", "-m", "test: initialize fixture"]);
   const baseCommit = git(source, ["rev-parse", "HEAD"]);
-  git(source, ["switch", "-c", branch]);
+  const fixtureBranch = options.branch ?? branch;
+  const fixtureRecordId = options.recordId ?? recordId;
+  const fixtureBundleName = `${fixtureBranch.replace("/", "-")}-v1.bundle`;
+  const fixtureArtifacts = [
+    fixtureBundleName,
+    `${fixtureBundleName}.sha256.txt`,
+    "MANIFEST.txt",
+    "HANDOFF.md",
+    "TEST-SUMMARY.txt",
+    "CHANGED-FILES.txt",
+    "Import-Bundle.ps1",
+    "Validate-Bundle.sh",
+    "validate-bundle.mjs",
+  ];
+  git(source, ["switch", "-c", fixtureBranch]);
 
   const fixtureChangedPath = options.changedPath ?? changedPath;
   mkdirSync(dirname(join(source, ...fixtureChangedPath.split("/"))), { recursive: true });
   writeFileSync(join(source, ...fixtureChangedPath.split("/")), "{\"schemaVersion\":1}\n");
   git(source, ["add", "--", fixtureChangedPath]);
-  git(source, ["commit", "-m", `content: publish ${recordId}`]);
+  git(source, ["commit", "-m", `content: publish ${fixtureRecordId}`]);
   const headCommit = git(source, ["rev-parse", "HEAD"]);
-  const bundlePath = join(delivery, bundleName);
-  git(source, ["bundle", "create", bundlePath, `refs/heads/${branch}`]);
+  const bundlePath = join(delivery, fixtureBundleName);
+  git(source, ["bundle", "create", bundlePath, `refs/heads/${fixtureBranch}`]);
 
   const manifest = {
     FormatVersion: "1",
-    Branch: branch,
+    Branch: fixtureBranch,
     HeadCommit: headCommit,
     BaseCommit: baseCommit,
-    BundleFile: bundleName,
+    BundleFile: fixtureBundleName,
     BundleSizeBytes: String(statSync(bundlePath).size),
     BundleSha256: sha256(bundlePath),
     History: "complete",
-    ImportBranch: `import/${branch.replace("/", "-")}`,
+    ImportBranch: `import/${fixtureBranch.replace("/", "-")}`,
     ChangedFileCount: "1",
-    Artifacts: artifacts.join(","),
+    Artifacts: fixtureArtifacts.join(","),
   };
   const fixture = {
     temporary,
@@ -152,11 +154,14 @@ function createFixture(options = {}) {
     delivery,
     validationTemp,
     bundlePath,
+    branch: fixtureBranch,
+    recordId: fixtureRecordId,
+    bundleName: fixtureBundleName,
     manifest,
     changedPath: fixtureChangedPath,
   };
   writeManifest(fixture);
-  writeFileSync(join(delivery, `${bundleName}.sha256.txt`), `${manifest.BundleSha256}  ${bundleName}\r\n`);
+  writeFileSync(join(delivery, `${fixtureBundleName}.sha256.txt`), `${manifest.BundleSha256}  ${fixtureBundleName}\r\n`);
   writeFileSync(join(delivery, "HANDOFF.md"), "# Offline Content Bundle Handoff\n");
   writeTestSummary(fixture);
   writeFileSync(join(delivery, "CHANGED-FILES.txt"), `${fixtureChangedPath}\r\n`);
@@ -225,6 +230,51 @@ test("portable validator accepts a complete workbench-format Bundle without sour
     assert.deepEqual(readdirSync(fixture.validationTemp), [], "temporary Git repository was not cleaned");
   } finally {
     cleanupFixture(fixture);
+  }
+});
+
+test("portable validator accepts a unique direct-publishing branch", () => {
+  const directBranch = "content/direct-0123456789abcdef0123456789abcdef-portable-validator";
+  const fixture = createFixture({ branch: directBranch });
+  try {
+    const result = runValidator(fixture);
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /^VALIDATION_RESULT=PASS$/m);
+    assert.match(
+      result.stdout,
+      new RegExp(`^HEAD_REF=refs/heads/${directBranch}$`, "m"),
+    );
+    assert.match(result.stdout, /^CHANGED_FILE_COUNT=1$/m);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test("portable validator accepts a controlled public upload image path", () => {
+  const fixture = createFixture({
+    changedPath: "public/images/uploads/2026/07/fictional-image.thumbnail.webp",
+  });
+  try {
+    const result = runValidator(fixture);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /^VALIDATION_RESULT=PASS$/m);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test("portable validator rejects malformed public upload image paths", () => {
+  for (const changedPath of [
+    "public/images/uploads/2026/13/fictional-image.webp",
+    "public/images/uploads/2026/07/fictional-image.svg",
+  ]) {
+    const fixture = createFixture({ changedPath });
+    try {
+      assertFailure(runValidator(fixture), "PATHS");
+    } finally {
+      cleanupFixture(fixture);
+    }
   }
 });
 

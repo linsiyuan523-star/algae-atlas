@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import {
+  CONTENT_TYPES,
+  type ContentType,
+} from "@algae-atlas/content-schema";
+
 import { websiteContentRepository } from "../../lib/content-repository/default-repository";
 import { createFileBackedContentRepository } from "../../lib/content-repository/file-repository";
 import {
@@ -16,11 +21,88 @@ import {
   getContentRouteRecord,
   listContentRoutes,
 } from "../../lib/content-repository/routes";
-import type { CollectionSourceSelection } from "../../lib/content-repository/types";
+import type {
+  CollectionSourceSelection,
+  PublicContentEntry,
+  PublicContentRepository,
+} from "../../lib/content-repository/types";
 
 const fixtureRoot = fileURLToPath(
   new URL("../fixtures/content-repository/", import.meta.url),
 );
+
+const directPublishSections = {
+  "team-news": "news",
+  "research-output": "outputs",
+  "research-project": "projects",
+  "learning-resource": "tutorials",
+  "algae-profile": "algae",
+  "live-feed-profile": "live-feeds",
+  "coastal-observation": "observations",
+  "science-article": "insights",
+  "team-member": "team",
+  collaboration: "collaboration",
+  "research-profile": "research",
+} as const satisfies Record<ContentType, string>;
+
+function directPublishRepository(): PublicContentRepository {
+  const entries = Object.fromEntries(
+    CONTENT_TYPES.map((type) => {
+      const id = type === "research-profile" ? "live-feeds" : `fictional-${type}`;
+      const entry: PublicContentEntry = {
+        id,
+        type,
+        source: "records",
+        tags: [],
+        shared: {},
+        locales: {
+          zh: {
+            locale: "zh",
+            title: `Fictional ${type}`,
+            summary: `Fictional ${type} summary`,
+            fields: {},
+            updatedAt: "2026-07-26T09:00:00+08:00",
+          },
+        },
+        media: {},
+      };
+      return [type, [entry]];
+    }),
+  ) as Record<ContentType, PublicContentEntry[]>;
+
+  return {
+    entries(type) {
+      return entries[type];
+    },
+    list(type, locale) {
+      return entries[type].flatMap((entry) => {
+        const content = entry.locales[locale];
+        return content ? [{ ...entry, locale, content }] : [];
+      });
+    },
+    get(type, id, locale) {
+      const entry = entries[type].find((candidate) => candidate.id === id);
+      const content = entry?.locales[locale];
+      return entry && content ? { ...entry, locale, content } : null;
+    },
+    availability(type, id) {
+      const entry = entries[type].find((candidate) => candidate.id === id);
+      return entry
+        ? {
+            zh: Boolean(entry.locales.zh),
+            en: Boolean(entry.locales.en),
+            fallbackSection: {
+              zh: `/zh/${directPublishSections[type]}`,
+              en: `/en/${directPublishSections[type]}`,
+            },
+          }
+        : null;
+    },
+    sourceKind() {
+      return "records";
+    },
+  };
+}
 
 test("默认网站 repository 明确让全部真实集合继续使用 legacy", () => {
   const routes = listContentRoutes(websiteContentRepository);
@@ -142,4 +224,32 @@ test("仅中文记录统一控制静态参数、alternate、sitemap 与语言回
   );
   assert.deepEqual(zhOnlyRoutes.map((item) => item.locale), ["zh"]);
   assert.equal("en" in zhOnlyRoutes[0].alternates, false);
+});
+
+test("all schema-backed direct publishing types resolve to website detail routes", () => {
+  const repository = directPublishRepository();
+  const routes = listContentRoutes(repository);
+
+  assert.equal(routes.length, CONTENT_TYPES.length);
+  for (const type of CONTENT_TYPES) {
+    const id = type === "research-profile" ? "live-feeds" : `fictional-${type}`;
+    const section = directPublishSections[type];
+    const route = findContentRoute(repository, section, id);
+
+    assert.ok(route, `${type} should resolve at /${section}/${id}`);
+    assert.equal(route.type, type);
+    assert.equal(route.suffix, `/${section}/${id}`);
+    assert.ok(getContentRouteRecord(repository, section, id, "zh"));
+  }
+
+  const staticPaths = contentRouteStaticParams(repository)
+    .map(({ locale, slug }) => `${locale}/${slug.join("/")}`)
+    .sort();
+  assert.deepEqual(
+    staticPaths,
+    CONTENT_TYPES.map((type) => {
+      const id = type === "research-profile" ? "live-feeds" : `fictional-${type}`;
+      return `zh/${directPublishSections[type]}/${id}`;
+    }).sort(),
+  );
 });

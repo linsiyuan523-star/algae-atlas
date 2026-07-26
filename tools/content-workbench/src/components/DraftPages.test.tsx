@@ -3,6 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
 import { AUTOSAVE_DELAY_MS, DraftsPage, NewDraftPage } from "./DraftPages";
+import type {
+  DirectPublishOptions,
+  DirectPublishResult,
+  DirectPublishSnapshot,
+} from "./DraftPages";
 import { SINGLE_USER_DIRECT_OPERATOR_ID } from "../application-mode";
 import type { Draft, DraftApi } from "../drafts";
 import {
@@ -50,6 +55,16 @@ function makeDraft(titleZh = "初始标题"): Draft {
 }
 
 const draft = makeDraft();
+
+function makeDirectPublishableDraft(): Draft {
+  const recordDraft = structuredClone(draft.recordDraft) as Record<string, unknown>;
+  recordDraft.authors = ["fictional-author"];
+  return {
+    ...draft,
+    recordDraft,
+    bodyZh: "## 虚构正文\n",
+  };
+}
 
 function makeScienceArticleDraft(): Draft {
   const prepared = createSharedRecordDraft(
@@ -414,12 +429,25 @@ test("opens a live localized detail preview from the draft editor", async () => 
 test("uses the direct single-user action order without reviewer inputs", async () => {
   const user = userEvent.setup();
   const api = createApi();
+  const publishable = makeDirectPublishableDraft();
+  api.listDrafts = vi.fn(async () => [publishable]);
+  api.openDraft = vi.fn(async () => publishable);
   const onExportDraft = vi.fn();
-  const onPublishToServer = vi.fn();
+  const onPublishToServer = vi.fn<
+    (
+      snapshot: DirectPublishSnapshot,
+      options: DirectPublishOptions,
+    ) => Promise<DirectPublishResult>
+  >(async () => ({
+      message: "发布成功",
+      url: "https://example.invalid/zh/news/fictional-draft",
+      releaseSha: "a".repeat(40),
+      publishedAt: "2026-07-26T09:00:00Z",
+    }));
   render(
     <DraftsPage
       api={api}
-      initialDraft={draft}
+      initialDraft={publishable}
       onExportDraft={onExportDraft}
       onPublishToServer={onPublishToServer}
     />,
@@ -443,11 +471,136 @@ test("uses the direct single-user action order without reviewer inputs", async (
 
   await waitFor(() => expect(buttons[2]).toBeEnabled());
   await user.click(buttons[2]!);
-  expect(onPublishToServer).toHaveBeenCalledWith(draft, {
-    operatorId: SINGLE_USER_DIRECT_OPERATOR_ID,
+  await waitFor(() => expect(onPublishToServer).toHaveBeenCalledOnce());
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledTimes(2));
+  expect(onPublishToServer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      draft: expect.objectContaining({ draftId: draft.draftId }),
+      stagedImages: [],
+    }),
+    {
+      operatorId: SINGLE_USER_DIRECT_OPERATOR_ID,
+      onProgress: expect.any(Function),
+    },
+  );
+  const candidateRecord = vi.mocked(onPublishToServer).mock.calls[0]?.[0].draft
+    .recordDraft as {
+    locales: { zh: { state: string; review: { reviewerIds: string[] } } };
+  };
+  const ordinaryRecord = vi.mocked(api.saveDraft).mock.calls[0]?.[0].recordDraft as {
+    locales: { zh: { state: string } };
+  };
+  const publishedRecord = vi.mocked(api.saveDraft).mock.calls[1]?.[0].recordDraft as {
+    locales: { zh: { state: string; review: { reviewerIds: string[] } } };
+  };
+  expect(ordinaryRecord.locales.zh.state).toBe("draft");
+  expect(candidateRecord.locales.zh).toMatchObject({
+    state: "published",
+    review: { reviewerIds: [SINGLE_USER_DIRECT_OPERATOR_ID] },
   });
+  expect(publishedRecord.locales.zh).toMatchObject({
+    state: "published",
+    review: { reviewerIds: [SINGLE_USER_DIRECT_OPERATOR_ID] },
+  });
+  expect(vi.mocked(api.saveDraft).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(onPublishToServer).mock.invocationCallOrder[0]!,
+  );
+  expect(vi.mocked(onPublishToServer).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(api.saveDraft).mock.invocationCallOrder[1]!,
+  );
+  expect(await screen.findByText("发布成功")).toBeVisible();
+  expect(
+    document.querySelector('time[datetime="2026-07-26T09:00:00Z"]'),
+  ).not.toBeNull();
+  await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_DELAY_MS + 50));
+  expect(api.saveDraft).toHaveBeenCalledTimes(2);
   await user.click(buttons[3]!);
   expect(onExportDraft).toHaveBeenCalledWith(draft.draftId);
+});
+
+test("keeps a draft unpublished when direct server publishing fails", async () => {
+  const user = userEvent.setup();
+  const api = createApi();
+  const publishable = makeDirectPublishableDraft();
+  api.listDrafts = vi.fn(async () => [publishable]);
+  api.openDraft = vi.fn(async () => publishable);
+  const onPublishToServer = vi.fn(async () => {
+    throw new Error("Fictional server failure");
+  });
+  render(
+    <DraftsPage
+      api={api}
+      initialDraft={publishable}
+      onPublishToServer={onPublishToServer}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "发布到服务器" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Fictional server failure",
+  );
+  expect(onPublishToServer).toHaveBeenCalledOnce();
+  expect(api.saveDraft).toHaveBeenCalledOnce();
+  const ordinaryRecord = vi.mocked(api.saveDraft).mock.calls[0]?.[0].recordDraft as {
+    locales: { zh: { state: string } };
+  };
+  expect(ordinaryRecord.locales.zh.state).toBe("draft");
+  await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_DELAY_MS + 50));
+  expect(api.saveDraft).toHaveBeenCalledOnce();
+});
+
+test("shows update, online view, and server delete actions for a published ID", async () => {
+  const user = userEvent.setup();
+  const onViewServerContent = vi.fn();
+  const onDeleteServerContent = vi.fn(async () => undefined);
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      onPublishToServer={vi.fn()}
+      serverConnectionState="available"
+      serverContentItems={[
+        {
+          stableId: "fictional-draft",
+          contentType: "team-news",
+          titleZh: "初始标题",
+          urlZh: "https://example.invalid/zh/news/fictional-draft",
+        },
+      ]}
+      onViewServerContent={onViewServerContent}
+      onDeleteServerContent={onDeleteServerContent}
+    />,
+  );
+
+  await user.click(
+    await screen.findByRole("button", { name: "查看线上页面" }),
+  );
+  expect(onViewServerContent).toHaveBeenCalledOnce();
+  expect(
+    screen.getByRole("button", { name: "保存并更新服务器" }),
+  ).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "从服务器删除" }));
+  await waitFor(() => expect(onDeleteServerContent).toHaveBeenCalledOnce());
+  expect(screen.queryByRole("button", { name: "删除草稿" })).toBeNull();
+});
+
+test("keeps local actions available while server publishing is unavailable", () => {
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      onExportDraft={vi.fn()}
+      onPublishToServer={vi.fn()}
+      serverConnectionState="unavailable"
+      serverConnectionError="请检查网络、VPN、SSH 配置或密钥。"
+    />,
+  );
+
+  expect(screen.getByRole("button", { name: "服务器不可用" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "本地预览" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "导出" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "删除草稿" })).toBeEnabled();
 });
 
 test("validates and serializes the team-news pilot before saving", async () => {

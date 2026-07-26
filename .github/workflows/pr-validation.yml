@@ -170,3 +170,6 @@ jobs:
 
       - name: Test the portable validator and Ubuntu shell entry
         run: npm run desktop:test:bundle-validator
+
+      - name: Test the server content controller
+        run: npm run test:server-controller

@@ -122,6 +122,35 @@ test("审核人和机器翻译人工复核人必须解析到公开作者", () =>
   );
 });
 
+test("单用户直发操作人保留在审核字段但不要求成为文章作者", () => {
+  const record = structuredClone(validRecordFixtures["science-article"]);
+  const locales = record.locales as Record<string, Record<string, unknown>>;
+  const review = locales.zh.review as Record<string, unknown>;
+  review.reviewerIds = ["workbench-single-user"];
+  const snapshot = structuredClone(validRepositorySnapshotFixture);
+  snapshot.records = [record];
+  const issues = validateRepository(snapshot);
+  assert.equal(
+    issues.some((issue) => issue.code === "REVIEWER_REFERENCE_MISSING"),
+    false,
+  );
+});
+
+test("单用户直发操作人不能替代公开文章作者", () => {
+  const record = structuredClone(validRecordFixtures["science-article"]);
+  record.authors = ["workbench-single-user"];
+  const snapshot = structuredClone(validRepositorySnapshotFixture);
+  snapshot.records = [record];
+  const issues = validateRepository(snapshot);
+  assert.equal(
+    issues.some(
+      (issue) =>
+        issue.code === "AUTHOR_REFERENCE_MISSING" && issue.path === "authors",
+    ),
+    true,
+  );
+});
+
 test("图片权利或人物授权未完成会阻止发布", () => {
   const recordInput = structuredClone(validRecordFixtures["science-article"]);
   recordInput.media = [fixtureMedia.id];
