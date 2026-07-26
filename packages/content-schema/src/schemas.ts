@@ -71,7 +71,7 @@ const teamNewsSharedSchema = z
     relatedContentIds: stableIdList,
     participantAuthorIds: stableIdList,
     sources: z.array(sourceSchema).default([]),
-    disclosureStatus: z.enum(["pending", "approved"]),
+    disclosureStatus: z.enum(["pending", "approved"]).default("pending"),
   })
   .superRefine((shared, context) => {
     if (shared.endDate && shared.endDate < shared.eventDate) {
@@ -85,6 +85,7 @@ const teamNewsSharedSchema = z
   });
 
 const teamNewsLocalizedSchema = z.strictObject({
+  authorName: optionalText,
   participantDescription: optionalText,
   captions: z.record(stableIdSchema, requiredText).default({}),
 });
@@ -660,6 +661,22 @@ function hasPublishedLocale(record: z.infer<typeof baseContentRecordSchema>) {
   );
 }
 
+function publishedTeamNewsLocalesHaveBylines(
+  record: z.infer<typeof baseContentRecordSchema>,
+) {
+  if (record.type !== "team-news") {
+    return false;
+  }
+
+  return (["zh", "en"] as const).every((locale) => {
+    const localized = record.locales[locale];
+    return (
+      localized.state !== "published" ||
+      Boolean(localized.fields.authorName?.trim())
+    );
+  });
+}
+
 function sourcesAreVerified(sources: Array<z.infer<typeof sourceSchema>>) {
   return sources.length > 0 && sources.every((source) => source.verificationStatus === "verified");
 }
@@ -675,7 +692,11 @@ export const contentRecordSchema = baseContentRecordSchema.superRefine(
       );
     }
 
-    if (hasPublishedLocale(record) && record.authors.length === 0) {
+    if (
+      hasPublishedLocale(record) &&
+      record.authors.length === 0 &&
+      !publishedTeamNewsLocalesHaveBylines(record)
+    ) {
       addRecordIssue(
         context,
         ["authors"],
@@ -722,22 +743,6 @@ export const contentRecordSchema = baseContentRecordSchema.superRefine(
 
     switch (record.type) {
       case "team-news":
-        if (record.shared.disclosureStatus !== "approved") {
-          addRecordIssue(
-            context,
-            ["shared", "disclosureStatus"],
-            "NEWS_DISCLOSURE_REQUIRED",
-            "团队动态发布前必须确认公开范围",
-          );
-        }
-        if (!sourcesAreVerified(record.shared.sources)) {
-          addRecordIssue(
-            context,
-            ["shared", "sources"],
-            "NEWS_SOURCE_REQUIRED",
-            "团队动态发布前必须有已核验来源",
-          );
-        }
         break;
       case "research-output":
         if (!sourcesAreVerified(record.shared.verificationSources)) {

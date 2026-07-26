@@ -20,6 +20,7 @@ type PreviewWorkflowState =
 type PreviewReviewStatus = "draft" | "internal-review" | "reviewed" | "rejected";
 
 export type DetailPreviewLocale = {
+  authorName?: string;
   title: string;
   summary: string;
   body: string;
@@ -188,6 +189,10 @@ function PreviewArticle({
   const timestampLabel = value.isPublished
     ? labels.publishedAt
     : labels.updatedAt;
+  const authorLabel = value.authorName?.trim() ||
+    (authors.length > 0
+      ? authors.join(locale === "zh" ? "、" : ", ")
+      : labels.noAuthor);
 
   return (
     <article
@@ -208,7 +213,7 @@ function PreviewArticle({
         <dl className="detail-preview-meta">
           <div>
             <dt>{labels.author}</dt>
-            <dd>{authors.length > 0 ? authors.join(locale === "zh" ? "、" : ", ") : labels.noAuthor}</dd>
+            <dd>{authorLabel}</dd>
           </div>
           <div>
             <dt>{timestampLabel}</dt>

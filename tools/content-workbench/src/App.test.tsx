@@ -156,25 +156,17 @@ function makePublishableDraft(): Draft {
     summaryZh: "仅用于直发集成测试的虚构摘要。",
     eventDate: "2026-07-26",
     category: "research",
-    authorId: "fictional-author",
-    sourceTitle: "Fictional verified source",
-    sourceUrl: "https://example.invalid/source",
-    disclosureStatus: "approved",
+    authorName: "虚构作者",
+    sourceTitle: "",
+    sourceUrl: "",
+    disclosureStatus: "",
   });
   if (!prepared.success) {
     throw new Error("publishable test draft must be valid");
   }
-  const recordDraft = structuredClone(prepared.recordDraft) as Record<string, unknown>;
-  const shared = recordDraft.shared as Record<string, unknown>;
-  const sources = shared.sources as Array<Record<string, unknown>>;
-  sources[0] = {
-    ...sources[0],
-    verificationStatus: "verified",
-    verifiedAt: "2026-07-26",
-  };
   return {
     ...base,
-    recordDraft,
+    recordDraft: prepared.recordDraft,
     bodyZh: "## 仅用于测试的虚构正文\n",
   };
 }
@@ -757,6 +749,15 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
     /^content\/direct-[0-9a-f]{32}-fictional-draft$/,
   );
   expect(commitRequest?.plan.branchName).toBe(dryRunRequest?.branchName);
+  const recordFile = commitRequest?.textFiles.find((file) =>
+    file.path.endsWith("/record.json"),
+  );
+  expect(recordFile).toBeDefined();
+  expect(JSON.parse(recordFile?.contents ?? "{}")).toMatchObject({
+    authors: [],
+    shared: { disclosureStatus: "pending", sources: [] },
+    locales: { zh: { fields: { authorName: "虚构作者" } } },
+  });
   expect(serverApi.publishContent).toHaveBeenCalledWith({
     repositoryPath: "D:\\fictional-worktree",
     contentType: "team-news",

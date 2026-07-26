@@ -118,7 +118,7 @@ function acceptanceDraft(images: readonly StagedImage[]): Draft {
     endDate: "",
     category: "research",
     pinned: false,
-    authorId: "stage-08c-author",
+    authorName: "虚构验收作者",
     sourceTitle: "Stage 8C 本地验收记录",
     sourceUrl: "",
     disclosureStatus: "approved",
@@ -187,7 +187,8 @@ test("completes the Stage 8C team-news candidate through responsive preview and 
   expect(record.locales.en).toEqual({ state: "missing" });
   expect(record.shared.coverMediaId).toBe(COVER_ID);
   expect(record.media).toEqual([COVER_ID, BODY_ID]);
-  expect(record.authors).toEqual(["stage-08c-author"]);
+  expect(record.authors).toEqual([]);
+  expect(record.locales.zh.fields.authorName).toBe("虚构验收作者");
 
   const previewMedia: DetailPreviewMedia[] = images.map((image) => {
     const parsed = parseMedia(createMediaRecordCandidate(image));

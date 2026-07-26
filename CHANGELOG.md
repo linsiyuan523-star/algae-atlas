@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Allowed team-news drafts to use a localized Chinese byline and publish without a source URL, verified-source approval, or disclosure approval.
+- Kept workbench fields focused and editable while background autosave is in progress.
+
 ## [1.0.1] - 2026-07-20
 
 ### Added

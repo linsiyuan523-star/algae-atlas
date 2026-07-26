@@ -9,6 +9,7 @@ const preview: DetailPreviewValue = {
   authors: ["fictional-author"],
   locales: {
     zh: {
+      authorName: "张海宁",
       title: "虚构藻类观察",
       summary: "仅用于详情预览测试的虚构摘要。",
       body: [
@@ -84,7 +85,7 @@ test("renders localized detail metadata, safe body content, images, and attribut
   const article = screen.getByRole("article");
   expect(within(article).getByRole("heading", { name: "虚构藻类观察", level: 1 })).toBeVisible();
   expect(article).toHaveTextContent("仅用于详情预览测试的虚构摘要。");
-  expect(article).toHaveTextContent("fictional-author");
+  expect(article).toHaveTextContent("张海宁");
   expect(article).toHaveTextContent("内部审核");
   expect(within(article).getByRole("heading", { name: "形态观察", level: 2 })).toBeVisible();
   expect(within(article).getByRole("link", { name: "安全来源" })).toHaveAttribute(
