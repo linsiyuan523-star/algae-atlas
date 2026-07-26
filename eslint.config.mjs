@@ -11,6 +11,11 @@ const eslintConfig = defineConfig([
     ".next/**",
     "out/**",
     "build/**",
+    "packages/content-schema/.browser-contract/**",
+    "tools/content-workbench/dist/**",
+    "tools/content-workbench/coverage/**",
+    "tools/content-workbench/src-tauri/target/**",
+    "tools/content-workbench/src-tauri/gen/schemas/**",
     "next-env.d.ts",
   ]),
 ]);

@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "id": "fictional-bilingual-article",
+  "type": "science-article",
+  "createdAt": "2026-07-20T09:00:00+08:00",
+  "updatedAt": "2026-07-20T09:00:00+08:00",
+  "authors": [
+    "fictional-site-reader"
+  ],
+  "tags": [
+    "fictional-fixture",
+    "bilingual"
+  ],
+  "media": [],
+  "shared": {
+    "articleKind": "foundation",
+    "publicationDate": "2026-07-20",
+    "targetAudience": "general",
+    "references": [],
+    "relatedContentIds": []
+  },
+  "locales": {
+    "zh": {
+      "state": "published",
+      "title": "虚构的双语读取测试",
+      "summary": "此双语 fixture 只用于自动化测试。",
+      "bodyFile": "zh.md",
+      "fields": {
+        "topic": "虚构双语测试",
+        "targetAudienceLabel": "自动化测试",
+        "takeaways": [
+          "中英文独立发布"
+        ]
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "reviewed",
+        "updatedAt": "2026-07-20",
+        "reviewedAt": "2026-07-20",
+        "version": "1.0",
+        "reviewerIds": [
+          "fictional-site-reader"
+        ],
+        "references": []
+      },
+      "publishedAt": "2026-07-20T09:00:00+08:00"
+    },
+    "en": {
+      "state": "published",
+      "title": "Fictional bilingual loader test",
+      "summary": "This bilingual fixture exists only for automated tests.",
+      "bodyFile": "en.md",
+      "fields": {
+        "topic": "Fictional bilingual test",
+        "targetAudienceLabel": "Automated tests",
+        "takeaways": [
+          "Locales publish independently"
+        ]
+      },
+      "translationOrigin": "human-translated",
+      "review": {
+        "status": "reviewed",
+        "updatedAt": "2026-07-20",
+        "reviewedAt": "2026-07-20",
+        "version": "1.0",
+        "reviewerIds": [
+          "fictional-site-reader"
+        ],
+        "references": []
+      },
+      "publishedAt": "2026-07-20T09:00:00+08:00"
+    }
+  }
+}

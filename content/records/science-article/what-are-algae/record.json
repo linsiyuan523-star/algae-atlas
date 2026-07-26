@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "what-are-algae",
+  "type": "science-article",
+  "createdAt": "2026-07-22T14:09:28.415Z",
+  "updatedAt": "2026-07-22T14:09:28.415Z",
+  "authors": [],
+  "tags": [],
+  "media": [],
+  "shared": {
+    "articleKind": "foundation",
+    "publicationDate": "2026-07-10",
+    "targetAudience": "general",
+    "readingTimeMinutes": 4,
+    "references": [],
+    "relatedContentIds": []
+  },
+  "locales": {
+    "zh": {
+      "state": "draft",
+      "title": "藻类究竟是什么？",
+      "summary": "“藻类”不是单一生物分类，而是对多种生活在水中或潮湿环境、能够进行光合作用的生物的广义称呼。",
+      "bodyFile": "zh.md",
+      "fields": {
+        "topic": "基础概念",
+        "targetAudienceLabel": "公众读者",
+        "categoryLabel": "基础概念",
+        "takeaways": []
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "draft",
+        "updatedAt": "2026-07-22",
+        "version": "0.1",
+        "reviewerIds": [],
+        "references": []
+      }
+    },
+    "en": {
+      "state": "draft",
+      "title": "What Exactly Are Algae?",
+      "summary": "Algae are not a single biological lineage, but a broad term for many photosynthetic organisms living in water or moist environments.",
+      "bodyFile": "en.md",
+      "fields": {
+        "topic": "Foundations",
+        "targetAudienceLabel": "General readers",
+        "categoryLabel": "Foundations",
+        "takeaways": []
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "draft",
+        "updatedAt": "2026-07-22",
+        "version": "0.1",
+        "reviewerIds": [],
+        "references": []
+      }
+    }
+  },
+  "legacy": {
+    "sourcePath": "lib/site-data.ts",
+    "exportName": "articles",
+    "sourceId": "what-are-algae",
+    "migratedAt": "2026-07-22T14:09:28.415Z"
+  }
+}

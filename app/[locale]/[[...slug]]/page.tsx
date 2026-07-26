@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SiteShell } from "@/components/SiteShell";
+import { StructuredContentPage } from "@/components/StructuredContentPage";
 import { CollaborationPage } from "@/components/CollaborationPages";
 import { LiveFeedDetail, LiveFeedsPage } from "@/components/LiveFeedsPages";
 import { AlgalBloomsPage } from "@/components/ResearchCapabilityPages";
@@ -21,16 +22,37 @@ import {
   TutorialDetail,
   TutorialsPage,
 } from "@/components/SitePages";
-import { algae, applications, articles, projects, text, type Locale, type LocalizedText } from "@/lib/site-data";
-import { liveFeedEntries } from "@/lib/live-feeds-data";
-import { researchAreas, tutorials } from "@/lib/team-data";
+import { websiteContentRepository } from "@/lib/content-repository/default-repository";
+import {
+  contentLanguageSwitchHref,
+  contentRouteAlternates,
+  contentRouteStaticParams,
+  findContentRoute,
+  getContentRouteRecord,
+} from "@/lib/content-repository/routes";
+import type { PublicRecord } from "@/lib/content-repository/types";
+import type { LiveFeedEntry } from "@/lib/live-feeds-data";
+import {
+  applications,
+  projects,
+  text,
+  type AlgaeEntry,
+  type ArticleEntry,
+  type FeatureEntry,
+  type Locale,
+  type LocalizedText,
+} from "@/lib/site-data";
+import type { ResearchArea, TutorialEntry } from "@/lib/team-data";
 
 type PageProps = {
   params: Promise<{ locale: string; slug?: string[] }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-type RouteMeta = { title: LocalizedText; description: LocalizedText };
+type RouteMeta = {
+  title: string | LocalizedText;
+  description: string | LocalizedText;
+};
 
 const homeMeta: RouteMeta = {
   title: {
@@ -116,45 +138,51 @@ function localized(value: string | LocalizedText, locale: Locale) {
   return typeof value === "string" ? value : text(value, locale);
 }
 
-function detailMeta(section: string | undefined, id: string | undefined, locale: Locale) {
-  if (!section || !id) return null;
-  if (section === "algae") {
-    const entry = algae.find((item) => item.id === id);
-    return entry ? { title: text(entry.name, locale), description: text(entry.summary, locale) } : null;
+function legacyDetailMeta(
+  section: string | undefined,
+  id: string | undefined,
+  locale: Locale,
+): RouteMeta | null {
+  if (!section || !id || (section !== "applications" && section !== "projects")) {
+    return null;
   }
-  if (section === "research") {
-    if (id === "algal-blooms") {
-      return {
-        title: locale === "zh" ? "近岸藻华与赤潮监测" : "Coastal Algal Blooms and Red-Tide Monitoring",
-        description: locale === "zh"
-          ? "了解近岸藻华与赤潮监测的研究问题、现场记录、样品分析、数据边界与潜在合作。"
-          : "Explore research questions, field records, sample analysis, data boundaries, and potential collaboration for coastal algal blooms and red-tide monitoring.",
-      };
-    }
-    const entry = researchAreas.find((item) => item.id === id);
-    return entry ? { title: text(entry.title, locale), description: text(entry.summary, locale) } : null;
-  }
-  if (section === "tutorials") {
-    const entry = tutorials.find((item) => item.id === id);
-    return entry ? { title: text(entry.name, locale), description: text(entry.purpose, locale) } : null;
-  }
-  if (section === "live-feeds") {
-    const entry = liveFeedEntries.find((item) => item.id === id);
-    return entry
-      ? {
-          title: {
-            zh: `${entry.name.zh}｜生物饵料与浮游动物`,
-            en: `${entry.name.en} | Live Feeds & Zooplankton`,
-          },
-          description: entry.overview,
-        }
-      : null;
-  }
-  const entry =
-    articles.find((item) => item.id === id) ??
-    projects.find((item) => item.id === id) ??
-    applications.find((item) => item.id === id);
+  const entries = section === "applications" ? applications : projects;
+  const entry = entries.find((item) => item.id === id);
   return entry ? { title: text(entry.title, locale), description: text(entry.summary, locale) } : null;
+}
+
+function legacyPayload<T>(record: PublicRecord): T | null {
+  return record.source === "legacy" && record.legacyData
+    ? (record.legacyData as T)
+    : null;
+}
+
+function renderContentDetail(record: PublicRecord, locale: Locale): React.ReactNode {
+  if (record.source === "records") return <StructuredContentPage record={record} />;
+  if (record.type === "research-profile" && record.id === "algal-blooms") {
+    return <AlgalBloomsPage locale={locale} />;
+  }
+  if (record.type === "research-profile") {
+    const area = legacyPayload<ResearchArea>(record);
+    return area ? <ResearchDetail locale={locale} area={area} /> : null;
+  }
+  if (record.type === "live-feed-profile") {
+    const entry = legacyPayload<LiveFeedEntry>(record);
+    return entry ? <LiveFeedDetail locale={locale} entry={entry} /> : null;
+  }
+  if (record.type === "learning-resource") {
+    const entry = legacyPayload<TutorialEntry>(record);
+    return entry ? <TutorialDetail locale={locale} entry={entry} /> : null;
+  }
+  if (record.type === "algae-profile") {
+    const entry = legacyPayload<AlgaeEntry>(record);
+    return entry ? <AlgaeDetail locale={locale} entry={entry} /> : null;
+  }
+  if (record.type === "science-article") {
+    const entry = legacyPayload<FeatureEntry | ArticleEntry>(record);
+    return entry ? <LegacyDetail locale={locale} entry={entry} /> : null;
+  }
+  return null;
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -162,20 +190,35 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   if (!validLocale(rawLocale)) return {};
   const locale = rawLocale;
   const [section, id] = slug;
-  const meta = detailMeta(section, id, locale) ?? (section ? routeMeta[section] : homeMeta) ?? homeMeta;
+  const contentRoute = findContentRoute(websiteContentRepository, section, id);
+  const contentRecord = contentRoute
+    ? getContentRouteRecord(websiteContentRepository, section, id, locale)
+    : null;
+  if (contentRoute && !contentRecord) return {};
+  const meta = contentRecord
+    ? {
+        title: contentRecord.content.seoTitle ?? contentRecord.content.title,
+        description: contentRecord.content.summary,
+      }
+    : legacyDetailMeta(section, id, locale) ??
+      (section ? routeMeta[section] : homeMeta) ??
+      homeMeta;
   const title = localized(meta.title, locale);
   const description = localized(meta.description, locale);
   const suffix = slug.length ? `/${slug.join("/")}` : "";
   const url = `/${locale}${suffix}`;
   const useAlgaeSocialImage = section !== "live-feeds";
+  const contentAlternates = contentRoute
+    ? contentRouteAlternates(contentRoute, locale)
+    : null;
 
   return {
     title: { absolute: title },
     description,
-    alternates: {
-      canonical: url,
-      languages: { "zh-CN": `/zh${suffix}`, en: `/en${suffix}`, "x-default": `/zh${suffix}` },
-    },
+    alternates: contentAlternates ?? {
+        canonical: url,
+        languages: { "zh-CN": `/zh${suffix}`, en: `/en${suffix}`, "x-default": `/zh${suffix}` },
+      },
     openGraph: {
       type: "website",
       siteName: locale === "zh" ? "广东海洋大学藻类团队" : "Algae Research Team, Guangdong Ocean University",
@@ -195,22 +238,18 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export function generateStaticParams() {
   const base = ["team", "research", "live-feeds", "collaboration", "outputs", "tutorials", "algae", "news", "contact", "about", "privacy", "insights", "applications", "projects"];
-  const details = [
-    ...researchAreas.map((entry) => ["research", entry.id]),
-    ["research", "algal-blooms"],
-    ...liveFeedEntries.map((entry) => ["live-feeds", entry.id]),
-    ...tutorials.map((entry) => ["tutorials", entry.id]),
-    ...algae.map((entry) => ["algae", entry.id]),
-    ...articles.map((entry) => ["insights", entry.id]),
-    ...projects.map((entry) => ["insights", entry.id]),
+  const legacyDetails = [
     ...projects.map((entry) => ["projects", entry.id]),
     ...applications.map((entry) => ["applications", entry.id]),
   ];
-  return (["zh", "en"] as const).flatMap((locale) => [
-    { locale, slug: undefined },
-    ...base.map((section) => ({ locale, slug: [section] })),
-    ...details.map((slug) => ({ locale, slug })),
-  ]);
+  return [
+    ...(["zh", "en"] as const).flatMap((locale) => [
+      { locale, slug: undefined },
+      ...base.map((section) => ({ locale, slug: [section] })),
+      ...legacyDetails.map((slug) => ({ locale, slug })),
+    ]),
+    ...contentRouteStaticParams(websiteContentRepository),
+  ];
 }
 
 export default async function LocalizedPage({ params, searchParams }: PageProps) {
@@ -219,47 +258,50 @@ export default async function LocalizedPage({ params, searchParams }: PageProps)
   if (!validLocale(rawLocale) || slug.length > 2) notFound();
   const locale = rawLocale;
   const [section, id] = slug;
+  const contentRoute = findContentRoute(websiteContentRepository, section, id);
+  const contentRecord = contentRoute
+    ? getContentRouteRecord(websiteContentRepository, section, id, locale)
+    : null;
   let page: React.ReactNode;
 
   if (!section) page = <HomePage locale={locale} />;
   else if (section === "team" && !id) page = <TeamPage locale={locale} />;
   else if (section === "collaboration" && !id) page = <CollaborationPage locale={locale} />;
   else if (section === "research" && !id) page = <ResearchPage locale={locale} />;
-  else if (section === "research" && id === "algal-blooms") page = <AlgalBloomsPage locale={locale} />;
-  else if (section === "research" && id) {
-    const area = researchAreas.find((item) => item.id === id);
-    if (!area) notFound();
-    page = <ResearchDetail locale={locale} area={area} />;
-  } else if (section === "live-feeds" && !id) page = <LiveFeedsPage locale={locale} />;
-  else if (section === "live-feeds" && id) {
-    const entry = liveFeedEntries.find((item) => item.id === id);
-    if (!entry) notFound();
-    page = <LiveFeedDetail locale={locale} entry={entry} />;
-  } else if (section === "outputs" && !id) {
+  else if (section === "live-feeds" && !id) page = <LiveFeedsPage locale={locale} />;
+  else if (section === "outputs" && !id) {
     page = <OutputsPage locale={locale} category={typeof query.category === "string" ? query.category : undefined} />;
   } else if (section === "tutorials" && !id) page = <TutorialsPage locale={locale} />;
-  else if (section === "tutorials" && id) {
-    const entry = tutorials.find((item) => item.id === id);
-    if (!entry) notFound();
-    page = <TutorialDetail locale={locale} entry={entry} />;
-  } else if (section === "algae" && !id) {
+  else if (section === "algae" && !id) {
     page = <AlgaeLibrary locale={locale} typeFilter={typeof query.type === "string" ? query.type : undefined} />;
-  } else if (section === "algae" && id) {
-    const entry = algae.find((item) => item.id === id);
-    if (!entry) notFound();
-    page = <AlgaeDetail locale={locale} entry={entry} />;
   } else if (section === "news" && !id) page = <NewsPage locale={locale} />;
   else if (section === "about" && !id) page = <AboutPage locale={locale} />;
   else if (section === "contact" && !id) page = <ContactPage locale={locale} />;
   else if (section === "privacy" && !id) page = <PrivacyPage locale={locale} />;
   else if ((section === "insights" || section === "applications" || section === "projects") && !id) {
     page = <LegacyIndex locale={locale} section={section} />;
-  } else if ((section === "insights" || section === "applications" || section === "projects") && id) {
-    const entries = section === "applications" ? applications : section === "projects" ? projects : [...articles, ...projects];
+  } else if (contentRoute) {
+    if (!contentRecord) notFound();
+    page = renderContentDetail(contentRecord, locale);
+    if (!page) notFound();
+  } else if ((section === "applications" || section === "projects") && id) {
+    const entries = section === "applications" ? applications : projects;
     const entry = entries.find((item) => item.id === id);
     if (!entry) notFound();
     page = <LegacyDetail locale={locale} entry={entry} />;
   } else notFound();
 
-  return <SiteShell locale={locale} pathParts={slug}>{page}</SiteShell>;
+  const languageSwitchHref = contentRecord
+    ? contentLanguageSwitchHref(
+        websiteContentRepository,
+        locale,
+        section,
+        id,
+      ) ?? undefined
+    : undefined;
+  return (
+    <SiteShell locale={locale} pathParts={slug} languageSwitchHref={languageSwitchHref}>
+      {page}
+    </SiteShell>
+  );
 }

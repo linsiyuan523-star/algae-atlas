@@ -1,0 +1,414 @@
+{
+  "reportVersion": 1,
+  "mode": "write",
+  "contentSchemaVersion": 1,
+  "repositoryApiVersion": 1,
+  "migrationLedgerVersion": 1,
+  "operationAt": "2026-07-22T14:09:28.415Z",
+  "migrated": [
+    {
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json",
+      "status": "written"
+    },
+    {
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json",
+      "status": "written"
+    },
+    {
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json",
+      "status": "written"
+    }
+  ],
+  "skipped": [
+    {
+      "code": "MANUAL_CLASSIFICATION_REQUIRED",
+      "message": "Legacy project-like content needs an authorized content-type decision.",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "projects",
+        "sourceId": "pond-seasons"
+      }
+    },
+    {
+      "code": "MANUAL_CLASSIFICATION_REQUIRED",
+      "message": "Legacy project-like content needs an authorized content-type decision.",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "projects",
+        "sourceId": "light-and-color"
+      }
+    },
+    {
+      "code": "MANUAL_CLASSIFICATION_REQUIRED",
+      "message": "Legacy project-like content needs an authorized content-type decision.",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "projects",
+        "sourceId": "intertidal-green-belt"
+      }
+    },
+    {
+      "code": "EMPTY_COLLECTION_PRESERVED",
+      "message": "The legacy collection is empty and remains unchanged.",
+      "source": {
+        "sourcePath": "lib/team-data.ts",
+        "exportName": "news"
+      }
+    },
+    {
+      "code": "EMPTY_COLLECTION_PRESERVED",
+      "message": "The legacy collection is empty and remains unchanged.",
+      "source": {
+        "sourcePath": "lib/team-data.ts",
+        "exportName": "outputs"
+      }
+    },
+    {
+      "code": "EMPTY_COLLECTION_PRESERVED",
+      "message": "The legacy collection is empty and remains unchanged.",
+      "source": {
+        "sourcePath": "lib/team-data.ts",
+        "exportName": "teamMembers"
+      }
+    },
+    {
+      "code": "DEFERRED_ADAPTER",
+      "message": "This legacy collection is deferred to a later approved adapter batch.",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "algae"
+      }
+    },
+    {
+      "code": "DEFERRED_ADAPTER",
+      "message": "This legacy collection is deferred to a later approved adapter batch.",
+      "source": {
+        "sourcePath": "lib/team-data.ts",
+        "exportName": "tutorials"
+      }
+    },
+    {
+      "code": "DEFERRED_ADAPTER",
+      "message": "This legacy collection is deferred to a later approved adapter batch.",
+      "source": {
+        "sourcePath": "lib/live-feeds-data.ts",
+        "exportName": "liveFeedEntries"
+      }
+    },
+    {
+      "code": "DEFERRED_ADAPTER",
+      "message": "This legacy collection is deferred to a later approved adapter batch.",
+      "source": {
+        "sourcePath": "lib/research-capabilities-data.ts",
+        "exportName": "researchCapabilities"
+      }
+    },
+    {
+      "code": "DEFERRED_ADAPTER",
+      "message": "This legacy collection is deferred to a later approved adapter batch.",
+      "source": {
+        "sourcePath": "lib/collaboration-data.ts",
+        "exportName": "collaborationAreas"
+      }
+    }
+  ],
+  "missingFields": [
+    {
+      "code": "AUTHOR_MISSING",
+      "message": "旧数据没有可核验作者 ID。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json",
+      "field": "authors"
+    },
+    {
+      "code": "REVIEWER_MISSING",
+      "message": "旧数据没有可核验审核人 ID。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json",
+      "field": "locales.*.review.reviewerIds"
+    },
+    {
+      "code": "AUTHOR_MISSING",
+      "message": "旧数据没有可核验作者 ID。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json",
+      "field": "authors"
+    },
+    {
+      "code": "REVIEWER_MISSING",
+      "message": "旧数据没有可核验审核人 ID。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json",
+      "field": "locales.*.review.reviewerIds"
+    },
+    {
+      "code": "AUTHOR_MISSING",
+      "message": "旧数据没有可核验作者 ID。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json",
+      "field": "authors"
+    },
+    {
+      "code": "REVIEWER_MISSING",
+      "message": "旧数据没有可核验审核人 ID。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json",
+      "field": "locales.*.review.reviewerIds"
+    }
+  ],
+  "manualReview": [
+    {
+      "code": "AUTHOR_CONFIRMATION_REQUIRED",
+      "message": "发布前必须确认公开作者。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json"
+    },
+    {
+      "code": "TRANSLATION_PROVENANCE_UNVERIFIED",
+      "message": "英文来源历史需要人工确认。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json"
+    },
+    {
+      "code": "TARGET_AUDIENCE_DERIVED",
+      "message": "general 来源于现有公众科普栏目。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json"
+    },
+    {
+      "code": "BODY_COMPLETENESS_REVIEW_REQUIRED",
+      "message": "候选正文只保留现有摘要。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json"
+    },
+    {
+      "code": "PUBLICATION_REVIEW_REQUIRED",
+      "message": "候选保持 draft，不能切换来源。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json"
+    },
+    {
+      "code": "AUTHOR_CONFIRMATION_REQUIRED",
+      "message": "发布前必须确认公开作者。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json"
+    },
+    {
+      "code": "TRANSLATION_PROVENANCE_UNVERIFIED",
+      "message": "英文来源历史需要人工确认。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json"
+    },
+    {
+      "code": "TARGET_AUDIENCE_DERIVED",
+      "message": "general 来源于现有公众科普栏目。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json"
+    },
+    {
+      "code": "BODY_COMPLETENESS_REVIEW_REQUIRED",
+      "message": "候选正文只保留现有摘要。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json"
+    },
+    {
+      "code": "PUBLICATION_REVIEW_REQUIRED",
+      "message": "候选保持 draft，不能切换来源。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json"
+    },
+    {
+      "code": "AUTHOR_CONFIRMATION_REQUIRED",
+      "message": "发布前必须确认公开作者。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json"
+    },
+    {
+      "code": "TRANSLATION_PROVENANCE_UNVERIFIED",
+      "message": "英文来源历史需要人工确认。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json"
+    },
+    {
+      "code": "TARGET_AUDIENCE_DERIVED",
+      "message": "general 来源于现有公众科普栏目。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json"
+    },
+    {
+      "code": "BODY_COMPLETENESS_REVIEW_REQUIRED",
+      "message": "候选正文只保留现有摘要。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json"
+    },
+    {
+      "code": "PUBLICATION_REVIEW_REQUIRED",
+      "message": "候选保持 draft，不能切换来源。",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json"
+    }
+  ],
+  "conflicts": [],
+  "missingImageAttribution": [
+    {
+      "code": "IMAGE_USAGE_SCOPE_PENDING",
+      "message": "/images/zhutu.png: 用户提供 / Provided by the site owner; 使用范围待确认 / Usage scope pending confirmation",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "what-are-algae"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/what-are-algae/record.json",
+      "field": "shared.coverMediaId"
+    },
+    {
+      "code": "IMAGE_USAGE_SCOPE_PENDING",
+      "message": "/images/tidai.jpg: 用户提供 / Provided by the site owner; 使用范围待确认 / Usage scope pending confirmation",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "why-water-turns-green"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/why-water-turns-green/record.json",
+      "field": "shared.coverMediaId"
+    },
+    {
+      "code": "IMAGE_USAGE_SCOPE_PENDING",
+      "message": "/images/guandaofanyinqi.jpg: 用户提供 / Provided by the site owner; 使用范围待确认 / Usage scope pending confirmation",
+      "source": {
+        "sourcePath": "lib/site-data.ts",
+        "exportName": "articles",
+        "sourceId": "photobioreactor-basics"
+      },
+      "targetType": "science-article",
+      "targetPath": "content/records/science-article/photobioreactor-basics/record.json",
+      "field": "shared.coverMediaId"
+    }
+  ],
+  "validationIssues": []
+}

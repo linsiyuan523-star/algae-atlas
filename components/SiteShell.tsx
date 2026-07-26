@@ -5,6 +5,7 @@ import { navigation, otherLocale, secondaryNavigation, site, text, type Locale }
 type SiteShellProps = {
   locale: Locale;
   pathParts?: string[];
+  languageSwitchHref?: string;
   children: ReactNode;
 };
 
@@ -55,10 +56,16 @@ function NavLinks({
   );
 }
 
-export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) {
+export function SiteShell({
+  locale,
+  pathParts = [],
+  languageSwitchHref,
+  children,
+}: SiteShellProps) {
   const active = pathParts[0] ?? "";
   const targetLocale = otherLocale(locale);
   const suffix = pathParts.length ? `/${pathParts.join("/")}` : "";
+  const switchHref = languageSwitchHref ?? `/${targetLocale}${suffix}`;
 
   return (
     <>
@@ -72,7 +79,7 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
             <NavLinks locale={locale} active={active} />
           </nav>
           <div className="header-actions">
-            <Link className="language-switch" href={`/${targetLocale}${suffix}`} lang={targetLocale}>
+            <Link className="language-switch" href={switchHref} lang={targetLocale}>
               {targetLocale === "zh" ? "中文" : "EN"}
             </Link>
             <details className="mobile-menu">
@@ -84,7 +91,7 @@ export function SiteShell({ locale, pathParts = [], children }: SiteShellProps) 
                 <NavLinks locale={locale} active={active} />
                 <span className="mobile-nav-divider" aria-hidden="true" />
                 <NavLinks locale={locale} active={active} items={secondaryNavigation} />
-                <Link href={`/${targetLocale}${suffix}`} lang={targetLocale}>
+                <Link href={switchHref} lang={targetLocale}>
                   {targetLocale === "zh" ? "切换至中文" : "Switch to English"}
                 </Link>
               </nav>

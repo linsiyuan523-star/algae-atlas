@@ -1,5 +1,5 @@
 # Dependencies and package-manager state
-/node_modules/
+node_modules/
 /.pnp/
 .pnp.*
 .yarn/*
@@ -17,6 +17,11 @@
 /coverage/
 /outputs/
 /work/
+/packages/content-schema/.browser-contract/
+/tools/content-workbench/dist/
+/tools/content-workbench/coverage/
+/tools/content-workbench/src-tauri/target/
+/tools/content-workbench/src-tauri/gen/schemas/
 
 # Logs and temporary files
 *.log

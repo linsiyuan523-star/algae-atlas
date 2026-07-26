@@ -1,0 +1,175 @@
+name: PR validation
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  website:
+    name: Website and content checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Type, lint, and desktop frontend checks
+        run: npm run check
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Build the Next.js production site
+        run: npm run build:next
+
+      - name: Validate formal content
+        run: npm run content:validate
+
+      - name: Dry-run content migration
+        run: npm run content:migrate -- --dry-run
+
+      - name: Confirm migration did not change the worktree
+        shell: bash
+        run: git diff --exit-code
+
+  security:
+    name: Dependency and RustSec audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run npm audits and preserve JSON results
+        id: npm-audit
+        shell: bash
+        run: |
+          set +e
+          npm audit --omit=dev --json > npm-audit-production.json
+          production_status=$?
+          npm audit --json > npm-audit-all.json
+          all_status=$?
+          printf 'production audit exit: %s\nfull audit exit: %s\n' "$production_status" "$all_status"
+          printf 'production_status=%s\nall_status=%s\n' "$production_status" "$all_status" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Run RustSec audit
+        id: rustsec-audit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo audit --file tools/content-workbench/src-tauri/Cargo.lock --json | tee rustsec-audit.json
+          test "$(jq -r '.vulnerabilities.found' rustsec-audit.json)" = "false"
+          test "$(jq '.warnings.unsound | length' rustsec-audit.json)" -eq 0
+
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-audit-results
+          path: |
+            npm-audit-production.json
+            npm-audit-all.json
+            rustsec-audit.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Enforce security gates
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.npm-audit.outputs.production_status }}" = "0"
+          test "${{ steps.npm-audit.outputs.all_status }}" = "0"
+          test "${{ steps.rustsec-audit.outcome }}" = "success"
+
+  desktop:
+    name: Windows Rust and desktop checks
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm.cmd ci
+
+      - name: Install the locked Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc
+
+      - name: Install required Rust components
+        run: rustup component add --toolchain 1.97.1-x86_64-pc-windows-msvc rustfmt clippy
+
+      - name: Check Rust formatting
+        run: npm.cmd run desktop:rust:fmt
+
+      - name: Check Rust targets
+        run: npm.cmd run desktop:rust:check
+
+      - name: Run Rust Clippy with warnings as errors
+        run: npm.cmd run desktop:rust:clippy
+
+      - name: Run Rust tests
+        run: npm.cmd run desktop:rust:test
+
+      - name: Build the unsigned NSIS candidate
+        run: npm.cmd run desktop:build
+
+      - name: Upload the unsigned CI candidate
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: content-workbench-unsigned-nsis
+          path: tools/content-workbench/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: ignore
+          retention-days: 7
+
+  bundle-validator:
+    name: Ubuntu Bundle validator
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.13.0
+
+      - name: Test the portable validator and Ubuntu shell entry
+        run: npm run desktop:test:bundle-validator
+
+      - name: Test the server content controller
+        run: npm run test:server-controller

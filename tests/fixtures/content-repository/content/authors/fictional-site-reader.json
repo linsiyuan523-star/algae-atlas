@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "fictional-site-reader",
+  "kind": "team",
+  "status": "active",
+  "displayName": {
+    "zh": "虚构网站读取测试组",
+    "en": "Fictional Website Reader Test Group"
+  },
+  "publicLinks": [],
+  "publicScope": "approved"
+}

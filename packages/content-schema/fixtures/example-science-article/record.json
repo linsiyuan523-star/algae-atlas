@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "fictional-example-science-article",
+  "type": "science-article",
+  "createdAt": "2026-07-22T09:00:00+08:00",
+  "updatedAt": "2026-07-22T09:00:00+08:00",
+  "authors": [
+    "fictional-algae-team"
+  ],
+  "tags": [
+    "fictional-fixture"
+  ],
+  "media": [],
+  "shared": {
+    "articleKind": "foundation",
+    "publicationDate": "2026-07-22",
+    "targetAudience": "general",
+    "references": [],
+    "relatedContentIds": []
+  },
+  "locales": {
+    "zh": {
+      "state": "published",
+      "title": "虚构示例科普文章",
+      "summary": "该记录只用于展示 schema，不是真实公开内容。",
+      "bodyFile": "zh.md",
+      "fields": {
+        "topic": "虚构示例主题",
+        "targetAudienceLabel": "公众",
+        "takeaways": [
+          "不得把 fixture 当作真实资料"
+        ]
+      },
+      "translationOrigin": "source-authored",
+      "review": {
+        "status": "reviewed",
+        "updatedAt": "2026-07-22",
+        "reviewedAt": "2026-07-22",
+        "version": "1.0",
+        "reviewerIds": [
+          "fictional-algae-team"
+        ],
+        "references": []
+      },
+      "publishedAt": "2026-07-22T09:00:00+08:00"
+    },
+    "en": {
+      "state": "missing"
+    }
+  }
+}

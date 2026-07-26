@@ -1,0 +1,33 @@
+Final integration combines the complete Stage-00 through Stage-03 history with
+the complete Stage-04 through Stage-08C desktop history.
+
+Stage-03 retained areas:
+- content/migration-ledger.json
+- content/records/science-article/
+- delivery/migration-reports/stage-03-science-articles.json
+- docs/content-workbench/MIGRATION-TOOL.md
+- scripts/content-migration/
+- scripts/migrate-content.ts
+- scripts/validate-content.ts
+- tests/content-migration/
+- tests/content-repository/
+
+Stage-08C retained areas:
+- docs/content-workbench/ACCEPTANCE-REPORT.md
+- docs/content-workbench/ADMIN-SECURITY.md
+- docs/content-workbench/BACKUP-RECOVERY.md
+- docs/content-workbench/QUICKSTART.md
+- docs/content-workbench/TROUBLESHOOTING.md
+- scripts/build-windows-candidate.ps1
+- tests/content-workbench-scaffold.test.mjs
+- tools/content-workbench/
+
+Final integration reports are listed after validation. Generated dependencies,
+build output, installers, temporary repositories, and bundles are not committed.
+
+Final integration metadata:
+- FINAL-INTEGRATION-REPORT.md
+- SECURITY-AUDIT.md
+- ACCEPTANCE-REPORT.md
+- RELEASE-CANDIDATE-NOTES.md
+- package.json and package-lock.json (Next.js 16.2.11)

@@ -1,0 +1,22 @@
+/content/** text eol=lf
+/lib/content-repository/** text eol=lf
+/packages/content-schema/** text eol=lf
+/scripts/validate-content.ts text eol=lf
+/tests/content-repository/** text eol=lf
+/tests/fixtures/content-repository/** text eol=lf
+/package*.json text eol=lf
+/tsconfig.content-loader.json text eol=lf
+/.gitignore text eol=lf
+/eslint.config.mjs text eol=lf
+/docs/content-workbench/** text eol=lf
+/docs/superpowers/** text eol=lf
+/delivery/** text eol=lf
+/scripts/content-migration/** text eol=lf
+/scripts/migrate-content.ts text eol=lf
+/tests/content-migration/** text eol=lf
+/tsconfig.content-migration.json text eol=lf
+/.gitattributes text eol=lf
+/ops/algae-contentctl/** text eol=lf
+/tools/content-workbench/** text eol=lf
+/tools/content-workbench/**/*.png binary
+/tools/content-workbench/**/*.ico binary

@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": false,
+    "incremental": false,
+    "noEmit": true
+  },
+  "include": [
+    "scripts/content-migration/**/*.ts",
+    "scripts/migrate-content.ts",
+    "scripts/validate-content.ts",
+    "tests/content-migration/**/*.ts"
+  ],
+  "exclude": ["node_modules", ".next", "build", "dist"]
+}

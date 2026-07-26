@@ -1,0 +1,1283 @@
+#!/usr/bin/env bash
+# Controlled server-side publisher for the Algae Atlas content workbench.
+# This script deliberately accepts only four fixed commands. It never reads
+# /srv/algae-atlas/source and it never executes helpers uploaded with a bundle.
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+
+readonly PROGRAM_NAME="algae-contentctl"
+readonly INSTALLED_PATH="/usr/local/sbin/algae-contentctl"
+readonly DEFAULT_CONTENT_ROOT="/srv/algae-content"
+readonly DEFAULT_INCOMING_ROOT="/home/ubuntu/algae-content-workbench/incoming"
+readonly DEFAULT_SITE_ROOT="/srv/algae-atlas"
+readonly DEFAULT_SITE_REPOSITORY_URL="https://github.com/linsiyuan523-star/algae-atlas.git"
+readonly DEFAULT_SITE_BRANCH="main"
+readonly DEFAULT_SERVICE_NAME="algae-atlas.service"
+readonly DEFAULT_HEALTH_URL="http://127.0.0.1:3000/"
+readonly DEFAULT_LOCAL_BASE_URL="http://127.0.0.1:3000"
+readonly DEFAULT_PUBLIC_BASE_URL="https://sycszy.icu"
+readonly MAX_BUNDLE_BYTES=$((512 * 1024 * 1024))
+readonly MAX_ARTIFACT_BYTES=$((4 * 1024 * 1024))
+readonly MAX_CONTENT_FILE_BYTES=$((64 * 1024 * 1024))
+
+JSON_MODE=false
+ACTION=""
+ERROR_EMITTED=false
+SUCCESS=false
+TEST_MODE=false
+TEST_LINK_FILES=false
+TX_ROOT=""
+OP_LOG=""
+LOCK_DIR=""
+LOCK_FD_OPEN=false
+RELEASE_ACTIVATED=false
+RELEASE_ROLLBACK_FAILED=false
+BUILD_STAGING_DIRECTORY=""
+NEW_RELEASE_DIRECTORY=""
+FORMAL_REPOSITORY_MOVED=false
+FORMAL_REPOSITORY_SWAPPED=false
+OLD_CURRENT_RELEASE=""
+OLD_PREVIOUS_RELEASE=""
+FORMAL_REPOSITORY_BACKUP=""
+CANDIDATE_REPOSITORY=""
+SITE_SOURCE_REPOSITORY=""
+SITE_SOURCE_SHA=""
+
+if [[ "${ALGAE_CONTENTCTL_TESTING:-}" == "1" && "$(realpath -m -- "$0")" != "$INSTALLED_PATH" ]]; then
+  TEST_MODE=true
+  [[ "${ALGAE_TEST_LINK_FILES:-}" == "1" ]] && TEST_LINK_FILES=true
+fi
+
+configuration_value() {
+  local name=$1
+  local fallback=$2
+  if $TEST_MODE && [[ -n "${!name:-}" ]]; then
+    printf '%s' "${!name}"
+  else
+    printf '%s' "$fallback"
+  fi
+}
+
+CONTENT_ROOT="$(configuration_value ALGAE_CONTENT_ROOT "$DEFAULT_CONTENT_ROOT")"
+CONTENT_REPOSITORY="$CONTENT_ROOT/repository"
+TRANSACTION_ROOT="$CONTENT_ROOT/transactions"
+INCOMING_ROOT="$(configuration_value ALGAE_INCOMING_ROOT "$DEFAULT_INCOMING_ROOT")"
+SITE_ROOT="$(configuration_value ALGAE_SITE_ROOT "$DEFAULT_SITE_ROOT")"
+RELEASES_ROOT="$SITE_ROOT/releases"
+CURRENT_LINK="$SITE_ROOT/current"
+PREVIOUS_LINK="$SITE_ROOT/previous"
+SITE_REPOSITORY_URL="$(configuration_value ALGAE_SITE_REPOSITORY_URL "$DEFAULT_SITE_REPOSITORY_URL")"
+SITE_BRANCH="$(configuration_value ALGAE_SITE_BRANCH "$DEFAULT_SITE_BRANCH")"
+SERVICE_NAME="$(configuration_value ALGAE_SERVICE_NAME "$DEFAULT_SERVICE_NAME")"
+HEALTH_URL="$(configuration_value ALGAE_HEALTH_URL "$DEFAULT_HEALTH_URL")"
+LOCAL_BASE_URL="$(configuration_value ALGAE_LOCAL_BASE_URL "$DEFAULT_LOCAL_BASE_URL")"
+PUBLIC_BASE_URL="$(configuration_value ALGAE_PUBLIC_BASE_URL "$DEFAULT_PUBLIC_BASE_URL")"
+HEALTH_ATTEMPTS="$(configuration_value ALGAE_HEALTH_ATTEMPTS "20")"
+GIT_BIN="$(configuration_value ALGAE_GIT_BIN "$(command -v git 2>/dev/null || true)")"
+NPM_BIN="$(configuration_value ALGAE_NPM_BIN "$(command -v npm 2>/dev/null || true)")"
+NODE_BIN="$(configuration_value ALGAE_NODE_BIN "$(command -v node 2>/dev/null || true)")"
+SYSTEMCTL_BIN="$(configuration_value ALGAE_SYSTEMCTL_BIN "$(command -v systemctl 2>/dev/null || true)")"
+CURL_BIN="$(configuration_value ALGAE_CURL_BIN "$(command -v curl 2>/dev/null || true)")"
+CHMOD_BIN="$(configuration_value ALGAE_CHMOD_BIN "$(command -v chmod 2>/dev/null || true)")"
+
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_TERMINAL_PROMPT=0
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  algae-contentctl status --json
+  algae-contentctl list --json
+  algae-contentctl publish --bundle /home/ubuntu/algae-content-workbench/incoming/<job-id> --json
+  algae-contentctl delete --type <content-type> --id <stable-id> --json
+USAGE
+}
+
+json_quote() {
+  local value=$1
+  value=$(printf '%s' "$value" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\b'/\\b}
+  value=${value//$'\f'/\\f}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '"%s"' "$value"
+}
+
+emit_error() {
+  local code=$1
+  local message=$2
+  local log_tail=${3:-}
+  local error_action="unknown"
+  case "$ACTION" in
+    status|list|publish|delete) error_action=$ACTION ;;
+  esac
+  ERROR_EMITTED=true
+  if $JSON_MODE; then
+    printf '{"ok":false,"action":%s,"code":%s,"message":%s' "$(json_quote "$error_action")" "$(json_quote "$code")" "$(json_quote "$message")"
+    if [[ -n "$log_tail" ]]; then
+      printf ',"logTail":%s' "$(json_quote "$log_tail")"
+    fi
+    printf '}\n'
+  else
+    printf '%s: %s\n' "$code" "$message" >&2
+    if [[ -n "$log_tail" ]]; then
+      printf '%s\n' "$log_tail" >&2
+    fi
+  fi
+}
+
+log_tail() {
+  if [[ -n "$OP_LOG" && -f "$OP_LOG" ]]; then
+    tail -n 40 -- "$OP_LOG" | sed -e 's/[[:cntrl:]]\[[0-9;]*[[:alpha:]]//g'
+  fi
+}
+
+fail() {
+  local code=$1
+  local message=$2
+  local include_log=${3:-false}
+  local details=""
+  if $RELEASE_ACTIVATED; then
+    if ! restore_release_links; then
+      code="RELEASE_ROLLBACK_FAILED"
+      message="$message; release rollback is incomplete and recovery state was retained"
+      include_log=true
+    fi
+  fi
+  if [[ "$include_log" == "true" ]]; then
+    details=$(log_tail || true)
+  fi
+  emit_error "$code" "$message" "$details"
+  exit 1
+}
+
+on_unexpected_error() {
+  local status=$1
+  trap - ERR
+  local code="INTERNAL_ERROR"
+  local message="The controller stopped unexpectedly"
+  if $RELEASE_ACTIVATED && ! restore_release_links; then
+    code="RELEASE_ROLLBACK_FAILED"
+    message="The controller stopped unexpectedly and release rollback is incomplete; recovery state was retained"
+  fi
+  if ! $ERROR_EMITTED; then
+    emit_error "$code" "$message" "$(log_tail || true)"
+  fi
+  exit "$status"
+}
+
+is_absolute_safe_path() {
+  local value=$1
+  [[ "$value" == /* ]] || return 1
+  [[ "$value" != *".."* ]] || return 1
+  [[ "$value" != *[!A-Za-z0-9._/-]* ]] || return 1
+}
+
+is_stable_id() {
+  local value=$1
+  [[ ${#value} -ge 1 && ${#value} -le 200 ]] || return 1
+  [[ "$value" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]
+}
+
+is_job_id() {
+  local value=$1
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]]
+}
+
+is_content_type() {
+  case "$1" in
+    team-news|research-output|research-project|learning-resource|algae-profile|live-feed-profile|coastal-observation|science-article|team-member|collaboration|research-profile)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+route_section_for_type() {
+  case "$1" in
+    team-news) printf 'news' ;;
+    research-output) printf 'outputs' ;;
+    research-project) printf 'projects' ;;
+    learning-resource) printf 'tutorials' ;;
+    algae-profile) printf 'algae' ;;
+    live-feed-profile) printf 'live-feeds' ;;
+    coastal-observation) printf 'observations' ;;
+    science-article) printf 'insights' ;;
+    team-member) printf 'team' ;;
+    collaboration) printf 'collaboration' ;;
+    research-profile) printf 'research' ;;
+    *) return 1 ;;
+  esac
+}
+
+content_url() {
+  local content_type=$1
+  local stable_id=$2
+  printf '%s/zh/%s/%s' "${PUBLIC_BASE_URL%/}" "$(route_section_for_type "$content_type")" "$stable_id"
+}
+
+local_content_url() {
+  local content_type=$1
+  local stable_id=$2
+  printf '%s/zh/%s/%s' "${LOCAL_BASE_URL%/}" "$(route_section_for_type "$content_type")" "$stable_id"
+}
+
+assert_regular_command() {
+  local name=$1
+  local binary=$2
+  [[ -n "$binary" && -x "$binary" ]] || fail "DEPENDENCY_MISSING" "Required command is unavailable: $name"
+}
+
+assert_no_symlink_components() {
+  local path=$1
+  local remaining=${path#/}
+  local current="/"
+  local component
+  local -a components=()
+  local old_ifs=$IFS
+  IFS='/'
+  read -r -a components <<< "$remaining"
+  IFS=$old_ifs
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || continue
+    current="${current%/}/$component"
+    if [[ -L "$current" ]]; then
+      fail "UNSAFE_PATH" "Managed path contains a symbolic link"
+    fi
+  done
+}
+
+ensure_safe_directory() {
+  local path=$1
+  is_absolute_safe_path "$path" || fail "UNSAFE_PATH" "Managed path is invalid"
+  assert_no_symlink_components "$path"
+  mkdir -p -- "$path"
+  [[ -d "$path" && ! -L "$path" ]] || fail "UNSAFE_PATH" "Managed directory is unsafe"
+  assert_no_symlink_components "$path"
+}
+
+canonical_directory() {
+  local path=$1
+  [[ -d "$path" && ! -L "$path" ]] || return 1
+  realpath -e -- "$path"
+}
+
+path_is_direct_child() {
+  local path=$1
+  local parent=$2
+  local relative=${path#"$parent"/}
+  [[ "$path" == "$parent"/* && "$relative" != */* && -n "$relative" ]]
+}
+
+assert_no_symlinks_in_tree() {
+  local root=$1
+  local link
+  link=$(find "$root" -type l -print -quit 2>/dev/null || true)
+  [[ -z "$link" ]] || fail "UNSAFE_PATH" "Repository contains a symbolic link"
+}
+
+prepare_runtime() {
+  if ! $TEST_MODE && [[ $EUID -ne 0 ]]; then
+    fail "PERMISSION_DENIED" "This controller must run through the restricted sudo rule"
+  fi
+  assert_regular_command "git" "$GIT_BIN"
+  assert_regular_command "node" "$NODE_BIN"
+  assert_regular_command "chmod" "$CHMOD_BIN"
+  [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ && "$HEALTH_ATTEMPTS" -le 60 ]] || fail "CONFIGURATION_ERROR" "Health attempt count is invalid"
+  ensure_safe_directory "$CONTENT_ROOT"
+  ensure_safe_directory "$TRANSACTION_ROOT"
+  ensure_safe_directory "$SITE_ROOT"
+  ensure_safe_directory "$RELEASES_ROOT"
+  ensure_safe_directory "$INCOMING_ROOT"
+  [[ -d "$CONTENT_REPOSITORY" && ! -L "$CONTENT_REPOSITORY" ]] || fail "CONTENT_REPOSITORY_MISSING" "Content repository is not installed"
+  [[ -d "$CONTENT_REPOSITORY/.git" ]] || fail "CONTENT_REPOSITORY_INVALID" "Content repository is not a Git working tree"
+  if ! "$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    fail "CONTENT_REPOSITORY_INVALID" "Content repository is not a Git working tree"
+  fi
+  if [[ -n "$("$GIT_BIN" -C "$CONTENT_REPOSITORY" status --porcelain 2>/dev/null)" ]]; then
+    fail "CONTENT_REPOSITORY_DIRTY" "Formal content repository has uncommitted changes"
+  fi
+  if ! $TEST_MODE; then
+    [[ $(stat -c '%U' -- "$CONTENT_REPOSITORY") == "root" ]] || fail "CONTENT_REPOSITORY_INVALID" "Formal content repository must be root owned"
+    local repository_mode
+    repository_mode=$(stat -c '%a' -- "$CONTENT_REPOSITORY")
+    [[ $((8#$repository_mode & 0022)) -eq 0 ]] || fail "CONTENT_REPOSITORY_INVALID" "Formal content repository must not be group or world writable"
+  fi
+  assert_no_symlinks_in_tree "$CONTENT_REPOSITORY"
+}
+
+acquire_lock() {
+  local lock_file="$CONTENT_ROOT/.algae-contentctl.lock"
+  if command -v flock >/dev/null 2>&1; then
+    # shellcheck disable=SC3045
+    exec 9>"$lock_file"
+    if ! flock -n 9; then
+      fail "CONTROLLER_BUSY" "Another content operation is in progress"
+    fi
+    LOCK_FD_OPEN=true
+  else
+    LOCK_DIR="$CONTENT_ROOT/.algae-contentctl.lockdir"
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+      fail "CONTROLLER_BUSY" "Another content operation is in progress"
+    fi
+  fi
+}
+
+release_lock() {
+  if [[ -n "$LOCK_DIR" ]]; then
+    rmdir -- "$LOCK_DIR" 2>/dev/null || true
+  fi
+  if $LOCK_FD_OPEN; then
+    flock -u 9 2>/dev/null || true
+  fi
+}
+
+safe_remove_transaction() {
+  local path=$1
+  [[ -n "$path" && -d "$path" ]] || return 0
+  local root
+  root=$(canonical_directory "$TRANSACTION_ROOT") || return 0
+  local candidate
+  candidate=$(canonical_directory "$path") || return 0
+  path_is_direct_child "$candidate" "$root" || return 0
+  rm -rf -- "$candidate"
+}
+
+create_transaction() {
+  local label=$1
+  local transaction_root
+  transaction_root=$(canonical_directory "$TRANSACTION_ROOT") || fail "UNSAFE_PATH" "Transaction root is unavailable"
+  local entropy
+  entropy="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
+  TX_ROOT="$transaction_root/${label}-${entropy}"
+  mkdir -m 0700 -- "$TX_ROOT"
+  OP_LOG="$TX_ROOT/controller.log"
+  : > "$OP_LOG"
+}
+
+assert_regular_source_tree() {
+  local tree=$1
+  [[ -d "$tree" && ! -L "$tree" ]] || fail "SITE_SOURCE_FAILED" "Website source content tree is missing or unsafe" true
+  local unsafe_entry
+  if ! unsafe_entry=$(find -P "$tree" \( -type l -o \( ! -type d ! -type f \) \) -print -quit 2>>"$OP_LOG"); then
+    fail "SITE_SOURCE_FAILED" "Website source content tree cannot be inspected" true
+  fi
+  [[ -z "$unsafe_entry" ]] || fail "SITE_SOURCE_FAILED" "Website source content tree contains a link or special file" true
+}
+
+prepare_site_source() {
+  SITE_SOURCE_REPOSITORY="$TX_ROOT/site-source"
+  [[ ! -e "$SITE_SOURCE_REPOSITORY" && ! -L "$SITE_SOURCE_REPOSITORY" ]] || fail "SITE_SOURCE_FAILED" "Website source staging path already exists"
+  if ! (umask 022; "$GIT_BIN" clone --quiet --depth 1 --branch "$SITE_BRANCH" --single-branch --no-tags \
+    "$SITE_REPOSITORY_URL" "$SITE_SOURCE_REPOSITORY") >>"$OP_LOG" 2>&1; then
+    fail "SITE_SOURCE_FAILED" "Cannot clone the current GitHub main source" true
+  fi
+  [[ $("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --is-shallow-repository 2>>"$OP_LOG") == "true" ]] || \
+    fail "SITE_SOURCE_FAILED" "Website source clone is not shallow" true
+  [[ $("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" symbolic-ref --quiet --short HEAD 2>>"$OP_LOG") == "$SITE_BRANCH" ]] || \
+    fail "SITE_SOURCE_FAILED" "Website source branch does not match" true
+  [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || \
+    fail "SITE_SOURCE_FAILED" "Website source checkout is not clean" true
+  SITE_SOURCE_SHA=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --verify HEAD 2>>"$OP_LOG") || \
+    fail "SITE_SOURCE_FAILED" "Website source commit cannot be read" true
+  [[ "$SITE_SOURCE_SHA" =~ ^[0-9a-f]{40,64}$ ]] || fail "SITE_SOURCE_FAILED" "Website source commit is invalid" true
+  assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/content"
+  if [[ -e "$SITE_SOURCE_REPOSITORY/public/images/uploads" || -L "$SITE_SOURCE_REPOSITORY/public/images/uploads" ]]; then
+    assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/public/images/uploads"
+  fi
+}
+
+run_logged() {
+  "$@" >>"$OP_LOG" 2>&1
+}
+
+git_head_or_empty() {
+  local repository=$1
+  "$GIT_BIN" -C "$repository" rev-parse --verify HEAD 2>/dev/null || true
+}
+
+RESOLVED_RELEASE_TARGET=""
+read_release_target() {
+  local link=$1
+  RESOLVED_RELEASE_TARGET=""
+  local target
+  if $TEST_LINK_FILES; then
+    [[ -f "$link" && ! -L "$link" ]] || return 0
+    IFS= read -r target < "$link" || fail "RELEASE_STATE_INVALID" "Release marker is unreadable"
+    target=$(realpath -e -- "$target") || fail "RELEASE_STATE_INVALID" "Release marker is broken"
+  else
+    [[ -L "$link" ]] || return 0
+    target=$(realpath -e -- "$link") || fail "RELEASE_STATE_INVALID" "Release link is broken"
+  fi
+  local releases
+  releases=$(canonical_directory "$RELEASES_ROOT") || fail "RELEASE_STATE_INVALID" "Release root is unavailable"
+  [[ "$target" == "$releases"/* && -d "$target" ]] || fail "RELEASE_STATE_INVALID" "Release link points outside the release root"
+  RESOLVED_RELEASE_TARGET="$target"
+}
+
+make_link_atomically() {
+  local target=$1
+  local link=$2
+  local temporary="${link}.new-$$-$RANDOM"
+  if $TEST_LINK_FILES; then
+    printf '%s\n' "$target" > "$temporary"
+  else
+    ln -s -- "$target" "$temporary"
+  fi
+  mv -Tf -- "$temporary" "$link"
+}
+
+restore_release_links() {
+  local restored=true
+  if [[ -n "$OLD_CURRENT_RELEASE" ]]; then
+    if ! make_link_atomically "$OLD_CURRENT_RELEASE" "$CURRENT_LINK"; then
+      printf 'release rollback: cannot restore current release link\n' >>"$OP_LOG" 2>/dev/null || true
+      restored=false
+    fi
+  else
+    if ! rm -f -- "$CURRENT_LINK"; then
+      printf 'release rollback: cannot remove current release link\n' >>"$OP_LOG" 2>/dev/null || true
+      restored=false
+    fi
+  fi
+  if [[ -n "$OLD_PREVIOUS_RELEASE" ]]; then
+    if ! make_link_atomically "$OLD_PREVIOUS_RELEASE" "$PREVIOUS_LINK"; then
+      printf 'release rollback: cannot restore previous release link\n' >>"$OP_LOG" 2>/dev/null || true
+      restored=false
+    fi
+  else
+    if ! rm -f -- "$PREVIOUS_LINK"; then
+      printf 'release rollback: cannot remove previous release link\n' >>"$OP_LOG" 2>/dev/null || true
+      restored=false
+    fi
+  fi
+  if [[ -n "$SYSTEMCTL_BIN" && -x "$SYSTEMCTL_BIN" ]]; then
+    if ! "$SYSTEMCTL_BIN" restart "$SERVICE_NAME" >>"$OP_LOG" 2>&1; then
+      printf 'release rollback: cannot restart website service on the restored release\n' >>"$OP_LOG" 2>/dev/null || true
+      restored=false
+    fi
+  else
+    printf 'release rollback: website service manager is unavailable\n' >>"$OP_LOG" 2>/dev/null || true
+    restored=false
+  fi
+  if $restored; then
+    RELEASE_ACTIVATED=false
+    RELEASE_ROLLBACK_FAILED=false
+    return 0
+  fi
+  RELEASE_ROLLBACK_FAILED=true
+  printf 'release rollback: incomplete; current, previous, service state, and new release require inspection\n' >>"$OP_LOG" 2>/dev/null || true
+  return 1
+}
+
+restore_formal_repository() {
+  if ! $FORMAL_REPOSITORY_MOVED; then
+    return 0
+  fi
+  local failed_repository="$TX_ROOT/failed-repository"
+  if [[ ! -d "$FORMAL_REPOSITORY_BACKUP" || -L "$FORMAL_REPOSITORY_BACKUP" ]]; then
+    printf 'formal repository rollback: backup is unavailable at %s\n' "$FORMAL_REPOSITORY_BACKUP" >>"$OP_LOG" 2>/dev/null || true
+    return 1
+  fi
+
+  if [[ -e "$CONTENT_REPOSITORY" || -L "$CONTENT_REPOSITORY" ]]; then
+    if ! mv -- "$CONTENT_REPOSITORY" "$failed_repository" 2>/dev/null; then
+      printf 'formal repository rollback: cannot move the candidate repository aside\n' >>"$OP_LOG" 2>/dev/null || true
+      return 1
+    fi
+  fi
+
+  if ! mv -- "$FORMAL_REPOSITORY_BACKUP" "$CONTENT_REPOSITORY" 2>/dev/null; then
+    printf 'formal repository rollback: cannot restore the formal repository\n' >>"$OP_LOG" 2>/dev/null || true
+    return 1
+  fi
+
+  FORMAL_REPOSITORY_MOVED=false
+  FORMAL_REPOSITORY_SWAPPED=false
+}
+
+cleanup() {
+  local status=$?
+  local preserve_transaction=false
+  trap - EXIT
+  if [[ $status -ne 0 ]] && ! $SUCCESS; then
+    if ! restore_formal_repository; then
+      preserve_transaction=true
+    fi
+    if $RELEASE_ACTIVATED && ! $RELEASE_ROLLBACK_FAILED; then
+      if ! restore_release_links; then
+        preserve_transaction=true
+      fi
+    fi
+  fi
+  if $RELEASE_ROLLBACK_FAILED; then
+    preserve_transaction=true
+  fi
+  if $SUCCESS && [[ -n "$FORMAL_REPOSITORY_BACKUP" && -d "$FORMAL_REPOSITORY_BACKUP" ]]; then
+    rm -rf -- "$FORMAL_REPOSITORY_BACKUP" || true
+  fi
+  if [[ $status -ne 0 ]] && ! $SUCCESS && ! $RELEASE_ROLLBACK_FAILED; then
+    local release_root=""
+    release_root=$(canonical_directory "$RELEASES_ROOT" 2>/dev/null || true)
+    if [[ -n "$release_root" ]]; then
+      local candidate resolved
+      for candidate in "$BUILD_STAGING_DIRECTORY" "$NEW_RELEASE_DIRECTORY"; do
+        [[ -n "$candidate" && -e "$candidate" && ! -L "$candidate" ]] || continue
+        resolved=$(realpath -e -- "$candidate" 2>/dev/null || true)
+        if [[ -n "$resolved" && "$resolved" == "$release_root"/* ]]; then
+          rm -rf -- "$resolved"
+        fi
+      done
+    fi
+  fi
+  if $preserve_transaction; then
+    printf 'algae-contentctl: rollback incomplete; transaction and release recovery state retained at %s\n' "$TX_ROOT" >&2
+  else
+    safe_remove_transaction "$TX_ROOT" || true
+  fi
+  release_lock || true
+  exit "$status"
+}
+
+trap 'on_unexpected_error "$?"' ERR
+trap cleanup EXIT
+
+validate_owner_and_mode() {
+  local path=$1
+  if $TEST_MODE; then
+    return 0
+  fi
+  [[ $(stat -c '%U' -- "$path") == "ubuntu" ]] || fail "UNSAFE_UPLOAD" "Uploaded files must be owned by ubuntu"
+  local mode
+  mode=$(stat -c '%a' -- "$path")
+  [[ $((8#$mode & 0022)) -eq 0 ]] || fail "UNSAFE_UPLOAD" "Uploaded files must not be group or world writable"
+  if [[ -f "$path" ]]; then
+    [[ $(stat -c '%h' -- "$path") -eq 1 ]] || fail "UNSAFE_UPLOAD" "Uploaded files must not be hard linked"
+  fi
+}
+
+copy_uploaded_delivery() {
+  local supplied_path=$1
+  is_absolute_safe_path "$supplied_path" || fail "INVALID_BUNDLE_PATH" "Bundle path must be a safe absolute directory"
+  [[ -d "$supplied_path" && ! -L "$supplied_path" ]] || fail "INVALID_BUNDLE_PATH" "Bundle path must name an uploaded delivery directory"
+  assert_no_symlink_components "$supplied_path"
+  local incoming
+  incoming=$(canonical_directory "$INCOMING_ROOT") || fail "INCOMING_ROOT_INVALID" "Incoming directory is unavailable"
+  local job
+  job=$(canonical_directory "$supplied_path") || fail "INVALID_BUNDLE_PATH" "Bundle directory cannot be resolved"
+  path_is_direct_child "$job" "$incoming" || fail "INVALID_BUNDLE_PATH" "Bundle directory must be one job below the incoming root"
+  is_job_id "$(basename -- "$job")" || fail "INVALID_BUNDLE_PATH" "Upload job id is invalid"
+  validate_owner_and_mode "$job"
+
+  local upload_copy="$TX_ROOT/upload"
+  mkdir -m 0700 -- "$upload_copy"
+  local entries=()
+  local entry
+  shopt -s nullglob dotglob
+  entries=("$job"/*)
+  shopt -u nullglob dotglob
+  [[ ${#entries[@]} -eq 9 ]] || fail "INVALID_BUNDLE" "Delivery directory must contain exactly the standard bundle artifacts"
+  for entry in "${entries[@]}"; do
+    [[ -f "$entry" && ! -L "$entry" ]] || fail "UNSAFE_UPLOAD" "Delivery contains a non-regular file"
+    validate_owner_and_mode "$entry"
+    local size
+    size=$(stat -c '%s' -- "$entry")
+    [[ "$size" =~ ^[0-9]+$ && "$size" -gt 0 ]] || fail "INVALID_BUNDLE" "Delivery contains an empty artifact"
+    if [[ "$size" -gt "$MAX_BUNDLE_BYTES" ]]; then
+      fail "BUNDLE_TOO_LARGE" "Delivery artifact exceeds the bundle size limit"
+    fi
+    cp -P -- "$entry" "$upload_copy/$(basename -- "$entry")"
+  done
+  assert_no_symlinks_in_tree "$upload_copy"
+  DELIVERY_COPY="$upload_copy"
+}
+
+declare -A MANIFEST=()
+MANIFEST_BUNDLE=""
+MANIFEST_BRANCH=""
+MANIFEST_HEAD=""
+MANIFEST_BASE=""
+MANIFEST_RECORD_ID=""
+
+parse_manifest() {
+  local delivery=$1
+  local manifest_file="$delivery/MANIFEST.txt"
+  [[ -f "$manifest_file" && ! -L "$manifest_file" ]] || fail "INVALID_MANIFEST" "MANIFEST.txt is missing"
+  [[ $(stat -c '%s' -- "$manifest_file") -le "$MAX_ARTIFACT_BYTES" ]] || fail "INVALID_MANIFEST" "MANIFEST.txt is too large"
+  MANIFEST=()
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line=${line%$'\r'}
+    [[ -n "$line" && "$line" == *=* ]] || fail "INVALID_MANIFEST" "MANIFEST.txt has an invalid line"
+    key=${line%%=*}
+    value=${line#*=}
+    case "$key" in
+      FormatVersion|Branch|HeadCommit|BaseCommit|BundleFile|BundleSizeBytes|BundleSha256|History|ImportBranch|ChangedFileCount|Artifacts) ;;
+      *) fail "INVALID_MANIFEST" "MANIFEST.txt has an unknown field" ;;
+    esac
+    [[ -z "${MANIFEST[$key]+present}" ]] || fail "INVALID_MANIFEST" "MANIFEST.txt has a duplicate field"
+    MANIFEST[$key]=$value
+  done < "$manifest_file"
+  [[ ${#MANIFEST[@]} -eq 11 ]] || fail "INVALID_MANIFEST" "MANIFEST.txt is incomplete"
+  [[ ${MANIFEST[FormatVersion]} == "1" && ${MANIFEST[History]} == "complete" ]] || fail "INVALID_MANIFEST" "Bundle manifest has an unsupported format"
+  MANIFEST_BRANCH=${MANIFEST[Branch]}
+  if [[ "$MANIFEST_BRANCH" =~ ^content/direct-[0-9a-f]{32}-([a-z0-9]+(-[a-z0-9]+)*)$ ]]; then
+    MANIFEST_RECORD_ID=${BASH_REMATCH[1]}
+  elif [[ "$MANIFEST_BRANCH" =~ ^content/[0-9]{8}-([a-z0-9]+(-[a-z0-9]+)*)$ ]]; then
+    MANIFEST_RECORD_ID=${BASH_REMATCH[1]}
+  else
+    fail "INVALID_MANIFEST" "Bundle branch is invalid"
+  fi
+  is_stable_id "$MANIFEST_RECORD_ID" || fail "INVALID_MANIFEST" "Bundle record id is invalid"
+  MANIFEST_BUNDLE=${MANIFEST[BundleFile]}
+  [[ "$MANIFEST_BUNDLE" == "${MANIFEST_BRANCH//\//-}-v1.bundle" ]] || fail "INVALID_MANIFEST" "Bundle filename does not match the branch"
+  [[ "$MANIFEST_BUNDLE" =~ ^[a-z0-9-]+\.bundle$ ]] || fail "INVALID_MANIFEST" "Bundle filename is invalid"
+  [[ ${MANIFEST[ImportBranch]} == "import/${MANIFEST_BRANCH//\//-}" ]] || fail "INVALID_MANIFEST" "Import branch is invalid"
+  MANIFEST_HEAD=${MANIFEST[HeadCommit]}
+  MANIFEST_BASE=${MANIFEST[BaseCommit]}
+  [[ "$MANIFEST_HEAD" =~ ^[0-9a-f]{40}$ && "$MANIFEST_BASE" =~ ^[0-9a-f]{40}$ ]] || fail "INVALID_MANIFEST" "Bundle commit ids are invalid"
+  [[ ${MANIFEST[BundleSha256]} =~ ^[0-9A-F]{64}$ ]] || fail "INVALID_MANIFEST" "Bundle SHA-256 is invalid"
+  [[ ${MANIFEST[BundleSizeBytes]} =~ ^[1-9][0-9]*$ && ${MANIFEST[BundleSizeBytes]} -le $MAX_BUNDLE_BYTES ]] || fail "INVALID_MANIFEST" "Bundle size is invalid"
+  [[ ${MANIFEST[ChangedFileCount]} =~ ^[0-9]+$ && ${MANIFEST[ChangedFileCount]} -le 256 ]] || fail "INVALID_MANIFEST" "Changed file count is invalid"
+}
+
+validate_delivery_artifacts() {
+  local delivery=$1
+  local expected_sidecar="$MANIFEST_BUNDLE.sha256.txt"
+  local expected=(
+    "$MANIFEST_BUNDLE"
+    "$expected_sidecar"
+    "MANIFEST.txt"
+    "HANDOFF.md"
+    "TEST-SUMMARY.txt"
+    "CHANGED-FILES.txt"
+    "Import-Bundle.ps1"
+    "Validate-Bundle.sh"
+    "validate-bundle.mjs"
+  )
+  local artifact_list=${MANIFEST[Artifacts]}
+  local declared=()
+  local old_ifs=$IFS
+  IFS=','
+  read -r -a declared <<< "$artifact_list"
+  IFS=$old_ifs
+  [[ ${#declared[@]} -eq ${#expected[@]} ]] || fail "INVALID_MANIFEST" "Manifest artifact list is invalid"
+  local index
+  for index in "${!expected[@]}"; do
+    [[ ${declared[$index]} == "${expected[$index]}" ]] || fail "INVALID_MANIFEST" "Manifest artifact list is not the standard delivery"
+    [[ -f "$delivery/${expected[$index]}" && ! -L "$delivery/${expected[$index]}" ]] || fail "INVALID_BUNDLE" "A required delivery artifact is missing"
+    local size
+    size=$(stat -c '%s' -- "$delivery/${expected[$index]}")
+    if [[ ${expected[$index]} == "$MANIFEST_BUNDLE" ]]; then
+      [[ "$size" == "${MANIFEST[BundleSizeBytes]}" ]] || fail "INVALID_BUNDLE" "Bundle size does not match the manifest"
+    else
+      [[ "$size" -le "$MAX_ARTIFACT_BYTES" ]] || fail "INVALID_BUNDLE" "Delivery sidecar is too large"
+    fi
+  done
+
+  local actual=()
+  local entry
+  shopt -s nullglob dotglob
+  actual=("$delivery"/*)
+  shopt -u nullglob dotglob
+  [[ ${#actual[@]} -eq ${#expected[@]} ]] || fail "INVALID_BUNDLE" "Delivery has unexpected artifacts"
+  local sha
+  sha=$(sha256sum -- "$delivery/$MANIFEST_BUNDLE" | awk '{print toupper($1)}')
+  [[ "$sha" == "${MANIFEST[BundleSha256]}" ]] || fail "SHA256_MISMATCH" "Bundle SHA-256 does not match the manifest"
+  local sidecar
+  sidecar=$(tr -d '\r\n' < "$delivery/$expected_sidecar")
+  [[ "$sidecar" == "${MANIFEST[BundleSha256]}  $MANIFEST_BUNDLE" ]] || fail "SHA256_MISMATCH" "Bundle SHA-256 sidecar does not match the manifest"
+}
+
+validate_content_path() {
+  local path=$1
+  [[ ${#path} -le 512 ]] || return 1
+  [[ "$path" != /* && "$path" != *".."* && "$path" != *\\* ]] || return 1
+  [[ "$path" != *$'\n'* && "$path" != *$'\r'* && "$path" != *$'\t'* ]] || return 1
+  if [[ "$path" =~ ^content/records/([a-z-]+)/([a-z0-9]+(-[a-z0-9]+)*)/(record\.json|zh\.md|en\.md)$ ]]; then
+    is_content_type "${BASH_REMATCH[1]}" && is_stable_id "${BASH_REMATCH[2]}"
+    return
+  fi
+  if [[ "$path" =~ ^content/(authors|media)/[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$ ]]; then
+    return
+  fi
+  if [[ "$path" =~ ^public/images/uploads/[0-9]{4}/(01|02|03|04|05|06|07|08|09|10|11|12)/([a-z0-9]+(-[a-z0-9]+)*)(\.thumbnail\.webp|\.webp|\.jpeg|\.jpg|\.png|\.avif)$ ]]; then
+    is_stable_id "${BASH_REMATCH[2]}"
+    return
+  fi
+  return 1
+}
+
+extract_record_target() {
+  local path=$1
+  if [[ "$path" =~ ^content/records/([a-z-]+)/([a-z0-9]+(-[a-z0-9]+)*)/ ]]; then
+    printf '%s\t%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+  fi
+}
+
+validate_changed_files() {
+  local bundle_repository=$1
+  local diff_file="$TX_ROOT/diff.z"
+  if ! "$GIT_BIN" -C "$bundle_repository" diff-tree --no-commit-id --name-status --no-renames -r -z "$MANIFEST_BASE" "$MANIFEST_HEAD" >"$diff_file" 2>>"$OP_LOG"; then
+    fail "BUNDLE_INVALID" "Unable to inspect bundle changes" true
+  fi
+
+  CHANGED_STATUSES=()
+  CHANGED_PATHS=()
+  local status path
+  while IFS= read -r -d '' status; do
+    IFS= read -r -d '' path || fail "BUNDLE_INVALID" "Bundle diff is truncated"
+    [[ "$status" == "A" || "$status" == "M" || "$status" == "D" ]] || fail "BUNDLE_INVALID" "Bundle uses an unsupported file operation"
+    validate_content_path "$path" || fail "FORBIDDEN_PATH" "Bundle changes a path outside the approved content allowlist"
+    CHANGED_STATUSES+=("$status")
+    CHANGED_PATHS+=("$path")
+  done < "$diff_file"
+  [[ ${#CHANGED_PATHS[@]} -gt 0 && ${#CHANGED_PATHS[@]} -eq ${MANIFEST[ChangedFileCount]} ]] || fail "INVALID_MANIFEST" "Changed file count does not match the bundle"
+
+  local changed_file="$TX_ROOT/changed-files.txt"
+  mapfile -t manifest_paths < <(tr -d '\r' < "$TX_ROOT/upload/CHANGED-FILES.txt" | sed '/^$/d' | LC_ALL=C sort)
+  mapfile -t actual_paths < <(printf '%s\n' "${CHANGED_PATHS[@]}" | LC_ALL=C sort)
+  [[ ${#manifest_paths[@]} -eq ${#actual_paths[@]} ]] || fail "INVALID_MANIFEST" "Changed file list does not match the bundle"
+  local index
+  for index in "${!actual_paths[@]}"; do
+    [[ ${manifest_paths[$index]} == "${actual_paths[$index]}" ]] || fail "INVALID_MANIFEST" "Changed file list does not match the bundle"
+  done
+  printf '%s\n' "${actual_paths[@]}" > "$changed_file"
+
+  declare -A record_targets=()
+  local target
+  for path in "${CHANGED_PATHS[@]}"; do
+    target=$(extract_record_target "$path")
+    [[ -z "$target" ]] || record_targets[$target]=1
+  done
+  [[ ${#record_targets[@]} -eq 1 ]] || fail "INVALID_BUNDLE" "Bundle must change exactly one content record"
+  local key
+  for key in "${!record_targets[@]}"; do
+    BUNDLE_CONTENT_TYPE=${key%%$'\t'*}
+    BUNDLE_STABLE_ID=${key#*$'\t'}
+  done
+  [[ "$BUNDLE_STABLE_ID" == "$MANIFEST_RECORD_ID" ]] || fail "INVALID_BUNDLE" "Bundle record id does not match its branch"
+
+  for index in "${!CHANGED_PATHS[@]}"; do
+    status=${CHANGED_STATUSES[$index]}
+    path=${CHANGED_PATHS[$index]}
+    [[ "$status" == "D" ]] && continue
+    local entry
+    entry=$("$GIT_BIN" -C "$bundle_repository" ls-tree "$MANIFEST_HEAD" -- "$path" 2>>"$OP_LOG") || fail "BUNDLE_INVALID" "Bundle file cannot be read" true
+    [[ ${entry%% *} == "100644" ]] || fail "BUNDLE_INVALID" "Bundle contains a non-regular content file"
+    local object_size
+    object_size=$("$GIT_BIN" -C "$bundle_repository" cat-file -s "$MANIFEST_HEAD:$path" 2>>"$OP_LOG") || fail "BUNDLE_INVALID" "Bundle file cannot be read" true
+    [[ "$object_size" =~ ^[0-9]+$ && "$object_size" -le "$MAX_CONTENT_FILE_BYTES" ]] || fail "BUNDLE_TOO_LARGE" "Bundle contains an oversized content file"
+  done
+}
+
+import_and_validate_bundle() {
+  local delivery=$1
+  local bundle_repository="$TX_ROOT/bundle.git"
+  "$GIT_BIN" init --bare "$bundle_repository" >>"$OP_LOG" 2>&1 || fail "BUNDLE_INVALID" "Cannot create isolated bundle repository" true
+  if ! "$GIT_BIN" -C "$bundle_repository" bundle verify "$delivery/$MANIFEST_BUNDLE" >>"$OP_LOG" 2>&1; then
+    fail "BUNDLE_INVALID" "Git bundle verification failed" true
+  fi
+  local heads
+  heads=$("$GIT_BIN" -C "$bundle_repository" bundle list-heads "$delivery/$MANIFEST_BUNDLE" 2>>"$OP_LOG") || fail "BUNDLE_INVALID" "Cannot read bundle heads" true
+  local head ref extra
+  IFS=' ' read -r head ref extra <<< "$heads"
+  [[ -n "$head" && -n "$ref" && -z "$extra" && "$head" == "$MANIFEST_HEAD" && "$ref" == "refs/heads/$MANIFEST_BRANCH" ]] || fail "BUNDLE_INVALID" "Bundle must contain exactly the manifest branch"
+  [[ $(printf '%s\n' "$heads" | wc -l) -eq 1 ]] || fail "BUNDLE_INVALID" "Bundle must contain exactly one head"
+  if ! "$GIT_BIN" -C "$bundle_repository" fetch --quiet --no-tags "$delivery/$MANIFEST_BUNDLE" "$ref:refs/heads/incoming" >>"$OP_LOG" 2>&1; then
+    fail "BUNDLE_INVALID" "Cannot import the verified bundle" true
+  fi
+  [[ $("$GIT_BIN" -C "$bundle_repository" rev-parse --verify refs/heads/incoming 2>>"$OP_LOG") == "$MANIFEST_HEAD" ]] || fail "BUNDLE_INVALID" "Imported bundle head does not match the manifest"
+  local parents
+  parents=$("$GIT_BIN" -C "$bundle_repository" rev-list --parents -n 1 "$MANIFEST_HEAD" 2>>"$OP_LOG") || fail "BUNDLE_INVALID" "Bundle commit cannot be inspected" true
+  [[ "$parents" == "$MANIFEST_HEAD $MANIFEST_BASE" ]] || fail "BUNDLE_INVALID" "Bundle must have the declared single parent"
+  [[ $("$GIT_BIN" -C "$bundle_repository" log -1 --format=%s "$MANIFEST_HEAD" 2>>"$OP_LOG") == "content: publish $MANIFEST_RECORD_ID" ]] || fail "BUNDLE_INVALID" "Bundle commit was not generated by the content workbench"
+  validate_changed_files "$bundle_repository"
+  BUNDLE_REPOSITORY="$bundle_repository"
+}
+
+clone_candidate_repository() {
+  local action_label=$1
+  CANDIDATE_REPOSITORY="$TX_ROOT/candidate-content"
+  local source_head
+  source_head=$(git_head_or_empty "$CONTENT_REPOSITORY")
+  FORMAL_CONTENT_HEAD="$source_head"
+  if ! "$GIT_BIN" clone --quiet --no-hardlinks "$CONTENT_REPOSITORY" "$CANDIDATE_REPOSITORY" >>"$OP_LOG" 2>&1; then
+    fail "CONTENT_REPOSITORY_INVALID" "Cannot clone the formal content repository" true
+  fi
+  assert_no_symlinks_in_tree "$CANDIDATE_REPOSITORY"
+  local remote
+  while IFS= read -r remote; do
+    [[ -n "$remote" ]] || continue
+    "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" remote remove "$remote" >>"$OP_LOG" 2>&1 || \
+      fail "CONTENT_REPOSITORY_INVALID" "Cannot detach the candidate from the formal repository" true
+  done < <("$GIT_BIN" -C "$CANDIDATE_REPOSITORY" remote 2>>"$OP_LOG")
+  "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" config user.name "Algae Content Controller" >>"$OP_LOG" 2>&1
+  "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" config user.email "algae-contentctl@localhost" >>"$OP_LOG" 2>&1
+  mkdir -p -- "$CANDIDATE_REPOSITORY/content/authors" "$CANDIDATE_REPOSITORY/content/media" "$CANDIDATE_REPOSITORY/content/records" "$CANDIDATE_REPOSITORY/public/images/uploads"
+}
+
+formal_repository_is_initial_placeholder() {
+  local commit_count subject tracked_file
+  commit_count=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-list --count HEAD 2>>"$OP_LOG") || return 1
+  [[ "$commit_count" == "1" ]] || return 1
+  subject=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" log -1 --format=%s HEAD 2>>"$OP_LOG") || return 1
+  [[ "$subject" == "content: initialize repository" ]] || return 1
+
+  tracked_file="$TX_ROOT/formal-placeholder-files.z"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" ls-files -z >"$tracked_file" 2>>"$OP_LOG" || return 1
+  local -a tracked_paths=()
+  mapfile -d '' -t tracked_paths < "$tracked_file"
+  if [[ ${#tracked_paths[@]} -eq 3 ]]; then
+    [[ "${tracked_paths[0]}" == "content/authors/.gitkeep" && \
+       "${tracked_paths[1]}" == "content/media/.gitkeep" && \
+       "${tracked_paths[2]}" == "content/records/.gitkeep" ]] || return 1
+  elif [[ ${#tracked_paths[@]} -eq 4 ]]; then
+    [[ "${tracked_paths[0]}" == "content/authors/.gitkeep" && \
+       "${tracked_paths[1]}" == "content/media/.gitkeep" && \
+       "${tracked_paths[2]}" == "content/records/.gitkeep" && \
+       "${tracked_paths[3]}" == "public/images/uploads/.gitkeep" ]] || return 1
+  else
+    return 1
+  fi
+
+  local path
+  for path in "${tracked_paths[@]}"; do
+    [[ -f "$CONTENT_REPOSITORY/$path" && ! -L "$CONTENT_REPOSITORY/$path" ]] || return 1
+  done
+}
+
+bootstrap_candidate_if_placeholder() {
+  formal_repository_is_initial_placeholder || return 0
+  [[ -n "$SITE_SOURCE_REPOSITORY" && -d "$SITE_SOURCE_REPOSITORY/content" ]] || \
+    fail "SITE_SOURCE_FAILED" "Prepared website source is unavailable for content bootstrap" true
+  [[ ! -L "$CANDIDATE_REPOSITORY/content" && \
+     ! -L "$CANDIDATE_REPOSITORY/public" && \
+     ! -L "$CANDIDATE_REPOSITORY/public/images" && \
+     ! -L "$CANDIDATE_REPOSITORY/public/images/uploads" ]] || \
+    fail "CONTENT_REPOSITORY_INVALID" "Candidate content path is unsafe"
+
+  rm -rf -- "$CANDIDATE_REPOSITORY/content" "$CANDIDATE_REPOSITORY/public/images/uploads"
+  mkdir -p -- "$CANDIDATE_REPOSITORY/content" "$CANDIDATE_REPOSITORY/public/images/uploads"
+  cp -a -- "$SITE_SOURCE_REPOSITORY/content/." "$CANDIDATE_REPOSITORY/content/"
+  if [[ -d "$SITE_SOURCE_REPOSITORY/public/images/uploads" ]]; then
+    cp -a -- "$SITE_SOURCE_REPOSITORY/public/images/uploads/." "$CANDIDATE_REPOSITORY/public/images/uploads/"
+  else
+    touch "$CANDIDATE_REPOSITORY/public/images/uploads/.gitkeep"
+  fi
+  find -P "$CANDIDATE_REPOSITORY/content" "$CANDIDATE_REPOSITORY/public/images/uploads" -type d -exec chmod 0755 -- {} +
+  find -P "$CANDIDATE_REPOSITORY/content" "$CANDIDATE_REPOSITORY/public/images/uploads" -type f -exec chmod 0644 -- {} +
+  "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" add --all -- content public/images/uploads >>"$OP_LOG" 2>&1 || \
+    fail "CONTENT_COMMIT_FAILED" "Cannot stage fresh-main bootstrap content" true
+  if ! "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" diff --cached --quiet; then
+    "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" commit --quiet --no-gpg-sign --no-verify \
+      -m "content: bootstrap from site main $SITE_SOURCE_SHA" >>"$OP_LOG" 2>&1 || \
+      fail "CONTENT_COMMIT_FAILED" "Cannot commit fresh-main bootstrap content" true
+  fi
+}
+
+apply_bundle_to_candidate() {
+  local index status path destination parent temporary
+  for index in "${!CHANGED_PATHS[@]}"; do
+    status=${CHANGED_STATUSES[$index]}
+    path=${CHANGED_PATHS[$index]}
+    destination="$CANDIDATE_REPOSITORY/$path"
+    if [[ "$status" == "D" ]]; then
+      rm -f -- "$destination"
+      continue
+    fi
+    parent=$(dirname -- "$destination")
+    mkdir -p -- "$parent"
+    temporary="$parent/.${path##*/}.incoming-$$-$RANDOM"
+    if ! "$GIT_BIN" -C "$BUNDLE_REPOSITORY" show "$MANIFEST_HEAD:$path" >"$temporary" 2>>"$OP_LOG"; then
+      rm -f -- "$temporary"
+      fail "BUNDLE_INVALID" "Cannot extract a bundle file" true
+    fi
+    chmod 0644 -- "$temporary"
+    mv -f -- "$temporary" "$destination"
+  done
+}
+
+validate_candidate_record() {
+  local content_type=$1
+  local stable_id=$2
+  local record_directory="$CANDIDATE_REPOSITORY/content/records/$content_type/$stable_id"
+  [[ -d "$record_directory" && ! -L "$record_directory" ]] || fail "INVALID_BUNDLE" "Bundle does not leave a publishable record"
+  local validation_script
+  validation_script=$(cat <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [directory, expectedType, expectedId] = process.argv.slice(1);
+try {
+  const record = JSON.parse(fs.readFileSync(path.join(directory, "record.json"), "utf8"));
+  if (record.id !== expectedId || record.type !== expectedType) throw new Error("record identity");
+  const zh = record.locales && record.locales.zh;
+  if (!zh || typeof zh.title !== "string" || !zh.title.trim()) throw new Error("Chinese title");
+  if (typeof zh.bodyFile !== "string" || !/^[a-z0-9][a-z0-9._-]*\.md$/.test(zh.bodyFile)) throw new Error("Chinese body filename");
+  const body = fs.readFileSync(path.join(directory, zh.bodyFile), "utf8");
+  if (!body.trim()) throw new Error("Chinese body");
+} catch (error) {
+  process.stderr.write(String(error.message || error));
+  process.exit(1);
+}
+NODE
+)
+  if ! "$NODE_BIN" -e "$validation_script" "$record_directory" "$content_type" "$stable_id" >>"$OP_LOG" 2>&1; then
+    fail "INVALID_BUNDLE" "Bundle record is missing required Chinese content" true
+  fi
+}
+
+commit_candidate() {
+  local message=$1
+  "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" add --all -- content public/images/uploads >>"$OP_LOG" 2>&1 || fail "CONTENT_COMMIT_FAILED" "Cannot stage candidate content" true
+  if "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" diff --cached --quiet; then
+    fail "NO_CONTENT_CHANGE" "Candidate content has no changes to publish"
+  fi
+  if ! "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" commit --quiet --no-gpg-sign --no-verify -m "$message" >>"$OP_LOG" 2>&1; then
+    fail "CONTENT_COMMIT_FAILED" "Cannot create the candidate content commit" true
+  fi
+  CANDIDATE_CONTENT_SHA=$("$GIT_BIN" -C "$CANDIDATE_REPOSITORY" rev-parse --verify HEAD 2>>"$OP_LOG") || fail "CONTENT_COMMIT_FAILED" "Candidate commit cannot be read" true
+}
+
+run_build_command() {
+  local build_directory=$1
+  shift
+  (
+    cd "$build_directory"
+    CONTENT_REPOSITORY_SOURCE=records "$@"
+  ) >>"$OP_LOG" 2>&1
+}
+
+build_release() {
+  local content_type=$1
+  local stable_id=$2
+  assert_regular_command "npm" "$NPM_BIN"
+  umask 022
+  local build_directory="$RELEASES_ROOT/.candidate-$ACTION-$$-$RANDOM"
+  BUILD_STAGING_DIRECTORY="$build_directory"
+  [[ ! -e "$build_directory" ]] || fail "BUILD_FAILED" "Release staging directory already exists"
+  [[ -n "$SITE_SOURCE_REPOSITORY" && -d "$SITE_SOURCE_REPOSITORY/.git" ]] || fail "SITE_SOURCE_FAILED" "Prepared website source is unavailable" true
+  if ! cp -a -- "$SITE_SOURCE_REPOSITORY" "$build_directory" >>"$OP_LOG" 2>&1; then
+    fail "SITE_SOURCE_FAILED" "Cannot copy the prepared website source" true
+  fi
+  "$CHMOD_BIN" -R a+rX -- "$build_directory" || fail "SITE_SOURCE_FAILED" "Cannot make the prepared website source readable" true
+  local build_source_sha
+  build_source_sha=$("$GIT_BIN" -C "$build_directory" rev-parse --verify HEAD 2>>"$OP_LOG") || fail "SITE_SOURCE_FAILED" "Prepared website source commit cannot be read" true
+  [[ "$build_source_sha" == "$SITE_SOURCE_SHA" ]] || fail "SITE_SOURCE_FAILED" "Prepared website source commit changed during the transaction" true
+  [[ -z "$("$GIT_BIN" -C "$build_directory" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || fail "SITE_SOURCE_FAILED" "Prepared website source changed during the transaction" true
+  [[ ! -L "$build_directory/content" ]] || fail "BUILD_FAILED" "Website source content directory is unsafe"
+  rm -rf -- "$build_directory/content"
+  cp -a -- "$CANDIDATE_REPOSITORY/content" "$build_directory/content"
+  chmod -R a+rX -- "$build_directory/content"
+  [[ ! -L "$build_directory/public" && ! -L "$build_directory/public/images" && ! -L "$build_directory/public/images/uploads" ]] || fail "BUILD_FAILED" "Website upload directory is unsafe"
+  mkdir -p -- "$build_directory/public/images"
+  rm -rf -- "$build_directory/public/images/uploads"
+  cp -a -- "$CANDIDATE_REPOSITORY/public/images/uploads" "$build_directory/public/images/uploads"
+  chmod -R a+rX -- "$build_directory/public/images/uploads"
+  if ! run_build_command "$build_directory" "$NPM_BIN" ci --include=dev; then
+    fail "BUILD_FAILED" "Website dependency installation failed" true
+  fi
+  if ! run_build_command "$build_directory" "$NPM_BIN" run check; then
+    fail "BUILD_FAILED" "Website check failed" true
+  fi
+  if ! run_build_command "$build_directory" "$NPM_BIN" run build:next; then
+    fail "BUILD_FAILED" "Website build failed" true
+  fi
+
+  RELEASE_NAME="$(date -u +%Y%m%dT%H%M%SZ)-${SITE_SOURCE_SHA:0:12}-${CANDIDATE_CONTENT_SHA:0:12}"
+  RELEASE_DIRECTORY="$RELEASES_ROOT/$RELEASE_NAME"
+  [[ ! -e "$RELEASE_DIRECTORY" ]] || fail "BUILD_FAILED" "Release identifier already exists"
+  printf '%s\n' "$SITE_SOURCE_SHA" > "$build_directory/.release-sha"
+  printf '%s\n' "$CANDIDATE_CONTENT_SHA" > "$build_directory/.content-sha"
+  printf '%s\n' "$RELEASE_NAME" > "$build_directory/.release-id"
+  mv -- "$build_directory" "$RELEASE_DIRECTORY"
+  BUILD_STAGING_DIRECTORY=""
+  NEW_RELEASE_DIRECTORY="$RELEASE_DIRECTORY"
+}
+
+activate_release() {
+  assert_regular_command "systemctl" "$SYSTEMCTL_BIN"
+  assert_regular_command "curl" "$CURL_BIN"
+  read_release_target "$CURRENT_LINK"
+  OLD_CURRENT_RELEASE=$RESOLVED_RELEASE_TARGET
+  read_release_target "$PREVIOUS_LINK"
+  OLD_PREVIOUS_RELEASE=$RESOLVED_RELEASE_TARGET
+  RELEASE_ACTIVATED=true
+  if [[ -n "$OLD_CURRENT_RELEASE" ]]; then
+    make_link_atomically "$OLD_CURRENT_RELEASE" "$PREVIOUS_LINK" || fail "RELEASE_SWITCH_FAILED" "Cannot update the previous release link" true
+  else
+    rm -f -- "$PREVIOUS_LINK"
+  fi
+  make_link_atomically "$RELEASE_DIRECTORY" "$CURRENT_LINK" || fail "RELEASE_SWITCH_FAILED" "Cannot switch the current release link" true
+  if ! run_logged "$SYSTEMCTL_BIN" restart "$SERVICE_NAME"; then
+    fail "SERVICE_RESTART_FAILED" "Website service restart failed" true
+  fi
+  local attempt
+  local healthy=false
+  for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt += 1)); do
+    if run_logged "$CURL_BIN" --fail --silent --show-error --max-time 10 "$HEALTH_URL"; then
+      healthy=true
+      break
+    fi
+    [[ $attempt -eq $HEALTH_ATTEMPTS ]] || sleep 1
+  done
+  if ! $healthy; then
+    fail "HEALTH_CHECK_FAILED" "Website health check failed" true
+  fi
+}
+
+verify_deleted_url() {
+  local url=$1
+  local response_code
+  response_code=$("$CURL_BIN" --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 10 "$url" 2>>"$OP_LOG") || fail "DELETE_VERIFICATION_FAILED" "Cannot verify the deleted content URL" true
+  [[ "$response_code" == "404" || "$response_code" == "410" ]] || fail "DELETE_VERIFICATION_FAILED" "Deleted content URL is still available"
+}
+
+verify_published_url() {
+  local url=$1
+  if ! run_logged "$CURL_BIN" --fail --silent --show-error --output /dev/null --max-time 10 "$url"; then
+    fail "PUBLISH_VERIFICATION_FAILED" "Published content URL is unavailable" true
+  fi
+}
+
+swap_formal_repository() {
+  local current_head current_status candidate_head candidate_status
+  current_head=$(git_head_or_empty "$CONTENT_REPOSITORY")
+  [[ "$current_head" == "$FORMAL_CONTENT_HEAD" ]] || fail "CONTENT_REPOSITORY_CHANGED" "Formal content changed during this operation"
+  current_status=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG") || \
+    fail "CONTENT_REPOSITORY_CHANGED" "Formal content status cannot be verified" true
+  [[ -z "$current_status" ]] || fail "CONTENT_REPOSITORY_CHANGED" "Formal content changed during this operation"
+  assert_no_symlinks_in_tree "$CONTENT_REPOSITORY"
+  candidate_head=$(git_head_or_empty "$CANDIDATE_REPOSITORY")
+  [[ "$candidate_head" == "$CANDIDATE_CONTENT_SHA" ]] || fail "CONTENT_REPOSITORY_CHANGED" "Candidate content changed during this operation"
+  candidate_status=$("$GIT_BIN" -C "$CANDIDATE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG") || \
+    fail "CONTENT_REPOSITORY_CHANGED" "Candidate content status cannot be verified" true
+  [[ -z "$candidate_status" ]] || fail "CONTENT_REPOSITORY_CHANGED" "Candidate content changed during this operation"
+  assert_no_symlinks_in_tree "$CANDIDATE_REPOSITORY"
+  FORMAL_REPOSITORY_BACKUP="$TX_ROOT/formal-repository-before-swap"
+  mv -- "$CONTENT_REPOSITORY" "$FORMAL_REPOSITORY_BACKUP" || fail "CONTENT_REPOSITORY_UPDATE_FAILED" "Cannot stage the formal content repository" true
+  FORMAL_REPOSITORY_MOVED=true
+  if ! mv -- "$CANDIDATE_REPOSITORY" "$CONTENT_REPOSITORY"; then
+    restore_formal_repository
+    fail "CONTENT_REPOSITORY_UPDATE_FAILED" "Cannot update the formal content repository" true
+  fi
+  FORMAL_REPOSITORY_SWAPPED=true
+}
+
+publish() {
+  local bundle_directory=$1
+  create_transaction "publish"
+  copy_uploaded_delivery "$bundle_directory"
+  local delivery=$DELIVERY_COPY
+  parse_manifest "$delivery"
+  validate_delivery_artifacts "$delivery"
+  import_and_validate_bundle "$delivery"
+  prepare_site_source
+  clone_candidate_repository "publish"
+  bootstrap_candidate_if_placeholder
+  apply_bundle_to_candidate
+  validate_candidate_record "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID"
+  commit_candidate "content: publish $BUNDLE_STABLE_ID"
+  build_release "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID"
+  activate_release
+  verify_published_url "$(local_content_url "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID")"
+  swap_formal_repository
+  SUCCESS=true
+  printf '{"ok":true,"action":"publish","contentType":%s,"stableId":%s,"url":%s,"releaseSha":%s,"contentSha":%s,"message":"Published successfully"}\n' \
+    "$(json_quote "$BUNDLE_CONTENT_TYPE")" \
+    "$(json_quote "$BUNDLE_STABLE_ID")" \
+    "$(json_quote "$(content_url "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID")")" \
+    "$(json_quote "$SITE_SOURCE_SHA")" \
+    "$(json_quote "$CANDIDATE_CONTENT_SHA")"
+}
+
+delete_content() {
+  local content_type=$1
+  local stable_id=$2
+  is_content_type "$content_type" || fail "INVALID_CONTENT_TYPE" "Content type is not allowed"
+  is_stable_id "$stable_id" || fail "INVALID_STABLE_ID" "Stable id is invalid"
+  create_transaction "delete"
+  prepare_site_source
+  clone_candidate_repository "delete"
+  bootstrap_candidate_if_placeholder
+  local target="$CANDIDATE_REPOSITORY/content/records/$content_type/$stable_id"
+  [[ -d "$target" && ! -L "$target" ]] || fail "CONTENT_NOT_FOUND" "Content record does not exist"
+  rm -rf -- "$target"
+  commit_candidate "content: delete $content_type/$stable_id"
+  build_release "$content_type" "$stable_id"
+  activate_release
+  verify_deleted_url "$(local_content_url "$content_type" "$stable_id")"
+  swap_formal_repository
+  SUCCESS=true
+  printf '{"ok":true,"action":"delete","contentType":%s,"stableId":%s,"url":%s,"releaseSha":%s,"contentSha":%s,"message":"Deleted successfully"}\n' \
+    "$(json_quote "$content_type")" \
+    "$(json_quote "$stable_id")" \
+    "$(json_quote "$(content_url "$content_type" "$stable_id")")" \
+    "$(json_quote "$SITE_SOURCE_SHA")" \
+    "$(json_quote "$CANDIDATE_CONTENT_SHA")"
+}
+
+service_is_active() {
+  [[ -n "$SYSTEMCTL_BIN" && -x "$SYSTEMCTL_BIN" ]] || return 1
+  "$SYSTEMCTL_BIN" is-active --quiet "$SERVICE_NAME" >/dev/null 2>&1
+}
+
+health_is_ready() {
+  [[ -n "$CURL_BIN" && -x "$CURL_BIN" ]] || return 1
+  "$CURL_BIN" --fail --silent --show-error --max-time 5 "$HEALTH_URL" >/dev/null 2>&1
+}
+
+status() {
+  local current=""
+  local previous=""
+  read_release_target "$CURRENT_LINK"
+  current=$RESOLVED_RELEASE_TARGET
+  read_release_target "$PREVIOUS_LINK"
+  previous=$RESOLVED_RELEASE_TARGET
+  local repository_ready=false
+  if [[ -d "$CONTENT_REPOSITORY/.git" ]] && "$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    repository_ready=true
+  fi
+  local service_active=false
+  local healthy=false
+  service_is_active && service_active=true
+  health_is_ready && healthy=true
+  local ready=false
+  if $repository_ready && [[ -n "$current" ]] && $service_active && $healthy; then
+    ready=true
+  fi
+  printf '{"ok":true,"action":"status","ready":%s,"contentRepositoryReady":%s,"currentRelease":%s,"previousRelease":%s,"serviceActive":%s,"healthy":%s,"message":%s}\n' \
+    "$ready" "$repository_ready" "$(json_quote "$current")" "$(json_quote "$previous")" "$service_active" "$healthy" "$(json_quote "Server status checked")"
+}
+
+list_content() {
+  local list_script
+  list_script=$(cat <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [repository, publicBase] = process.argv.slice(1);
+const routes = {
+  "team-news": "news", "research-output": "outputs", "research-project": "projects",
+  "learning-resource": "tutorials", "algae-profile": "algae", "live-feed-profile": "live-feeds",
+  "coastal-observation": "observations", "science-article": "insights", "team-member": "team",
+  "collaboration": "collaboration", "research-profile": "research"
+};
+const validId = (value) => typeof value === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value.length <= 200;
+const root = path.join(repository, "content", "records");
+const rows = [];
+try {
+  if (fs.existsSync(root)) {
+    for (const type of fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()) {
+      if (!routes[type]) throw new Error(`unsupported content type: ${type}`);
+      const typeRoot = path.join(root, type);
+      for (const entry of fs.readdirSync(typeRoot, { withFileTypes: true }).filter((item) => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+        if (!validId(entry.name)) throw new Error(`invalid stable id: ${entry.name}`);
+        const record = JSON.parse(fs.readFileSync(path.join(typeRoot, entry.name, "record.json"), "utf8"));
+        if (record.id !== entry.name || record.type !== type) throw new Error(`record identity mismatch: ${type}/${entry.name}`);
+        const zh = record.locales && record.locales.zh;
+        if (!zh || typeof zh.title !== "string") throw new Error(`missing Chinese title: ${type}/${entry.name}`);
+        rows.push({
+          title: zh.title,
+          stableId: entry.name,
+          contentType: type,
+          zhUrl: `${publicBase.replace(/\/$/, "")}/zh/${routes[type]}/${entry.name}`,
+          status: "published",
+          updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : null
+        });
+      }
+    }
+  }
+  process.stdout.write(`${JSON.stringify({ ok: true, action: "list", items: rows, count: rows.length, message: "Server content listed" })}\n`);
+} catch (error) {
+  process.stdout.write(`${JSON.stringify({ ok: false, action: "list", code: "CONTENT_REPOSITORY_INVALID", message: String(error.message || error) })}\n`);
+  process.exitCode = 2;
+}
+NODE
+)
+  if ! "$NODE_BIN" -e "$list_script" "$CONTENT_REPOSITORY" "$PUBLIC_BASE_URL"; then
+    ERROR_EMITTED=true
+    exit 1
+  fi
+}
+
+parse_arguments() {
+  [[ $# -ge 1 ]] || { usage; fail "INVALID_ARGUMENTS" "A command is required"; }
+  ACTION=$1
+  shift
+  local bundle=""
+  local content_type=""
+  local stable_id=""
+  local json_count=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)
+        JSON_MODE=true
+        ((json_count += 1))
+        ;;
+      --bundle)
+        [[ -z "$bundle" && $# -ge 2 ]] || fail "INVALID_ARGUMENTS" "--bundle requires one value"
+        bundle=$2
+        shift
+        ;;
+      --type)
+        [[ -z "$content_type" && $# -ge 2 ]] || fail "INVALID_ARGUMENTS" "--type requires one value"
+        content_type=$2
+        shift
+        ;;
+      --id)
+        [[ -z "$stable_id" && $# -ge 2 ]] || fail "INVALID_ARGUMENTS" "--id requires one value"
+        stable_id=$2
+        shift
+        ;;
+      *)
+        fail "INVALID_ARGUMENTS" "Unknown argument"
+        ;;
+    esac
+    shift
+  done
+  [[ $json_count -eq 1 ]] || fail "INVALID_ARGUMENTS" "--json is required exactly once"
+  case "$ACTION" in
+    status|list)
+      [[ -z "$bundle$content_type$stable_id" ]] || fail "INVALID_ARGUMENTS" "This command does not accept values"
+      ;;
+    publish)
+      [[ -n "$bundle" && -z "$content_type$stable_id" ]] || fail "INVALID_ARGUMENTS" "publish requires only --bundle"
+      PARSED_BUNDLE=$bundle
+      ;;
+    delete)
+      [[ -z "$bundle" && -n "$content_type" && -n "$stable_id" ]] || fail "INVALID_ARGUMENTS" "delete requires --type and --id"
+      PARSED_CONTENT_TYPE=$content_type
+      PARSED_STABLE_ID=$stable_id
+      ;;
+    *)
+      fail "INVALID_COMMAND" "Unsupported controller command"
+      ;;
+  esac
+}
+
+main() {
+  # Pre-scan JSON mode so malformed invocations still return structured errors.
+  local argument
+  for argument in "$@"; do
+    [[ "$argument" == "--json" ]] && JSON_MODE=true
+  done
+  parse_arguments "$@"
+  prepare_runtime
+  acquire_lock
+  case "$ACTION" in
+    status) status ;;
+    list) list_content ;;
+    publish) publish "$PARSED_BUNDLE" ;;
+    delete) delete_content "$PARSED_CONTENT_TYPE" "$PARSED_STABLE_ID" ;;
+  esac
+}
+
+main "$@"
