@@ -91,6 +91,19 @@ git_setup() {
   "$GIT_BIN" -C "$repository" config core.autocrlf false
 }
 
+write_media_metadata() {
+  local repository=$1
+  local media_id=$2
+  local file_path=$3
+  local actual_path=${4:-"$repository/$file_path"}
+  local sha256 bytes
+  sha256=$(sha256sum -- "$actual_path" | awk '{print $1}')
+  bytes=$(stat -c '%s' -- "$actual_path")
+  mkdir -p -- "$repository/content/media"
+  printf '{"id":"%s","filePath":"%s","sha256":"%s","bytes":%s}\n' \
+    "$media_id" "$file_path" "$sha256" "$bytes" > "$repository/content/media/$media_id.json"
+}
+
 mkdir -p -- "$TEST_ROOT/bin" "$TEST_ROOT/incoming/job-001" "$TEST_ROOT/incoming/job-002" "$TEST_ROOT/site"
 readonly FORMAL_REPOSITORY="$TEST_ROOT/content-root/repository"
 readonly SITE_SOURCE="$TEST_ROOT/site-source"
@@ -118,9 +131,12 @@ mkdir -p -- \
   "$SITE_SOURCE/scripts"
 printf '%s\n' '{"id":"bootstrap-author","name":"Fresh Main Author"}' > "$SITE_SOURCE/content/authors/bootstrap-author.json"
 printf '%s\n' '{"id":"bootstrap-media","filePath":"public/images/uploads/2025/12/bootstrap-image.webp"}' > "$SITE_SOURCE/content/media/bootstrap-media.json"
-printf '%s\n' '{"schemaVersion":1,"id":"existing-id","type":"science-article","updatedAt":"2025-12-01T00:00:00Z","locales":{"zh":{"title":"Existing fresh-main article","bodyFile":"zh.md"},"en":{"missing":true}}}' > "$SITE_SOURCE/content/records/science-article/existing-id/record.json"
+printf '%s\n' '{"schemaVersion":1,"id":"existing-id","type":"science-article","updatedAt":"2025-12-01T00:00:00Z","media":[],"shared":{"coverMediaId":"shared-image"},"locales":{"zh":{"title":"Existing fresh-main article","bodyFile":"zh.md"},"en":{"missing":true}}}' > "$SITE_SOURCE/content/records/science-article/existing-id/record.json"
 printf 'Existing fresh-main body\n' > "$SITE_SOURCE/content/records/science-article/existing-id/zh.md"
 printf 'fresh-main-image\n' > "$SITE_SOURCE/public/images/uploads/2025/12/bootstrap-image.webp"
+printf 'shared-existing-image\n' > "$SITE_SOURCE/public/images/uploads/2025/12/shared-image.webp"
+write_media_metadata "$SITE_SOURCE" shared-image \
+  public/images/uploads/2025/12/shared-image.webp
 printf '#!/usr/bin/env bash\nprintf "fallback executable probe\\n"\n' > "$SITE_SOURCE/scripts/fallback-executable.sh"
 chmod 0755 -- "$SITE_SOURCE/scripts/fallback-executable.sh"
 "$GIT_BIN" -C "$SITE_SOURCE" add .
@@ -299,14 +315,20 @@ mkdir -p -- "$TEST_ROOT/workbench-source/content/authors" "$TEST_ROOT/workbench-
 touch "$TEST_ROOT/workbench-source/content/authors/.gitkeep" "$TEST_ROOT/workbench-source/content/media/.gitkeep" "$TEST_ROOT/workbench-source/content/records/.gitkeep"
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" add content
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "site: base content"
-base_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
 mkdir -p -- "$TEST_ROOT/workbench-source/content/records/science-article/example-id" "$TEST_ROOT/workbench-source/public/images/uploads/2026/07"
-printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T00:00:00Z","locales":{"zh":{"title":"Example algae article v1","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T00:00:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article v1","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
 printf 'Example body v1\n' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/zh.md"
 printf 'English body\n' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/en.md"
-printf '%s\n' '{"id":"example-image","filePath":"public/images/uploads/2026/07/example-image.webp"}' > "$TEST_ROOT/workbench-source/content/media/example-image.json"
+printf '%s\n' '{"id":"retry-ancestor-only","name":"Must not be materialized"}' > "$TEST_ROOT/workbench-source/content/authors/retry-ancestor-only.json"
 printf 'image-v1\n' > "$TEST_ROOT/workbench-source/public/images/uploads/2026/07/example-image.webp"
+write_media_metadata "$TEST_ROOT/workbench-source" example-image \
+  public/images/uploads/2026/07/example-image.webp
+printf 'thumbnail-v1\n' > "$TEST_ROOT/workbench-source/public/images/uploads/2026/07/example-image.thumbnail.webp"
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" add .
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
+retry_base_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T00:30:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article v1","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- content/records/science-article/example-id/record.json
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
 head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
 direct_job_id='0123456789abcdef0123456789abcdef'
@@ -321,17 +343,17 @@ cat > "$INCOMING_JOB/MANIFEST.txt" <<MANIFEST
 FormatVersion=1
 Branch=$branch
 HeadCommit=$head_sha
-BaseCommit=$base_sha
+BaseCommit=$retry_base_sha
 BundleFile=$bundle_name
 BundleSizeBytes=$bundle_size
 BundleSha256=$bundle_sha
 History=complete
 ImportBranch=import/content-direct-$direct_job_id-example-id
-ChangedFileCount=5
+ChangedFileCount=1
 Artifacts=$bundle_name,$bundle_name.sha256.txt,MANIFEST.txt,HANDOFF.md,TEST-SUMMARY.txt,CHANGED-FILES.txt,Import-Bundle.ps1,Validate-Bundle.sh,validate-bundle.mjs
 MANIFEST
 printf '%s  %s\n' "$bundle_sha" "$bundle_name" > "$INCOMING_JOB/$bundle_name.sha256.txt"
-printf '%s\n' 'content/media/example-image.json' 'content/records/science-article/example-id/en.md' 'content/records/science-article/example-id/record.json' 'content/records/science-article/example-id/zh.md' 'public/images/uploads/2026/07/example-image.webp' > "$INCOMING_JOB/CHANGED-FILES.txt"
+printf '%s\n' 'content/records/science-article/example-id/record.json' > "$INCOMING_JOB/CHANGED-FILES.txt"
 printf '%s\n' 'handoff' > "$INCOMING_JOB/HANDOFF.md"
 printf '%s\n' 'summary' > "$INCOMING_JOB/TEST-SUMMARY.txt"
 printf '%s\n' 'import' > "$INCOMING_JOB/Import-Bundle.ps1"
@@ -339,9 +361,11 @@ printf '%s\n' 'wrapper' > "$INCOMING_JOB/Validate-Bundle.sh"
 printf '%s\n' 'validator' > "$INCOMING_JOB/validate-bundle.mjs"
 
 update_base_sha=$head_sha
-printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T01:00:00Z","locales":{"zh":{"title":"Example algae article v2","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T01:00:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article v2","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
 printf 'Example body v2\n' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/zh.md"
 printf 'image-v2\n' > "$TEST_ROOT/workbench-source/public/images/uploads/2026/07/example-image.webp"
+write_media_metadata "$TEST_ROOT/workbench-source" example-image \
+  public/images/uploads/2026/07/example-image.webp
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" add .
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
 update_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
@@ -362,11 +386,11 @@ BundleSizeBytes=$update_bundle_size
 BundleSha256=$update_bundle_sha
 History=complete
 ImportBranch=import/content-direct-$direct_update_job_id-example-id
-ChangedFileCount=3
+ChangedFileCount=4
 Artifacts=$update_bundle_name,$update_bundle_name.sha256.txt,MANIFEST.txt,HANDOFF.md,TEST-SUMMARY.txt,CHANGED-FILES.txt,Import-Bundle.ps1,Validate-Bundle.sh,validate-bundle.mjs
 MANIFEST
 printf '%s  %s\n' "$update_bundle_sha" "$update_bundle_name" > "$UPDATE_JOB/$update_bundle_name.sha256.txt"
-printf '%s\n' 'content/records/science-article/example-id/record.json' 'content/records/science-article/example-id/zh.md' 'public/images/uploads/2026/07/example-image.webp' > "$UPDATE_JOB/CHANGED-FILES.txt"
+printf '%s\n' 'content/media/example-image.json' 'content/records/science-article/example-id/record.json' 'content/records/science-article/example-id/zh.md' 'public/images/uploads/2026/07/example-image.webp' > "$UPDATE_JOB/CHANGED-FILES.txt"
 printf '%s\n' 'handoff' > "$UPDATE_JOB/HANDOFF.md"
 printf '%s\n' 'summary' > "$UPDATE_JOB/TEST-SUMMARY.txt"
 printf '%s\n' 'import' > "$UPDATE_JOB/Import-Bundle.ps1"
@@ -409,31 +433,45 @@ MANIFEST
 readonly FAILURE_JOB="$TEST_ROOT/incoming/job-003"
 readonly LEGACY_JOB="$TEST_ROOT/incoming/job-004"
 readonly BAD_IMAGE_JOB="$TEST_ROOT/incoming/job-005"
-mkdir -p -- "$FAILURE_JOB" "$LEGACY_JOB" "$BAD_IMAGE_JOB"
+readonly BAD_MODE_JOB="$TEST_ROOT/incoming/job-006"
+readonly BAD_MEDIA_PATH_JOB="$TEST_ROOT/incoming/job-007"
+readonly BAD_MEDIA_DIGEST_JOB="$TEST_ROOT/incoming/job-008"
+readonly SHARED_MEDIA_JOB="$TEST_ROOT/incoming/job-009"
+readonly OVERSIZED_SNAPSHOT_JOB="$TEST_ROOT/incoming/job-010"
+mkdir -p -- \
+  "$FAILURE_JOB" "$LEGACY_JOB" "$BAD_IMAGE_JOB" "$BAD_MODE_JOB" \
+  "$BAD_MEDIA_PATH_JOB" "$BAD_MEDIA_DIGEST_JOB" "$SHARED_MEDIA_JOB" \
+  "$OVERSIZED_SNAPSHOT_JOB"
 
 failure_job_id='00112233445566778899aabbccddeeff'
 failure_branch="content/direct-$failure_job_id-example-id"
-printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T02:00:00Z","locales":{"zh":{"title":"Example algae article v3","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T02:00:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article v3","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
 printf 'Example body v3\n' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/zh.md"
 printf 'image-v3\n' > "$TEST_ROOT/workbench-source/public/images/uploads/2026/07/example-image.webp"
+write_media_metadata "$TEST_ROOT/workbench-source" example-image \
+  public/images/uploads/2026/07/example-image.webp
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" add .
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
 failure_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" branch -m "$update_branch" "$failure_branch"
 make_additional_delivery "$FAILURE_JOB" "$failure_branch" "$update_head_sha" "$failure_head_sha" \
+  'content/media/example-image.json' \
   'content/records/science-article/example-id/record.json' \
   'content/records/science-article/example-id/zh.md' \
   'public/images/uploads/2026/07/example-image.webp'
 
 legacy_branch='content/20260726-example-id'
-printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T03:00:00Z","locales":{"zh":{"title":"Example algae article legacy","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T03:00:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article legacy","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
 printf 'Example body legacy\n' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/zh.md"
 printf 'image-legacy\n' > "$TEST_ROOT/workbench-source/public/images/uploads/2026/07/example-image.webp"
+write_media_metadata "$TEST_ROOT/workbench-source" example-image \
+  public/images/uploads/2026/07/example-image.webp
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" add .
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
 legacy_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" branch -m "$failure_branch" "$legacy_branch"
 make_additional_delivery "$LEGACY_JOB" "$legacy_branch" "$failure_head_sha" "$legacy_head_sha" \
+  'content/media/example-image.json' \
   'content/records/science-article/example-id/record.json' \
   'content/records/science-article/example-id/zh.md' \
   'public/images/uploads/2026/07/example-image.webp'
@@ -449,8 +487,107 @@ bad_image_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
 "$GIT_BIN" -C "$TEST_ROOT/workbench-source" branch -m "$legacy_branch" "$bad_image_branch"
 make_additional_delivery "$BAD_IMAGE_JOB" "$bad_image_branch" "$legacy_head_sha" "$bad_image_head_sha" "$bad_image_path"
 
+bad_mode_job_id='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+bad_mode_branch="content/direct-$bad_mode_job_id-example-id"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" update-index --chmod=+x -- \
+  content/records/science-article/example-id/zh.md
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "test: executable Chinese snapshot body"
+bad_mode_parent_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+[[ $("$GIT_BIN" -C "$TEST_ROOT/workbench-source" ls-tree "$bad_mode_parent_sha" -- content/records/science-article/example-id/zh.md) == 100755\ blob\ * ]] || {
+  printf 'bad-mode fixture did not record executable Chinese content\n' >&2
+  exit 1
+}
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T04:00:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article bad mode","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- content/records/science-article/example-id/record.json
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
+bad_mode_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" branch -m "$bad_image_branch" "$bad_mode_branch"
+make_additional_delivery "$BAD_MODE_JOB" "$bad_mode_branch" "$bad_mode_parent_sha" "$bad_mode_head_sha" \
+  'content/records/science-article/example-id/record.json'
+
+bad_media_path_job_id='cccccccccccccccccccccccccccccccc'
+bad_media_path_branch="content/direct-$bad_media_path_job_id-example-id"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" update-index --chmod=-x -- \
+  content/records/science-article/example-id/zh.md
+write_media_metadata "$TEST_ROOT/workbench-source" example-image \
+  ../outside/example-image.webp \
+  "$TEST_ROOT/workbench-source/public/images/uploads/2026/07/example-image.webp"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- content/media/example-image.json
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "test: invalid media snapshot path"
+bad_media_path_parent_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+[[ $("$GIT_BIN" -C "$TEST_ROOT/workbench-source" ls-tree "$bad_media_path_parent_sha" -- content/records/science-article/example-id/zh.md) == 100644\ blob\ * ]] || {
+  printf 'bad-media-path fixture did not restore regular Chinese content\n' >&2
+  exit 1
+}
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T05:00:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article bad media path","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- content/records/science-article/example-id/record.json
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
+bad_media_path_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" branch -m "$bad_mode_branch" "$bad_media_path_branch"
+make_additional_delivery "$BAD_MEDIA_PATH_JOB" "$bad_media_path_branch" "$bad_media_path_parent_sha" "$bad_media_path_head_sha" \
+  'content/records/science-article/example-id/record.json'
+
+bad_media_digest_job_id='ffffffffffffffffffffffffffffffff'
+bad_media_digest_branch="content/direct-$bad_media_digest_job_id-example-id"
+example_image_bytes=$(stat -c '%s' -- "$TEST_ROOT/workbench-source/public/images/uploads/2026/07/example-image.webp")
+printf '{"id":"example-image","filePath":"public/images/uploads/2026/07/example-image.webp","sha256":"%064d","bytes":%s}\n' \
+  0 "$((example_image_bytes + 1))" > "$TEST_ROOT/workbench-source/content/media/example-image.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- content/media/example-image.json
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "test: mismatched media snapshot digest"
+bad_media_digest_parent_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T05:10:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article bad media digest","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- content/records/science-article/example-id/record.json
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
+bad_media_digest_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" branch -m "$bad_media_path_branch" "$bad_media_digest_branch"
+make_additional_delivery "$BAD_MEDIA_DIGEST_JOB" "$bad_media_digest_branch" \
+  "$bad_media_digest_parent_sha" "$bad_media_digest_head_sha" \
+  'content/records/science-article/example-id/record.json'
+
+shared_media_job_id='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+shared_media_branch="content/direct-$shared_media_job_id-example-id"
+mkdir -p -- "$TEST_ROOT/workbench-source/public/images/uploads/2025/12"
+printf 'shared-overwrite-image\n' > "$TEST_ROOT/workbench-source/public/images/uploads/2025/12/shared-image.webp"
+write_media_metadata "$TEST_ROOT/workbench-source" shared-image \
+  public/images/uploads/2025/12/shared-image.webp
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T05:30:00Z","media":["shared-image"],"locales":{"zh":{"title":"Example algae article shared media","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- \
+  content/media/shared-image.json content/records/science-article/example-id/record.json \
+  public/images/uploads/2025/12/shared-image.webp
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "test: conflicting shared media snapshot"
+shared_media_parent_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T05:31:00Z","media":["shared-image"],"locales":{"zh":{"title":"Example algae article shared media retry","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- content/records/science-article/example-id/record.json
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
+shared_media_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" branch -m "$bad_media_digest_branch" "$shared_media_branch"
+make_additional_delivery "$SHARED_MEDIA_JOB" "$shared_media_branch" "$shared_media_parent_sha" "$shared_media_head_sha" \
+  'content/records/science-article/example-id/record.json'
+
+oversized_snapshot_job_id='dddddddddddddddddddddddddddddddd'
+oversized_snapshot_branch="content/direct-$oversized_snapshot_job_id-example-id"
+write_media_metadata "$TEST_ROOT/workbench-source" example-image \
+  public/images/uploads/2026/07/example-image.webp
+"$NODE_BIN" -e 'require("fs").writeFileSync(process.argv[1], Buffer.alloc(4097, 120))' \
+  "$TEST_ROOT/workbench-source/content/records/science-article/example-id/zh.md"
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T06:00:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article oversized parent","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- \
+  content/media/example-image.json content/records/science-article/example-id/record.json \
+  content/records/science-article/example-id/zh.md
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "test: oversized Chinese snapshot body"
+oversized_snapshot_parent_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+printf '%s\n' '{"schemaVersion":1,"id":"example-id","type":"science-article","updatedAt":"2026-07-26T06:01:00Z","media":["example-image"],"locales":{"zh":{"title":"Example algae article oversized retry","bodyFile":"zh.md"},"en":{"title":"Example algae article","bodyFile":"en.md"}}}' > "$TEST_ROOT/workbench-source/content/records/science-article/example-id/record.json"
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" add -- content/records/science-article/example-id/record.json
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" commit -q -m "content: publish example-id"
+oversized_snapshot_head_sha=$("$GIT_BIN" -C "$TEST_ROOT/workbench-source" rev-parse HEAD)
+"$GIT_BIN" -C "$TEST_ROOT/workbench-source" branch -m "$shared_media_branch" "$oversized_snapshot_branch"
+make_additional_delivery "$OVERSIZED_SNAPSHOT_JOB" "$oversized_snapshot_branch" \
+  "$oversized_snapshot_parent_sha" "$oversized_snapshot_head_sha" \
+  'content/records/science-article/example-id/record.json'
+
 common_env=(
   ALGAE_CONTENTCTL_TESTING=1
+  ALGAE_MAX_CONTENT_FILE_BYTES=4096
   ALGAE_CONTENT_ROOT="$TEST_ROOT/content-root"
   ALGAE_INCOMING_ROOT="$TEST_ROOT/incoming"
   ALGAE_SITE_ROOT="$TEST_ROOT/site"
@@ -499,12 +636,26 @@ assert_json_field "$publish_json" action publish
 assert_json_field "$publish_json" stableId example-id
 [[ -f "$TEST_ROOT/site/current" ]] || { printf 'current release marker missing\n' >&2; exit 1; }
 [[ -f "$FORMAL_REPOSITORY/content/records/science-article/example-id/record.json" ]] || { printf 'formal content was not updated\n' >&2; exit 1; }
+[[ -f "$FORMAL_REPOSITORY/content/records/science-article/example-id/zh.md" ]] || { printf 'formal Chinese body was not materialized from the retry snapshot\n' >&2; exit 1; }
+[[ -f "$FORMAL_REPOSITORY/content/media/example-image.json" ]] || { printf 'formal media metadata was not materialized from the retry snapshot\n' >&2; exit 1; }
 [[ -f "$FORMAL_REPOSITORY/public/images/uploads/2026/07/example-image.webp" ]] || { printf 'formal image was not updated\n' >&2; exit 1; }
+[[ -f "$FORMAL_REPOSITORY/public/images/uploads/2026/07/example-image.thumbnail.webp" ]] || { printf 'formal thumbnail was not materialized from the retry snapshot\n' >&2; exit 1; }
+grep -q 'Example body v1' "$FORMAL_REPOSITORY/content/records/science-article/example-id/zh.md"
+grep -q 'image-v1' "$FORMAL_REPOSITORY/public/images/uploads/2026/07/example-image.webp"
+grep -q 'thumbnail-v1' "$FORMAL_REPOSITORY/public/images/uploads/2026/07/example-image.thumbnail.webp"
 assert_bootstrap_sentinels "$FORMAL_REPOSITORY"
+[[ ! -e "$FORMAL_REPOSITORY/content/authors/retry-ancestor-only.json" ]] || {
+  printf 'successful retry materialized an unrelated ancestor path\n' >&2
+  exit 1
+}
 [[ -z "$("$GIT_BIN" -C "$FORMAL_REPOSITORY" remote)" ]] || { printf 'formal content repository unexpectedly has a Git remote\n' >&2; exit 1; }
 first_release=$(<"$TEST_ROOT/site/current")
 [[ -f "$first_release/public/images/uploads/2026/07/example-image.webp" ]] || { printf 'release image was not overlaid\n' >&2; exit 1; }
 assert_bootstrap_sentinels "$first_release"
+[[ ! -e "$first_release/content/authors/retry-ancestor-only.json" ]] || {
+  printf 'successful retry released an unrelated ancestor path\n' >&2
+  exit 1
+}
 [[ $(<"$first_release/.release-sha") == "$fallback_site_source_sha" ]] || { printf 'fallback release did not preserve the GitHub API commit SHA\n' >&2; exit 1; }
 [[ $("$GIT_BIN" -C "$first_release" rev-parse 'HEAD^{tree}') == "$site_source_tree_sha" ]] || { printf 'fallback release did not preserve the API source tree\n' >&2; exit 1; }
 [[ $("$GIT_BIN" -C "$first_release" rev-parse HEAD) != "$fallback_site_source_sha" ]] || { printf 'fallback test did not exercise a synthetic local snapshot commit\n' >&2; exit 1; }
@@ -659,6 +810,45 @@ fi
 assert_json_field "$bad_image_json" ok false
 assert_json_field "$bad_image_json" action publish
 assert_json_field "$bad_image_json" code FORBIDDEN_PATH
+
+assert_snapshot_rejection() {
+  local label=$1
+  local delivery=$2
+  local expected_code=$3
+  local formal_head_before formal_tree_before current_release_before failure_json
+  formal_head_before=$("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD)
+  formal_tree_before=$("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse 'HEAD^{tree}')
+  current_release_before=$(<"$TEST_ROOT/site/current")
+  if failure_json=$(env "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$delivery" --json); then
+    printf '%s snapshot unexpectedly published content\n' "$label" >&2
+    exit 1
+  fi
+  assert_json_field "$failure_json" ok false
+  assert_json_field "$failure_json" action publish
+  assert_json_field "$failure_json" code "$expected_code"
+  [[ $("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD) == "$formal_head_before" ]] || {
+    printf '%s snapshot rejection changed formal HEAD\n' "$label" >&2
+    exit 1
+  }
+  [[ $("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse 'HEAD^{tree}') == "$formal_tree_before" ]] || {
+    printf '%s snapshot rejection changed formal tree\n' "$label" >&2
+    exit 1
+  }
+  [[ -z "$("$GIT_BIN" -C "$FORMAL_REPOSITORY" status --porcelain --untracked-files=all)" ]] || {
+    printf '%s snapshot rejection dirtied the formal repository\n' "$label" >&2
+    exit 1
+  }
+  [[ $(<"$TEST_ROOT/site/current") == "$current_release_before" ]] || {
+    printf '%s snapshot rejection changed the current release\n' "$label" >&2
+    exit 1
+  }
+}
+
+assert_snapshot_rejection executable-body "$BAD_MODE_JOB" INVALID_BUNDLE
+assert_snapshot_rejection invalid-media-path "$BAD_MEDIA_PATH_JOB" INVALID_BUNDLE
+assert_snapshot_rejection mismatched-media-digest "$BAD_MEDIA_DIGEST_JOB" INVALID_BUNDLE
+assert_snapshot_rejection shared-media-conflict "$SHARED_MEDIA_JOB" INVALID_BUNDLE
+assert_snapshot_rejection oversized-body "$OVERSIZED_SNAPSHOT_JOB" BUNDLE_TOO_LARGE
 
 delete_head_before=$("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD)
 current_before=$(<"$TEST_ROOT/site/current")

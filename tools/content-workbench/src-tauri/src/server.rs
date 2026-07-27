@@ -26,7 +26,10 @@ const MAX_LOG_TAIL_BYTES: usize = 4 * 1024;
 const MAX_SERVER_ITEMS: usize = 10_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
-const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+const MIN_UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_UPLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const UPLOAD_TIMEOUT_GRACE: Duration = Duration::from_secs(60);
+const MIN_UPLOAD_BYTES_PER_SECOND: u64 = 8 * 1024;
 const UPLOAD_PERMISSIONS_TIMEOUT: Duration = Duration::from_secs(30);
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const LOCAL_VALIDATOR_TIMEOUT: Duration = Duration::from_secs(90);
@@ -250,7 +253,7 @@ fn publish_content(
     if let Err(error) = validate_portable_bundle(&delivery, &export.bundle_file_name) {
         return *error;
     }
-    if let Err(error) = upload_delivery(&upload_root) {
+    if let Err(error) = upload_delivery(&upload_root, export.bundle_size_bytes) {
         return *error;
     }
     if let Err(error) = secure_uploaded_delivery(&job_id) {
@@ -509,9 +512,15 @@ fn validate_portable_bundle(
     Ok(())
 }
 
-fn upload_delivery(upload_root: &Path) -> Result<(), Box<ServerCommandResult>> {
-    let output = run_process(scp_command_spec(upload_root))
-        .map_err(|failure| Box::new(process_failure("publish", "UPLOAD", failure)))?;
+fn upload_delivery(
+    upload_root: &Path,
+    bundle_size_bytes: u64,
+) -> Result<(), Box<ServerCommandResult>> {
+    let output = run_process(scp_command_spec(
+        upload_root,
+        upload_timeout(bundle_size_bytes),
+    ))
+    .map_err(|failure| Box::new(process_failure("publish", "UPLOAD", failure)))?;
     if output.stdout.truncated {
         return Err(Box::new(ServerCommandResult::error(
             "publish",
@@ -945,12 +954,23 @@ fn remote_upload_chmod_specs(job_id: &str) -> Option<[CommandSpec; 2]> {
     ])
 }
 
-fn scp_command_spec(source: &Path) -> CommandSpec {
+fn upload_timeout(bundle_size_bytes: u64) -> Duration {
+    let transfer_seconds = bundle_size_bytes.saturating_add(MIN_UPLOAD_BYTES_PER_SECOND - 1)
+        / MIN_UPLOAD_BYTES_PER_SECOND;
+    let estimated = Duration::from_secs(
+        UPLOAD_TIMEOUT_GRACE
+            .as_secs()
+            .saturating_add(transfer_seconds),
+    );
+    estimated.clamp(MIN_UPLOAD_TIMEOUT, MAX_UPLOAD_TIMEOUT)
+}
+
+fn scp_command_spec(source: &Path, timeout: Duration) -> CommandSpec {
     let mut args = vec![OsString::from("-q"), OsString::from("-r")];
     args.extend(ssh_option_args());
     args.push(source.as_os_str().to_owned());
     args.push(OsString::from(REMOTE_INCOMING_ROOT));
-    CommandSpec::new("scp", args, UPLOAD_TIMEOUT)
+    CommandSpec::new("scp", args, timeout)
 }
 
 fn ssh_option_args() -> Vec<OsString> {
@@ -1130,8 +1150,9 @@ fn display_path(path: &Path) -> String {
 mod tests {
     use super::{
         bundle_matches_request, parse_server_json, remote_upload_chmod_specs, scp_command_spec,
-        ssh_command_spec, valid_https_url, validate_content_identity, validate_list_response,
-        validate_mutation_identity, validate_status_response, CapturedOutput, ServerCommandResult,
+        ssh_command_spec, upload_timeout, valid_https_url, validate_content_identity,
+        validate_list_response, validate_mutation_identity, validate_status_response,
+        CapturedOutput, ServerCommandResult,
     };
     use crate::repository::RepositoryBundlePreflightResult;
     use serde_json::json;
@@ -1385,15 +1406,42 @@ mod tests {
         assert_eq!(ssh.args.last(), Some(&OsString::from("--json")));
         assert!(ssh.args.iter().any(|argument| argument == "algae-server"));
 
-        let scp = scp_command_spec(Path::new("C:\\safe\\job"));
+        let scp = scp_command_spec(Path::new("C:\\safe\\job"), Duration::from_secs(321));
         assert_eq!(scp.program, "scp");
+        assert_eq!(scp.timeout, Duration::from_secs(321));
         assert_eq!(scp.args[0], OsString::from("-q"));
+        assert!(scp
+            .args
+            .windows(2)
+            .any(|pair| pair == [OsString::from("-o"), OsString::from("ConnectTimeout=10")]));
+        assert!(scp.args.windows(2).any(|pair| pair
+            == [
+                OsString::from("-o"),
+                OsString::from("ServerAliveInterval=15")
+            ]));
+        assert!(scp.args.windows(2).any(|pair| pair
+            == [
+                OsString::from("-o"),
+                OsString::from("ServerAliveCountMax=2")
+            ]));
         assert_eq!(
             scp.args.last(),
             Some(&OsString::from(
                 "algae-server:/home/ubuntu/algae-content-workbench/incoming/"
             ))
         );
+    }
+
+    #[test]
+    fn upload_timeout_scales_with_bundle_size_and_stays_bounded() {
+        assert_eq!(upload_timeout(0), Duration::from_secs(120));
+        assert_eq!(upload_timeout(8 * 1024), Duration::from_secs(120));
+        assert_eq!(upload_timeout(9_092_544), Duration::from_secs(1_170));
+        assert_eq!(
+            upload_timeout(512 * 1024 * 1024),
+            Duration::from_secs(30 * 60)
+        );
+        assert_eq!(upload_timeout(u64::MAX), Duration::from_secs(30 * 60));
     }
 
     #[test]
