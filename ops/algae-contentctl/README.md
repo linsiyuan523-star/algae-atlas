@@ -41,6 +41,7 @@ source update.
 ```text
 /srv/algae-content/repository                 formal independent content Git repo
 /srv/algae-content/transactions               root-only candidate workspaces
+/srv/algae-content/site-source-cache          root-only verified GitHub source snapshots
 /home/ubuntu/algae-content-workbench/incoming/<job-id>
 /srv/algae-atlas/releases/<release-id>         fresh website builds
 /srv/algae-atlas/current                       active release symlink
@@ -54,27 +55,34 @@ an approved image suffix. Bundle entries must remain ordinary Git blobs; links,
 traversal, and every other `public/` path are rejected.
 
 The controller never reads `/srv/algae-atlas/source` or uses the active
-`current` release as source. Each publish or deletion first makes two bounded
-60-second shallow-clone attempts against the configured GitHub `main`. If that
-transport fails, the controller queries the official GitHub commit API for the
-branch's exact commit and tree SHA and downloads the tarball for that commit.
-Both HTTP requests retain three attempts with bounded per-attempt and total
-timeouts. The controller rejects unsafe archive entries and initializes a local
-Git snapshot only after its written tree, including executable modes, matches
-the API tree SHA. The release SHA remains the real GitHub commit SHA; the local
-snapshot commit is merely a clean build workspace whose tree is rechecked
-before use.
+`current` release as source. Each publish or deletion first queries the official
+GitHub commit API for the branch's exact commit and tree SHA, then checks a
+root-only cache keyed by both values. A cache hit is accepted only after its
+metadata, clean Git state, branch, tree SHA, and managed content trees are
+revalidated; the copied transaction source is validated again before use. A
+cache miss retains the bounded shallow-clone attempts and exact GitHub archive
+fallback. Verified sources are installed into the cache through a
+same-directory atomic rename, while invalid entries are quarantined inside the
+current root-only transaction. HTTP requests retain bounded retries and
+timeouts. The controller rejects unsafe archive entries and initializes a
+local Git snapshot only after its written tree, including executable modes,
+matches the API tree SHA. The release SHA remains the real GitHub commit SHA;
+a local archive snapshot commit is merely a clean build workspace whose tree
+is rechecked before use.
 
 The controller reuses that exact prepared tree for both the candidate bootstrap
 and website build. It overlays a candidate `content/` directory, runs
-`npm ci --include=dev`, `npm run check`, and `npm run build:next` with
-`CONTENT_REPOSITORY_SOURCE=records`, synchronizes candidate uploads into the
-fresh build, and then creates a release. Only after the site restart, loopback
-health check, and exact published URL check succeed does it replace the formal
-content repository. Any failure rolls `current` and `previous` back and leaves
-the formal repository unchanged. If restoring the formal repository or release
-links itself fails, the root-only transaction workspace and new release are
-retained for manual recovery instead of being deleted.
+`npm ci --include=dev`, `npm run content:validate -- --json`, and
+`npm run build:next` with `CONTENT_REPOSITORY_SOURCE=records`, synchronizes
+candidate uploads into the fresh build, and then creates a release. Full source
+type and lint checks remain pull-request gates; the production transaction
+validates the changing content repository and performs the production Next.js
+build. Only after the site restart, loopback health check, and exact published
+URL check succeed does it replace the formal content repository. Any failure
+rolls `current` and `previous` back and leaves the formal repository unchanged.
+If restoring the formal repository or release links itself fails, the root-only
+transaction workspace and new release are retained for manual recovery instead
+of being deleted.
 
 All registered content types have records-backed website detail routes. The
 controller still treats the exact URL check as a transaction gate: any routing

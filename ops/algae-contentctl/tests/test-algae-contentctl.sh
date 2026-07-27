@@ -123,6 +123,7 @@ mkdir -p -- "$SITE_SOURCE/content"
 printf '{"name":"mock-site","version":"1.0.0","private":true}\n' > "$SITE_SOURCE/package.json"
 printf '{"name":"mock-site","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"mock-site","version":"1.0.0"}}}\n' > "$SITE_SOURCE/package-lock.json"
 printf 'main source\n' > "$SITE_SOURCE/README.md"
+printf '.env.production.local\n' > "$SITE_SOURCE/.gitignore"
 "$GIT_BIN" -C "$SITE_SOURCE" add .
 "$GIT_BIN" -C "$SITE_SOURCE" commit -q -m "site: initial source"
 mkdir -p -- \
@@ -193,12 +194,15 @@ cat > "$TEST_ROOT/bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s\n' "$*" >> "${MOCK_NPM_LOG:?}"
-if [[ "${MOCK_NPM_FAIL:-0}" == "1" ]]; then
+if [[ "${MOCK_CONTENT_VALIDATE_FAIL:-0}" == "1" && "$1 ${2:-}" == "run content:validate" ]]; then
+  exit 42
+fi
+if [[ "${MOCK_NPM_FAIL:-0}" == "1" && "$1 ${2:-}" == "run build:next" ]]; then
   exit 42
 fi
 case "$1 ${2:-}" in
   ci\ --include=dev) exit 0 ;;
-  run\ check) exit 0 ;;
+  run\ content:validate) exit 0 ;;
   run\ build:next) mkdir -p .next; printf 'mock build\n' > .next/mock-build; exit 0 ;;
   *) exit 2 ;;
 esac
@@ -614,13 +618,16 @@ common_env=(
 
 placeholder_head=$("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD)
 placeholder_tree=$("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD^{tree})
-if first_build_json=$(env MOCK_NPM_FAIL=1 "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$INCOMING_JOB" --json); then
-  printf 'failing first build unexpectedly published content\n' >&2
+if first_build_json=$(env MOCK_CONTENT_VALIDATE_FAIL=1 "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$INCOMING_JOB" --json); then
+  printf 'failing content validation unexpectedly published content\n' >&2
   exit 1
 fi
 assert_json_field "$first_build_json" ok false
 assert_json_field "$first_build_json" action publish
 assert_json_field "$first_build_json" code BUILD_FAILED
+[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev' ]] || { printf 'failed build did not install dependencies first\n' >&2; exit 1; }
+[[ $(sed -n '2p' "$MOCK_NPM_LOG") == 'run content:validate -- --json' ]] || { printf 'failed build did not reach targeted content validation\n' >&2; exit 1; }
+[[ $(wc -l < "$MOCK_NPM_LOG") -eq 2 ]] || { printf 'production build ran after content validation failed\n' >&2; exit 1; }
 [[ $("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD) == "$placeholder_head" ]] || { printf 'failed first build changed placeholder HEAD\n' >&2; exit 1; }
 [[ $("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD^{tree}) == "$placeholder_tree" ]] || { printf 'failed first build changed placeholder tree\n' >&2; exit 1; }
 [[ -z "$("$GIT_BIN" -C "$FORMAL_REPOSITORY" status --porcelain --untracked-files=all)" ]] || { printf 'failed first build dirtied the placeholder repository\n' >&2; exit 1; }
@@ -628,14 +635,52 @@ assert_json_field "$first_build_json" code BUILD_FAILED
 [[ ! -e "$FORMAL_REPOSITORY/content/records/science-article/example-id" ]] || { printf 'failed first build installed bundle content\n' >&2; exit 1; }
 [[ ! -e "$FORMAL_REPOSITORY/public/images/uploads/2026/07/example-image.webp" ]] || { printf 'failed first build installed bundle image\n' >&2; exit 1; }
 [[ ! -e "$TEST_ROOT/site/current" && ! -e "$TEST_ROOT/site/previous" ]] || { printf 'failed first build changed release markers\n' >&2; exit 1; }
+site_source_cache="$TEST_ROOT/content-root/site-source-cache/$fallback_site_source_sha-$site_source_tree_sha"
+[[ -d "$site_source_cache/repository/.git" ]] || { printf 'verified website source cache was not populated\n' >&2; exit 1; }
+[[ $(<"$site_source_cache/site-sha") == "$fallback_site_source_sha" ]] || { printf 'website source cache commit metadata is wrong\n' >&2; exit 1; }
+[[ $(<"$site_source_cache/tree-sha") == "$site_source_tree_sha" ]] || { printf 'website source cache tree metadata is wrong\n' >&2; exit 1; }
+[[ -z "$("$GIT_BIN" -C "$site_source_cache/repository" status --porcelain --untracked-files=all)" ]] || { printf 'website source cache is dirty\n' >&2; exit 1; }
+[[ $("$GIT_BIN" -C "$site_source_cache/repository" rev-parse 'HEAD^{tree}') == "$site_source_tree_sha" ]] || { printf 'website source cache tree is wrong\n' >&2; exit 1; }
+[[ $(grep -c -- '--depth 1' "$MOCK_GIT_LOG") -eq 1 ]] || { printf 'initial source fetch did not exercise the shallow clone\n' >&2; exit 1; }
+grep -q -- '--connect-timeout 10 --max-time 900 --retry 2 --retry-delay 2 --retry-max-time 900' "$MOCK_CURL_LOG" || { printf 'GitHub fallback archive request did not allow a bounded slow download\n' >&2; exit 1; }
+grep -Fq -- "--signal=TERM --kill-after=10s 900s $TEST_ROOT/bin/curl" "$MOCK_TIMEOUT_LOG" || { printf 'GitHub fallback archive request did not have a hard total timeout\n' >&2; exit 1; }
+grep -q -- "/tarball/$fallback_site_source_sha" "$MOCK_CURL_LOG" || { printf 'GitHub fallback did not request the exact API commit archive\n' >&2; exit 1; }
+
+: > "$MOCK_NPM_LOG"
+if failed_next_build_json=$(env MOCK_NPM_FAIL=1 "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$INCOMING_JOB" --json); then
+  printf 'failing Next build unexpectedly published content\n' >&2
+  exit 1
+fi
+assert_json_field "$failed_next_build_json" ok false
+assert_json_field "$failed_next_build_json" action publish
+assert_json_field "$failed_next_build_json" code BUILD_FAILED
+[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev' && \
+   $(sed -n '2p' "$MOCK_NPM_LOG") == 'run content:validate -- --json' && \
+   $(sed -n '3p' "$MOCK_NPM_LOG") == 'run build:next' ]] || { printf 'failed Next build did not run the expected build commands\n' >&2; exit 1; }
+[[ $(wc -l < "$MOCK_NPM_LOG") -eq 3 ]] || { printf 'failed Next build ran unexpected extra commands\n' >&2; exit 1; }
+[[ $("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD) == "$placeholder_head" ]] || { printf 'failed Next build changed placeholder HEAD\n' >&2; exit 1; }
+[[ ! -e "$TEST_ROOT/site/current" && ! -e "$TEST_ROOT/site/previous" ]] || { printf 'failed Next build changed release markers\n' >&2; exit 1; }
+[[ ! -e "$FORMAL_REPOSITORY/content/records/science-article/example-id" ]] || { printf 'failed Next build installed bundle content\n' >&2; exit 1; }
 
 : > "$MOCK_GIT_LOG"
 : > "$MOCK_CURL_LOG"
 : > "$MOCK_TIMEOUT_LOG"
+: > "$MOCK_NPM_LOG"
 publish_json=$(env MOCK_SITE_CLONE_FAIL=1 "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$INCOMING_JOB" --json)
 assert_json_field "$publish_json" ok true
 assert_json_field "$publish_json" action publish
 assert_json_field "$publish_json" stableId example-id
+grep -Fxq -- 'ci --include=dev' "$MOCK_NPM_LOG" || { printf 'release did not install exact dependencies\n' >&2; exit 1; }
+grep -Fxq -- 'run content:validate -- --json' "$MOCK_NPM_LOG" || { printf 'release did not run targeted content validation\n' >&2; exit 1; }
+grep -Fxq -- 'run build:next' "$MOCK_NPM_LOG" || { printf 'release did not run the production build\n' >&2; exit 1; }
+[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev' && \
+   $(sed -n '2p' "$MOCK_NPM_LOG") == 'run content:validate -- --json' && \
+   $(sed -n '3p' "$MOCK_NPM_LOG") == 'run build:next' && \
+   $(wc -l < "$MOCK_NPM_LOG") -eq 3 ]] || { printf 'release build commands ran in the wrong order\n' >&2; exit 1; }
+if grep -Fxq -- 'run check' "$MOCK_NPM_LOG"; then
+  printf 'release repeated the full source check\n' >&2
+  exit 1
+fi
 [[ -f "$TEST_ROOT/site/current" ]] || { printf 'current release marker missing\n' >&2; exit 1; }
 [[ -f "$FORMAL_REPOSITORY/content/records/science-article/example-id/record.json" ]] || { printf 'formal content was not updated\n' >&2; exit 1; }
 [[ -f "$FORMAL_REPOSITORY/content/records/science-article/example-id/zh.md" ]] || { printf 'formal Chinese body was not materialized from the retry snapshot\n' >&2; exit 1; }
@@ -666,13 +711,14 @@ assert_bootstrap_sentinels "$first_release"
 [[ $("$GIT_BIN" -C "$first_release" rev-parse 'HEAD^{tree}') == "$site_source_tree_sha" ]] || { printf 'fallback release did not preserve the API source tree\n' >&2; exit 1; }
 [[ $("$GIT_BIN" -C "$first_release" rev-parse HEAD) != "$fallback_site_source_sha" ]] || { printf 'fallback test did not exercise a synthetic local snapshot commit\n' >&2; exit 1; }
 [[ $("$GIT_BIN" -C "$first_release" ls-files -s scripts/fallback-executable.sh) == 100755\ * ]] || { printf 'fallback release did not preserve the executable tree mode\n' >&2; exit 1; }
-[[ $(grep -c -- '--depth 1' "$MOCK_GIT_LOG") -eq 2 ]] || { printf 'shallow clone fallback did not use two attempts\n' >&2; exit 1; }
-grep -Fq -- "--signal=TERM --kill-after=10s 60s $TEST_ROOT/bin/git" "$MOCK_TIMEOUT_LOG" || { printf 'shallow clone attempts did not use the 60-second hard timeout\n' >&2; exit 1; }
-grep -q -- '--connect-timeout 10 --max-time 90 --retry 2 --retry-delay 2 --retry-max-time 180' "$MOCK_CURL_LOG" || { printf 'GitHub fallback metadata request did not use bounded curl retries and timeouts\n' >&2; exit 1; }
-grep -q -- '--connect-timeout 10 --max-time 900 --retry 2 --retry-delay 2 --retry-max-time 900' "$MOCK_CURL_LOG" || { printf 'GitHub fallback archive request did not allow a bounded slow download\n' >&2; exit 1; }
+[[ $(grep -c -- '--depth 1' "$MOCK_GIT_LOG") -eq 0 ]] || { printf 'website source cache hit unexpectedly cloned the site\n' >&2; exit 1; }
+grep -q -- '/commits/main' "$MOCK_CURL_LOG" || { printf 'website source cache hit did not refresh GitHub main metadata\n' >&2; exit 1; }
+if grep -q -- '/tarball/' "$MOCK_CURL_LOG"; then
+  printf 'website source cache hit unexpectedly downloaded an archive\n' >&2
+  exit 1
+fi
+grep -q -- '--connect-timeout 10 --max-time 90 --retry 2 --retry-delay 2 --retry-max-time 180' "$MOCK_CURL_LOG" || { printf 'GitHub metadata request did not use bounded curl retries and timeouts\n' >&2; exit 1; }
 grep -Fq -- "--signal=TERM --kill-after=10s 180s $TEST_ROOT/bin/curl" "$MOCK_TIMEOUT_LOG" || { printf 'GitHub fallback metadata request did not have a hard total timeout\n' >&2; exit 1; }
-grep -Fq -- "--signal=TERM --kill-after=10s 900s $TEST_ROOT/bin/curl" "$MOCK_TIMEOUT_LOG" || { printf 'GitHub fallback archive request did not have a hard total timeout\n' >&2; exit 1; }
-grep -q -- "/tarball/$fallback_site_source_sha" "$MOCK_CURL_LOG" || { printf 'GitHub fallback did not request the exact API commit archive\n' >&2; exit 1; }
 assert_release_readable "$first_release"
 
 list_json=$(env "${common_env[@]}" bash "$CONTROLLER" list --json)
@@ -683,10 +729,20 @@ status_json=$(env "${common_env[@]}" bash "$CONTROLLER" status --json)
 assert_json_field "$status_json" action status
 assert_json_field "$status_json" ready true
 
-update_json=$(env "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$UPDATE_JOB" --json)
+printf 'CONTENT_REPOSITORY_SOURCE=legacy\n' > "$site_source_cache/repository/.env.production.local"
+: > "$MOCK_GIT_LOG"
+: > "$MOCK_CURL_LOG"
+: > "$MOCK_TIMEOUT_LOG"
+update_json=$(env MOCK_SITE_CLONE_FAIL=1 "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$UPDATE_JOB" --json)
 assert_json_field "$update_json" ok true
 assert_json_field "$update_json" action publish
 assert_json_field "$update_json" stableId example-id
+[[ $(grep -c -- '--depth 1' "$MOCK_GIT_LOG") -eq 2 ]] || { printf 'invalid cache recovery did not retain two shallow clone attempts\n' >&2; exit 1; }
+grep -Fq -- "--signal=TERM --kill-after=10s 60s $TEST_ROOT/bin/git" "$MOCK_TIMEOUT_LOG" || { printf 'invalid cache recovery shallow clones did not retain the hard timeout\n' >&2; exit 1; }
+grep -q -- "/tarball/$fallback_site_source_sha" "$MOCK_CURL_LOG" || { printf 'invalid website source cache was not replaced from the exact archive\n' >&2; exit 1; }
+[[ -z "$("$GIT_BIN" -C "$site_source_cache/repository" status --porcelain --untracked-files=all)" ]] || { printf 'replacement website source cache is dirty\n' >&2; exit 1; }
+[[ ! -e "$site_source_cache/repository/.env.production.local" ]] || { printf 'replacement website source cache retained ignored pollution\n' >&2; exit 1; }
+grep -q 'main source' "$site_source_cache/repository/README.md" || { printf 'replacement website source cache has the wrong content\n' >&2; exit 1; }
 grep -q 'v2' "$FORMAL_REPOSITORY/content/records/science-article/example-id/record.json"
 grep -q 'image-v2' "$FORMAL_REPOSITORY/public/images/uploads/2026/07/example-image.webp"
 assert_bootstrap_sentinels "$FORMAL_REPOSITORY"
@@ -714,6 +770,7 @@ assert_site_source_failure() {
 
 assert_site_source_failure MOCK_SITE_API_FAIL "Cannot query the GitHub main source metadata"
 assert_site_source_failure MOCK_SITE_TREE_MISMATCH "GitHub main source archive tree does not match the API tree"
+rm -rf -- "$site_source_cache"
 assert_site_source_failure MOCK_SITE_TARBALL_FAIL "Cannot download the exact GitHub main source archive"
 
 assert_unsafe_site_archive_failure() {

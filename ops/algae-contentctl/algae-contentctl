@@ -97,6 +97,7 @@ configuration_value() {
 CONTENT_ROOT="$(configuration_value ALGAE_CONTENT_ROOT "$DEFAULT_CONTENT_ROOT")"
 CONTENT_REPOSITORY="$CONTENT_ROOT/repository"
 TRANSACTION_ROOT="$CONTENT_ROOT/transactions"
+SITE_SOURCE_CACHE_ROOT="$CONTENT_ROOT/site-source-cache"
 INCOMING_ROOT="$(configuration_value ALGAE_INCOMING_ROOT "$DEFAULT_INCOMING_ROOT")"
 SITE_ROOT="$(configuration_value ALGAE_SITE_ROOT "$DEFAULT_SITE_ROOT")"
 RELEASES_ROOT="$SITE_ROOT/releases"
@@ -331,6 +332,7 @@ prepare_runtime() {
   [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ && "$HEALTH_ATTEMPTS" -le 60 ]] || fail "CONFIGURATION_ERROR" "Health attempt count is invalid"
   ensure_safe_directory "$CONTENT_ROOT"
   ensure_safe_directory "$TRANSACTION_ROOT"
+  ensure_safe_directory "$SITE_SOURCE_CACHE_ROOT"
   ensure_safe_directory "$SITE_ROOT"
   ensure_safe_directory "$RELEASES_ROOT"
   ensure_safe_directory "$INCOMING_ROOT"
@@ -343,6 +345,8 @@ prepare_runtime() {
     fail "CONTENT_REPOSITORY_DIRTY" "Formal content repository has uncommitted changes"
   fi
   if ! $TEST_MODE; then
+    [[ $(stat -c '%U' -- "$SITE_SOURCE_CACHE_ROOT") == "root" ]] || fail "SITE_SOURCE_CACHE_INVALID" "Website source cache must be root owned"
+    [[ $(stat -c '%a' -- "$SITE_SOURCE_CACHE_ROOT") == "700" ]] || fail "SITE_SOURCE_CACHE_INVALID" "Website source cache must use mode 0700"
     [[ $(stat -c '%U' -- "$CONTENT_REPOSITORY") == "root" ]] || fail "CONTENT_REPOSITORY_INVALID" "Formal content repository must be root owned"
     local repository_mode
     repository_mode=$(stat -c '%a' -- "$CONTENT_REPOSITORY")
@@ -400,18 +404,118 @@ create_transaction() {
   : > "$OP_LOG"
 }
 
-assert_regular_source_tree() {
+regular_source_tree_is_safe() {
   local tree=$1
-  [[ -d "$tree" && ! -L "$tree" ]] || fail "SITE_SOURCE_FAILED" "Website source content tree is missing or unsafe" true
+  [[ -d "$tree" && ! -L "$tree" ]] || return 1
   local unsafe_entry
   if ! unsafe_entry=$(find -P "$tree" \( -type l -o \( ! -type d ! -type f \) \) -print -quit 2>>"$OP_LOG"); then
-    fail "SITE_SOURCE_FAILED" "Website source content tree cannot be inspected" true
+    return 1
   fi
-  [[ -z "$unsafe_entry" ]] || fail "SITE_SOURCE_FAILED" "Website source content tree contains a link or special file" true
+  [[ -z "$unsafe_entry" ]]
+}
+
+assert_regular_source_tree() {
+  local tree=$1
+  regular_source_tree_is_safe "$tree" || fail "SITE_SOURCE_FAILED" "Website source content tree is missing or unsafe" true
 }
 
 is_git_object_id() {
   [[ "$1" =~ ^[0-9a-f]{40}$ || "$1" =~ ^[0-9a-f]{64}$ ]]
+}
+
+site_source_repository_is_valid() {
+  local repository=$1
+  local expected_tree=$2
+  [[ -d "$repository" && ! -L "$repository" && -d "$repository/.git" && ! -L "$repository/.git" ]] || return 1
+  [[ $("$GIT_BIN" -C "$repository" rev-parse --is-inside-work-tree 2>>"$OP_LOG") == "true" ]] || return 1
+  [[ $("$GIT_BIN" -C "$repository" symbolic-ref --quiet --short HEAD 2>>"$OP_LOG") == "$SITE_BRANCH" ]] || return 1
+  [[ -z "$("$GIT_BIN" -C "$repository" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || return 1
+  [[ -z "$("$GIT_BIN" -C "$repository" status --porcelain --ignored=matching --untracked-files=all 2>>"$OP_LOG")" ]] || return 1
+  [[ $("$GIT_BIN" -C "$repository" rev-parse --verify 'HEAD^{tree}' 2>>"$OP_LOG") == "$expected_tree" ]] || return 1
+  regular_source_tree_is_safe "$repository/content" || return 1
+  if [[ -e "$repository/public/images/uploads" || -L "$repository/public/images/uploads" ]]; then
+    regular_source_tree_is_safe "$repository/public/images/uploads" || return 1
+  fi
+}
+
+site_source_cache_entry_path() {
+  printf '%s/%s-%s' "$SITE_SOURCE_CACHE_ROOT" "$SITE_SOURCE_SHA" "$SITE_SOURCE_TREE_SHA"
+}
+
+site_source_cache_payload_is_valid() {
+  local entry=$1
+  [[ -d "$entry" && ! -L "$entry" ]] || return 1
+  if ! $TEST_MODE; then
+    [[ $(stat -c '%U' -- "$entry" 2>>"$OP_LOG") == "root" ]] || return 1
+    [[ $(stat -c '%a' -- "$entry" 2>>"$OP_LOG") == "700" ]] || return 1
+  fi
+  [[ -f "$entry/site-sha" && ! -L "$entry/site-sha" && -f "$entry/tree-sha" && ! -L "$entry/tree-sha" ]] || return 1
+  [[ $(<"$entry/site-sha") == "$SITE_SOURCE_SHA" && $(<"$entry/tree-sha") == "$SITE_SOURCE_TREE_SHA" ]] || return 1
+  site_source_repository_is_valid "$entry/repository" "$SITE_SOURCE_TREE_SHA"
+}
+
+site_source_cache_entry_is_valid() {
+  local entry=$1
+  [[ $(basename -- "$entry") == "$SITE_SOURCE_SHA-$SITE_SOURCE_TREE_SHA" ]] || return 1
+  site_source_cache_payload_is_valid "$entry"
+}
+
+quarantine_site_source_cache_entry() {
+  local entry=$1
+  local expected
+  expected=$(site_source_cache_entry_path)
+  [[ "$entry" == "$expected" && ( -e "$entry" || -L "$entry" ) ]] || return 1
+  local quarantine="$TX_ROOT/invalid-site-source-cache-$RANDOM"
+  [[ ! -e "$quarantine" && ! -L "$quarantine" ]] || return 1
+  mv -- "$entry" "$quarantine" >>"$OP_LOG" 2>&1
+}
+
+restore_site_source_from_cache() {
+  local entry
+  entry=$(site_source_cache_entry_path)
+  [[ -e "$entry" || -L "$entry" ]] || return 1
+  if ! site_source_cache_entry_is_valid "$entry"; then
+    printf 'Website source cache entry is invalid; quarantining it\n' >>"$OP_LOG"
+    quarantine_site_source_cache_entry "$entry" || true
+    return 1
+  fi
+  if ! cp -a -- "$entry/repository" "$SITE_SOURCE_REPOSITORY" >>"$OP_LOG" 2>&1; then
+    rm -rf -- "$SITE_SOURCE_REPOSITORY"
+    return 1
+  fi
+  if ! site_source_repository_is_valid "$SITE_SOURCE_REPOSITORY" "$SITE_SOURCE_TREE_SHA"; then
+    rm -rf -- "$SITE_SOURCE_REPOSITORY"
+    quarantine_site_source_cache_entry "$entry" || true
+    return 1
+  fi
+  printf 'Website source cache hit for %s\n' "$SITE_SOURCE_SHA" >>"$OP_LOG"
+}
+
+populate_site_source_cache() {
+  local entry
+  entry=$(site_source_cache_entry_path)
+  if [[ -e "$entry" || -L "$entry" ]]; then
+    if site_source_cache_entry_is_valid "$entry"; then
+      return 0
+    fi
+    quarantine_site_source_cache_entry "$entry" || return 1
+  fi
+  local candidate="$SITE_SOURCE_CACHE_ROOT/.candidate-$SITE_SOURCE_SHA-$SITE_SOURCE_TREE_SHA-$$-$RANDOM"
+  [[ ! -e "$candidate" && ! -L "$candidate" ]] || return 1
+  mkdir -m 0700 -- "$candidate" || return 1
+  if ! cp -a -- "$SITE_SOURCE_REPOSITORY" "$candidate/repository" >>"$OP_LOG" 2>&1 ||
+     ! printf '%s\n' "$SITE_SOURCE_SHA" > "$candidate/site-sha" ||
+     ! printf '%s\n' "$SITE_SOURCE_TREE_SHA" > "$candidate/tree-sha" ||
+     ! chmod 0600 -- "$candidate/site-sha" "$candidate/tree-sha" ||
+     ! site_source_cache_payload_is_valid "$candidate"; then
+    rm -rf -- "$candidate"
+    return 1
+  fi
+  if ! mv -- "$candidate" "$entry" >>"$OP_LOG" 2>&1; then
+    rm -rf -- "$candidate"
+    return 1
+  fi
+  printf 'Website source cache populated for %s\n' "$SITE_SOURCE_SHA" >>"$OP_LOG"
 }
 
 clone_site_source_shallow() {
@@ -473,6 +577,15 @@ NODE
   IFS=$'\t' read -r SITE_SOURCE_SHA SITE_SOURCE_TREE_SHA <<< "$identity"
   is_git_object_id "$SITE_SOURCE_SHA" && is_git_object_id "$SITE_SOURCE_TREE_SHA" && \
     [[ ${#SITE_SOURCE_SHA} -eq ${#SITE_SOURCE_TREE_SHA} ]]
+}
+
+fetch_site_source_metadata() {
+  assert_regular_command "curl" "$CURL_BIN"
+  local metadata_file="$TX_ROOT/site-source-commit.json"
+  download_site_source_file \
+    "${SITE_REPOSITORY_API_URL%/}/commits/$SITE_BRANCH" "$metadata_file" "$MAX_SITE_API_BYTES" \
+    'application/vnd.github+json' "$SITE_API_ATTEMPT_TIMEOUT_SECONDS" "$SITE_API_TOTAL_TIMEOUT_SECONDS" && \
+    read_site_source_metadata "$metadata_file"
 }
 
 validate_site_source_archive() {
@@ -559,16 +672,7 @@ initialize_site_source_snapshot() {
 prepare_site_source_from_github_archive() {
   assert_regular_command "curl" "$CURL_BIN"
   assert_regular_command "tar" "$TAR_BIN"
-  local metadata_file="$TX_ROOT/site-source-commit.json"
   local archive_file="$TX_ROOT/site-source.tar.gz"
-  if ! download_site_source_file \
-    "${SITE_REPOSITORY_API_URL%/}/commits/$SITE_BRANCH" "$metadata_file" "$MAX_SITE_API_BYTES" \
-    'application/vnd.github+json' "$SITE_API_ATTEMPT_TIMEOUT_SECONDS" "$SITE_API_TOTAL_TIMEOUT_SECONDS"; then
-    fail "SITE_SOURCE_FAILED" "Cannot query the GitHub main source metadata" true
-  fi
-  if ! read_site_source_metadata "$metadata_file"; then
-    fail "SITE_SOURCE_FAILED" "GitHub main source commit or tree metadata is invalid" true
-  fi
   if ! download_site_source_file \
     "${SITE_REPOSITORY_API_URL%/}/tarball/$SITE_SOURCE_SHA" "$archive_file" "$MAX_SITE_ARCHIVE_BYTES" \
     'application/vnd.github+json' "$SITE_ARCHIVE_ATTEMPT_TIMEOUT_SECONDS" "$SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS"; then
@@ -597,11 +701,16 @@ prepare_site_source_from_github_archive() {
   [[ $snapshot_status -eq 0 ]] || fail "SITE_SOURCE_FAILED" "Cannot initialize the GitHub main source snapshot" true
 }
 
-prepare_site_source() {
+prepare_site_source_uncached() {
   SITE_SOURCE_REPOSITORY="$TX_ROOT/site-source"
   [[ ! -e "$SITE_SOURCE_REPOSITORY" && ! -L "$SITE_SOURCE_REPOSITORY" ]] || fail "SITE_SOURCE_FAILED" "Website source staging path already exists"
   assert_regular_command "timeout" "$TIMEOUT_BIN"
   if ! clone_site_source_shallow; then
+    if ! is_git_object_id "$SITE_SOURCE_SHA" || ! is_git_object_id "$SITE_SOURCE_TREE_SHA"; then
+      if ! fetch_site_source_metadata; then
+        fail "SITE_SOURCE_FAILED" "Cannot query the GitHub main source metadata" true
+      fi
+    fi
     printf 'Website source shallow clone failed; using the exact GitHub API archive fallback\n' >> "$OP_LOG"
     prepare_site_source_from_github_archive
   else
@@ -623,6 +732,48 @@ prepare_site_source() {
   assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/content"
   if [[ -e "$SITE_SOURCE_REPOSITORY/public/images/uploads" || -L "$SITE_SOURCE_REPOSITORY/public/images/uploads" ]]; then
     assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/public/images/uploads"
+  fi
+}
+
+prepare_site_source() {
+  SITE_SOURCE_REPOSITORY="$TX_ROOT/site-source"
+  [[ ! -e "$SITE_SOURCE_REPOSITORY" && ! -L "$SITE_SOURCE_REPOSITORY" ]] || \
+    fail "SITE_SOURCE_FAILED" "Website source staging path already exists"
+  assert_regular_command "timeout" "$TIMEOUT_BIN"
+
+  local expected_sha=""
+  local expected_tree=""
+  local cache_hit=false
+  if fetch_site_source_metadata; then
+    expected_sha=$SITE_SOURCE_SHA
+    expected_tree=$SITE_SOURCE_TREE_SHA
+    if restore_site_source_from_cache; then
+      cache_hit=true
+    fi
+  fi
+
+  if ! $cache_hit; then
+    prepare_site_source_uncached
+    if [[ -n "$expected_sha" && \
+          ( "$SITE_SOURCE_SHA" != "$expected_sha" || "$SITE_SOURCE_TREE_SHA" != "$expected_tree" ) ]]; then
+      printf 'Website source fallback did not match the queried GitHub main identity; retrying the exact archive\n' >>"$OP_LOG"
+      rm -rf -- "$SITE_SOURCE_REPOSITORY"
+      SITE_SOURCE_SHA=$expected_sha
+      SITE_SOURCE_TREE_SHA=$expected_tree
+      prepare_site_source_from_github_archive
+    fi
+  fi
+
+  [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || \
+    fail "SITE_SOURCE_FAILED" "Website source checkout is not clean" true
+  is_git_object_id "$SITE_SOURCE_SHA" || fail "SITE_SOURCE_FAILED" "Website source commit is invalid" true
+  is_git_object_id "$SITE_SOURCE_TREE_SHA" || fail "SITE_SOURCE_FAILED" "Website source tree is invalid" true
+  assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/content"
+  if [[ -e "$SITE_SOURCE_REPOSITORY/public/images/uploads" || -L "$SITE_SOURCE_REPOSITORY/public/images/uploads" ]]; then
+    assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/public/images/uploads"
+  fi
+  if ! $cache_hit && ! populate_site_source_cache; then
+    printf 'Website source cache could not be populated; continuing with the verified transaction source\n' >>"$OP_LOG"
   fi
 }
 
@@ -1514,8 +1665,8 @@ build_release() {
   if ! run_build_command "$build_directory" "$NPM_BIN" ci --include=dev; then
     fail "BUILD_FAILED" "Website dependency installation failed" true
   fi
-  if ! run_build_command "$build_directory" "$NPM_BIN" run check; then
-    fail "BUILD_FAILED" "Website check failed" true
+  if ! run_build_command "$build_directory" "$NPM_BIN" run content:validate -- --json; then
+    fail "BUILD_FAILED" "Website content validation failed" true
   fi
   if ! run_build_command "$build_directory" "$NPM_BIN" run build:next; then
     fail "BUILD_FAILED" "Website build failed" true
