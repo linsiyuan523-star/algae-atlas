@@ -13,6 +13,7 @@ readonly DEFAULT_CONTENT_ROOT="/srv/algae-content"
 readonly DEFAULT_INCOMING_ROOT="/home/ubuntu/algae-content-workbench/incoming"
 readonly DEFAULT_SITE_ROOT="/srv/algae-atlas"
 readonly DEFAULT_SITE_REPOSITORY_URL="https://github.com/linsiyuan523-star/algae-atlas.git"
+readonly DEFAULT_SITE_REPOSITORY_API_URL="https://api.github.com/repos/linsiyuan523-star/algae-atlas"
 readonly DEFAULT_SITE_BRANCH="main"
 readonly DEFAULT_SERVICE_NAME="algae-atlas.service"
 readonly DEFAULT_HEALTH_URL="http://127.0.0.1:3000/"
@@ -21,6 +22,15 @@ readonly DEFAULT_PUBLIC_BASE_URL="https://sycszy.icu"
 readonly MAX_BUNDLE_BYTES=$((512 * 1024 * 1024))
 readonly MAX_ARTIFACT_BYTES=$((4 * 1024 * 1024))
 readonly MAX_CONTENT_FILE_BYTES=$((64 * 1024 * 1024))
+readonly MAX_SITE_API_BYTES=$((1024 * 1024))
+readonly MAX_SITE_ARCHIVE_BYTES=$((512 * 1024 * 1024))
+readonly SITE_CLONE_ATTEMPTS=2
+readonly SITE_HTTP_ATTEMPTS=3
+readonly SITE_CLONE_TIMEOUT_SECONDS=60
+readonly SITE_API_ATTEMPT_TIMEOUT_SECONDS=90
+readonly SITE_API_TOTAL_TIMEOUT_SECONDS=180
+readonly SITE_ARCHIVE_ATTEMPT_TIMEOUT_SECONDS=900
+readonly SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS=900
 
 JSON_MODE=false
 ACTION=""
@@ -44,6 +54,7 @@ FORMAL_REPOSITORY_BACKUP=""
 CANDIDATE_REPOSITORY=""
 SITE_SOURCE_REPOSITORY=""
 SITE_SOURCE_SHA=""
+SITE_SOURCE_TREE_SHA=""
 
 if [[ "${ALGAE_CONTENTCTL_TESTING:-}" == "1" && "$(realpath -m -- "$0")" != "$INSTALLED_PATH" ]]; then
   TEST_MODE=true
@@ -69,6 +80,7 @@ RELEASES_ROOT="$SITE_ROOT/releases"
 CURRENT_LINK="$SITE_ROOT/current"
 PREVIOUS_LINK="$SITE_ROOT/previous"
 SITE_REPOSITORY_URL="$(configuration_value ALGAE_SITE_REPOSITORY_URL "$DEFAULT_SITE_REPOSITORY_URL")"
+SITE_REPOSITORY_API_URL="$(configuration_value ALGAE_SITE_REPOSITORY_API_URL "$DEFAULT_SITE_REPOSITORY_API_URL")"
 SITE_BRANCH="$(configuration_value ALGAE_SITE_BRANCH "$DEFAULT_SITE_BRANCH")"
 SERVICE_NAME="$(configuration_value ALGAE_SERVICE_NAME "$DEFAULT_SERVICE_NAME")"
 HEALTH_URL="$(configuration_value ALGAE_HEALTH_URL "$DEFAULT_HEALTH_URL")"
@@ -81,6 +93,8 @@ NODE_BIN="$(configuration_value ALGAE_NODE_BIN "$(command -v node 2>/dev/null ||
 SYSTEMCTL_BIN="$(configuration_value ALGAE_SYSTEMCTL_BIN "$(command -v systemctl 2>/dev/null || true)")"
 CURL_BIN="$(configuration_value ALGAE_CURL_BIN "$(command -v curl 2>/dev/null || true)")"
 CHMOD_BIN="$(configuration_value ALGAE_CHMOD_BIN "$(command -v chmod 2>/dev/null || true)")"
+TAR_BIN="$(configuration_value ALGAE_TAR_BIN "$(command -v tar 2>/dev/null || true)")"
+TIMEOUT_BIN="$(configuration_value ALGAE_TIMEOUT_BIN "$(command -v timeout 2>/dev/null || true)")"
 
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL=/dev/null
@@ -373,22 +387,216 @@ assert_regular_source_tree() {
   [[ -z "$unsafe_entry" ]] || fail "SITE_SOURCE_FAILED" "Website source content tree contains a link or special file" true
 }
 
+is_git_object_id() {
+  [[ "$1" =~ ^[0-9a-f]{40}$ || "$1" =~ ^[0-9a-f]{64}$ ]]
+}
+
+clone_site_source_shallow() {
+  local attempt
+  for ((attempt = 1; attempt <= SITE_CLONE_ATTEMPTS; attempt += 1)); do
+    rm -rf -- "$SITE_SOURCE_REPOSITORY"
+    printf 'Website source shallow clone attempt %d of %d\n' "$attempt" "$SITE_CLONE_ATTEMPTS" >> "$OP_LOG"
+    if (umask 022; "$TIMEOUT_BIN" --signal=TERM --kill-after=10s "${SITE_CLONE_TIMEOUT_SECONDS}s" \
+      "$GIT_BIN" -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 \
+      clone --quiet --depth 1 --branch "$SITE_BRANCH" --single-branch --no-tags \
+      "$SITE_REPOSITORY_URL" "$SITE_SOURCE_REPOSITORY") >>"$OP_LOG" 2>&1; then
+      return 0
+    fi
+  done
+  rm -rf -- "$SITE_SOURCE_REPOSITORY"
+  return 1
+}
+
+download_site_source_file() {
+  local url=$1
+  local output=$2
+  local maximum_bytes=$3
+  local accept=$4
+  local attempt_timeout=$5
+  local total_timeout=$6
+  rm -f -- "$output"
+  if ! "$TIMEOUT_BIN" --signal=TERM --kill-after=10s "${total_timeout}s" "$CURL_BIN" \
+    --fail --silent --show-error --location \
+    --proto '=https' --proto-redir '=https' \
+    --connect-timeout 10 --max-time "$attempt_timeout" \
+    --retry "$((SITE_HTTP_ATTEMPTS - 1))" --retry-delay 2 --retry-max-time "$total_timeout" --retry-all-errors \
+    --max-filesize "$maximum_bytes" \
+    --user-agent "$PROGRAM_NAME/1" \
+    --header "Accept: $accept" \
+    --header 'X-GitHub-Api-Version: 2022-11-28' \
+    --output "$output" "$url" >>"$OP_LOG" 2>&1; then
+    return 1
+  fi
+  [[ -f "$output" && ! -L "$output" ]] || return 1
+  local downloaded_bytes
+  downloaded_bytes=$(stat -c '%s' -- "$output" 2>>"$OP_LOG") || return 1
+  [[ "$downloaded_bytes" =~ ^[0-9]+$ && "$downloaded_bytes" -gt 0 && "$downloaded_bytes" -le "$maximum_bytes" ]]
+}
+
+read_site_source_metadata() {
+  local metadata_file=$1
+  local metadata_script
+  metadata_script=$(cat <<'NODE'
+const fs = require("fs");
+const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const commit = metadata && metadata.sha;
+const tree = metadata && metadata.commit && metadata.commit.tree && metadata.commit.tree.sha;
+if (typeof commit !== "string" || typeof tree !== "string") process.exit(2);
+process.stdout.write(`${commit}\t${tree}\n`);
+NODE
+)
+  local identity
+  identity=$("$NODE_BIN" -e "$metadata_script" "$metadata_file" 2>>"$OP_LOG") || return 1
+  IFS=$'\t' read -r SITE_SOURCE_SHA SITE_SOURCE_TREE_SHA <<< "$identity"
+  is_git_object_id "$SITE_SOURCE_SHA" && is_git_object_id "$SITE_SOURCE_TREE_SHA" && \
+    [[ ${#SITE_SOURCE_SHA} -eq ${#SITE_SOURCE_TREE_SHA} ]]
+}
+
+validate_site_source_archive() {
+  local archive=$1
+  local names_file="$TX_ROOT/site-source-archive-names.txt"
+  local verbose_file="$TX_ROOT/site-source-archive-entries.txt"
+  if ! LC_ALL=C "$TAR_BIN" --list --gzip --file "$archive" --quoting-style=escape >"$names_file" 2>>"$OP_LOG"; then
+    return 1
+  fi
+  if ! LC_ALL=C "$TAR_BIN" --list --verbose --gzip --file "$archive" --quoting-style=escape >"$verbose_file" 2>>"$OP_LOG"; then
+    return 1
+  fi
+  local validation_script
+  validation_script=$(cat <<'NODE'
+const fs = require("fs");
+const [namesPath, verbosePath] = process.argv.slice(1);
+const readLines = (file) => {
+  const text = fs.readFileSync(file, "utf8");
+  const lines = text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+};
+const names = readLines(namesPath);
+const verbose = readLines(verbosePath);
+if (names.length === 0 || names.length !== verbose.length) process.exit(2);
+let root = null;
+let payloadEntries = 0;
+const seen = new Set();
+for (let index = 0; index < names.length; index += 1) {
+  const name = names[index];
+  const type = verbose[index][0];
+  if (type !== "-" && type !== "d") process.exit(3);
+  if (!name || /[\\\x00-\x1f\x7f]/.test(name) || name.startsWith("/") || seen.has(name)) process.exit(4);
+  seen.add(name);
+  const normalized = name.endsWith("/") ? name.slice(0, -1) : name;
+  const parts = normalized.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) process.exit(5);
+  if (root === null) root = parts[0];
+  if (parts[0] !== root || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(root)) process.exit(6);
+  if (parts.slice(1).includes(".git")) process.exit(7);
+  if (parts.length === 1) {
+    if (type !== "d" || !name.endsWith("/")) process.exit(8);
+  } else {
+    payloadEntries += 1;
+  }
+}
+if (payloadEntries === 0) process.exit(9);
+NODE
+)
+  "$NODE_BIN" -e "$validation_script" "$names_file" "$verbose_file" >>"$OP_LOG" 2>&1
+}
+
+initialize_site_source_snapshot() {
+  local expected_tree=$1
+  local -a init_arguments=(init --quiet "--initial-branch=$SITE_BRANCH")
+  if [[ ${#expected_tree} -eq 64 ]]; then
+    init_arguments+=(--object-format=sha256)
+  fi
+  "$GIT_BIN" "${init_arguments[@]}" "$SITE_SOURCE_REPOSITORY" >>"$OP_LOG" 2>&1 || return 1
+  "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" config user.name "Algae Content Controller" >>"$OP_LOG" 2>&1 || return 1
+  "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" config user.email "contentctl@localhost" >>"$OP_LOG" 2>&1 || return 1
+  "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" config core.autocrlf false >>"$OP_LOG" 2>&1 || return 1
+  "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" add --all --force -- . >>"$OP_LOG" 2>&1 || return 1
+  local executable_list="$TX_ROOT/site-source-executable-files.z"
+  if ! find -P "$SITE_SOURCE_REPOSITORY" -path "$SITE_SOURCE_REPOSITORY/.git" -prune -o \
+    -type f -perm /111 -print0 > "$executable_list" 2>>"$OP_LOG"; then
+    return 1
+  fi
+  local executable_file
+  local executable_path
+  while IFS= read -r -d '' executable_file; do
+    executable_path=${executable_file#"$SITE_SOURCE_REPOSITORY"/}
+    [[ "$executable_path" != "$executable_file" && -n "$executable_path" ]] || return 1
+    "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" update-index --chmod=+x -- "$executable_path" >>"$OP_LOG" 2>&1 || return 1
+  done < "$executable_list"
+  local written_tree
+  written_tree=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" write-tree 2>>"$OP_LOG") || return 1
+  [[ "$written_tree" == "$expected_tree" ]] || return 2
+  "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" commit --quiet --no-gpg-sign --no-verify \
+    -m "site: snapshot GitHub $SITE_SOURCE_SHA" >>"$OP_LOG" 2>&1 || return 1
+  [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]]
+}
+
+prepare_site_source_from_github_archive() {
+  assert_regular_command "curl" "$CURL_BIN"
+  assert_regular_command "tar" "$TAR_BIN"
+  local metadata_file="$TX_ROOT/site-source-commit.json"
+  local archive_file="$TX_ROOT/site-source.tar.gz"
+  if ! download_site_source_file \
+    "${SITE_REPOSITORY_API_URL%/}/commits/$SITE_BRANCH" "$metadata_file" "$MAX_SITE_API_BYTES" \
+    'application/vnd.github+json' "$SITE_API_ATTEMPT_TIMEOUT_SECONDS" "$SITE_API_TOTAL_TIMEOUT_SECONDS"; then
+    fail "SITE_SOURCE_FAILED" "Cannot query the GitHub main source metadata" true
+  fi
+  if ! read_site_source_metadata "$metadata_file"; then
+    fail "SITE_SOURCE_FAILED" "GitHub main source commit or tree metadata is invalid" true
+  fi
+  if ! download_site_source_file \
+    "${SITE_REPOSITORY_API_URL%/}/tarball/$SITE_SOURCE_SHA" "$archive_file" "$MAX_SITE_ARCHIVE_BYTES" \
+    'application/vnd.github+json' "$SITE_ARCHIVE_ATTEMPT_TIMEOUT_SECONDS" "$SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS"; then
+    fail "SITE_SOURCE_FAILED" "Cannot download the exact GitHub main source archive" true
+  fi
+  if ! validate_site_source_archive "$archive_file"; then
+    fail "SITE_SOURCE_FAILED" "GitHub main source archive is unsafe or invalid" true
+  fi
+  local extraction_root="$TX_ROOT/site-source-extracted"
+  mkdir -m 0700 -- "$extraction_root"
+  if ! (umask 022; "$TAR_BIN" --extract --gzip --file "$archive_file" --directory "$extraction_root" \
+    --strip-components=1 --no-same-owner --no-same-permissions --delay-directory-restore \
+    --keep-directory-symlink) >>"$OP_LOG" 2>&1; then
+    fail "SITE_SOURCE_FAILED" "Cannot safely extract the GitHub main source archive" true
+  fi
+  assert_regular_source_tree "$extraction_root"
+  [[ ! -e "$extraction_root/.git" && ! -L "$extraction_root/.git" ]] || \
+    fail "SITE_SOURCE_FAILED" "GitHub main source archive contains reserved Git metadata" true
+  mv -- "$extraction_root" "$SITE_SOURCE_REPOSITORY" || \
+    fail "SITE_SOURCE_FAILED" "Cannot stage the GitHub main source archive" true
+  local snapshot_status=0
+  initialize_site_source_snapshot "$SITE_SOURCE_TREE_SHA" || snapshot_status=$?
+  if [[ $snapshot_status -eq 2 ]]; then
+    fail "SITE_SOURCE_FAILED" "GitHub main source archive tree does not match the API tree" true
+  fi
+  [[ $snapshot_status -eq 0 ]] || fail "SITE_SOURCE_FAILED" "Cannot initialize the GitHub main source snapshot" true
+}
+
 prepare_site_source() {
   SITE_SOURCE_REPOSITORY="$TX_ROOT/site-source"
   [[ ! -e "$SITE_SOURCE_REPOSITORY" && ! -L "$SITE_SOURCE_REPOSITORY" ]] || fail "SITE_SOURCE_FAILED" "Website source staging path already exists"
-  if ! (umask 022; "$GIT_BIN" clone --quiet --depth 1 --branch "$SITE_BRANCH" --single-branch --no-tags \
-    "$SITE_REPOSITORY_URL" "$SITE_SOURCE_REPOSITORY") >>"$OP_LOG" 2>&1; then
-    fail "SITE_SOURCE_FAILED" "Cannot clone the current GitHub main source" true
+  assert_regular_command "timeout" "$TIMEOUT_BIN"
+  if ! clone_site_source_shallow; then
+    printf 'Website source shallow clone failed; using the exact GitHub API archive fallback\n' >> "$OP_LOG"
+    prepare_site_source_from_github_archive
+  else
+    [[ $("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --is-shallow-repository 2>>"$OP_LOG") == "true" ]] || \
+      fail "SITE_SOURCE_FAILED" "Website source clone is not shallow" true
+    [[ $("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" symbolic-ref --quiet --short HEAD 2>>"$OP_LOG") == "$SITE_BRANCH" ]] || \
+      fail "SITE_SOURCE_FAILED" "Website source branch does not match" true
+    [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || \
+      fail "SITE_SOURCE_FAILED" "Website source checkout is not clean" true
+    SITE_SOURCE_SHA=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --verify HEAD 2>>"$OP_LOG") || \
+      fail "SITE_SOURCE_FAILED" "Website source commit cannot be read" true
+    SITE_SOURCE_TREE_SHA=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --verify 'HEAD^{tree}' 2>>"$OP_LOG") || \
+      fail "SITE_SOURCE_FAILED" "Website source tree cannot be read" true
   fi
-  [[ $("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --is-shallow-repository 2>>"$OP_LOG") == "true" ]] || \
-    fail "SITE_SOURCE_FAILED" "Website source clone is not shallow" true
-  [[ $("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" symbolic-ref --quiet --short HEAD 2>>"$OP_LOG") == "$SITE_BRANCH" ]] || \
-    fail "SITE_SOURCE_FAILED" "Website source branch does not match" true
   [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || \
     fail "SITE_SOURCE_FAILED" "Website source checkout is not clean" true
-  SITE_SOURCE_SHA=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --verify HEAD 2>>"$OP_LOG") || \
-    fail "SITE_SOURCE_FAILED" "Website source commit cannot be read" true
-  [[ "$SITE_SOURCE_SHA" =~ ^[0-9a-f]{40,64}$ ]] || fail "SITE_SOURCE_FAILED" "Website source commit is invalid" true
+  is_git_object_id "$SITE_SOURCE_SHA" || fail "SITE_SOURCE_FAILED" "Website source commit is invalid" true
+  is_git_object_id "$SITE_SOURCE_TREE_SHA" || fail "SITE_SOURCE_FAILED" "Website source tree is invalid" true
   assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/content"
   if [[ -e "$SITE_SOURCE_REPOSITORY/public/images/uploads" || -L "$SITE_SOURCE_REPOSITORY/public/images/uploads" ]]; then
     assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/public/images/uploads"
@@ -969,9 +1177,9 @@ build_release() {
     fail "SITE_SOURCE_FAILED" "Cannot copy the prepared website source" true
   fi
   "$CHMOD_BIN" -R a+rX -- "$build_directory" || fail "SITE_SOURCE_FAILED" "Cannot make the prepared website source readable" true
-  local build_source_sha
-  build_source_sha=$("$GIT_BIN" -C "$build_directory" rev-parse --verify HEAD 2>>"$OP_LOG") || fail "SITE_SOURCE_FAILED" "Prepared website source commit cannot be read" true
-  [[ "$build_source_sha" == "$SITE_SOURCE_SHA" ]] || fail "SITE_SOURCE_FAILED" "Prepared website source commit changed during the transaction" true
+  local build_source_tree_sha
+  build_source_tree_sha=$("$GIT_BIN" -C "$build_directory" rev-parse --verify 'HEAD^{tree}' 2>>"$OP_LOG") || fail "SITE_SOURCE_FAILED" "Prepared website source tree cannot be read" true
+  [[ "$build_source_tree_sha" == "$SITE_SOURCE_TREE_SHA" ]] || fail "SITE_SOURCE_FAILED" "Prepared website source tree changed during the transaction" true
   [[ -z "$("$GIT_BIN" -C "$build_directory" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || fail "SITE_SOURCE_FAILED" "Prepared website source changed during the transaction" true
   [[ ! -L "$build_directory/content" ]] || fail "BUILD_FAILED" "Website source content directory is unsafe"
   rm -rf -- "$build_directory/content"

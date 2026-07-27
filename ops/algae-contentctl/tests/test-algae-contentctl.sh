@@ -14,6 +14,8 @@ readonly CONTROLLER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)/a
 readonly BOOTSTRAP_HELPER="$(dirname -- "$CONTROLLER")/bootstrap.sh"
 readonly GIT_BIN="$(command -v git)"
 readonly NODE_BIN="$(command -v node || true)"
+readonly REAL_TIMEOUT_BIN="$(command -v timeout || true)"
+readonly TAR_BIN="$(command -v tar || true)"
 
 cleanup() {
   rm -rf -- "$TEST_ROOT"
@@ -22,6 +24,8 @@ trap cleanup EXIT
 
 [[ -x "$GIT_BIN" ]] || { printf 'git is required\n' >&2; exit 1; }
 [[ -n "$NODE_BIN" ]] || { printf 'node is required\n' >&2; exit 1; }
+[[ -x "$REAL_TIMEOUT_BIN" ]] || { printf 'timeout is required\n' >&2; exit 1; }
+[[ -x "$TAR_BIN" ]] || { printf 'tar is required\n' >&2; exit 1; }
 
 assert_json_field() {
   local json=$1
@@ -110,15 +114,45 @@ mkdir -p -- \
   "$SITE_SOURCE/content/authors" \
   "$SITE_SOURCE/content/media" \
   "$SITE_SOURCE/content/records/science-article/existing-id" \
-  "$SITE_SOURCE/public/images/uploads/2025/12"
+  "$SITE_SOURCE/public/images/uploads/2025/12" \
+  "$SITE_SOURCE/scripts"
 printf '%s\n' '{"id":"bootstrap-author","name":"Fresh Main Author"}' > "$SITE_SOURCE/content/authors/bootstrap-author.json"
 printf '%s\n' '{"id":"bootstrap-media","filePath":"public/images/uploads/2025/12/bootstrap-image.webp"}' > "$SITE_SOURCE/content/media/bootstrap-media.json"
 printf '%s\n' '{"schemaVersion":1,"id":"existing-id","type":"science-article","updatedAt":"2025-12-01T00:00:00Z","locales":{"zh":{"title":"Existing fresh-main article","bodyFile":"zh.md"},"en":{"missing":true}}}' > "$SITE_SOURCE/content/records/science-article/existing-id/record.json"
 printf 'Existing fresh-main body\n' > "$SITE_SOURCE/content/records/science-article/existing-id/zh.md"
 printf 'fresh-main-image\n' > "$SITE_SOURCE/public/images/uploads/2025/12/bootstrap-image.webp"
+printf '#!/usr/bin/env bash\nprintf "fallback executable probe\\n"\n' > "$SITE_SOURCE/scripts/fallback-executable.sh"
+chmod 0755 -- "$SITE_SOURCE/scripts/fallback-executable.sh"
 "$GIT_BIN" -C "$SITE_SOURCE" add .
+"$GIT_BIN" -C "$SITE_SOURCE" update-index --chmod=+x -- scripts/fallback-executable.sh
 "$GIT_BIN" -C "$SITE_SOURCE" commit -q -m "content: add existing main content"
+[[ $("$GIT_BIN" -C "$SITE_SOURCE" ls-files -s scripts/fallback-executable.sh) == 100755\ * ]] || { printf 'mock site executable mode was not recorded\n' >&2; exit 1; }
 site_source_sha=$("$GIT_BIN" -C "$SITE_SOURCE" rev-parse HEAD)
+site_source_tree_sha=$("$GIT_BIN" -C "$SITE_SOURCE" rev-parse 'HEAD^{tree}')
+fallback_site_source_sha='1111111111111111111111111111111111111111'
+site_source_archive="$TEST_ROOT/site-source.tar.gz"
+"$GIT_BIN" -C "$SITE_SOURCE" archive --format=tar.gz \
+  --prefix="linsiyuan523-star-algae-atlas-${fallback_site_source_sha:0:7}/" \
+  --output="$site_source_archive" HEAD
+
+unsafe_symlink_source="$TEST_ROOT/unsafe-symlink-source"
+unsafe_symlink_archive="$TEST_ROOT/unsafe-symlink-source.tar.gz"
+git_setup "$unsafe_symlink_source"
+unsafe_symlink_blob=$(printf '../../../../archive-symlink-target' | "$GIT_BIN" -C "$unsafe_symlink_source" hash-object -w --stdin)
+"$GIT_BIN" -C "$unsafe_symlink_source" update-index --add --cacheinfo \
+  "120000,$unsafe_symlink_blob,unsafe-link"
+"$GIT_BIN" -C "$unsafe_symlink_source" commit -q -m "test: unsafe symlink archive"
+"$GIT_BIN" -C "$unsafe_symlink_source" archive --format=tar.gz \
+  --prefix="linsiyuan523-star-algae-atlas-${fallback_site_source_sha:0:7}/" \
+  --output="$unsafe_symlink_archive" HEAD
+
+unsafe_traversal_input="$TEST_ROOT/unsafe-traversal-input"
+unsafe_traversal_archive="$TEST_ROOT/unsafe-traversal-source.tar.gz"
+mkdir -p -- "$unsafe_traversal_input"
+printf 'must remain inside the archive\n' > "$unsafe_traversal_input/payload"
+"$TAR_BIN" --create --gzip --file "$unsafe_traversal_archive" \
+  --transform="s|^payload$|linsiyuan523-star-algae-atlas-${fallback_site_source_sha:0:7}/../../../../archive-path-traversal-created|" \
+  --directory "$unsafe_traversal_input" payload
 if site_source_native=$(cd "$SITE_SOURCE" && pwd -W 2>/dev/null); then
   site_source_url="file:///$site_source_native"
 else
@@ -153,6 +187,26 @@ esac
 MOCK_NPM
 make_executable "$TEST_ROOT/bin/npm"
 
+cat > "$TEST_ROOT/bin/git" <<'MOCK_GIT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$*" >> "${MOCK_GIT_LOG:?}"
+if [[ "${MOCK_SITE_CLONE_FAIL:-0}" == "1" && " $* " == *" clone "* && " $* " == *" --depth 1 "* ]]; then
+  printf 'mock shallow clone failure\n' >&2
+  exit 128
+fi
+exec "${MOCK_REAL_GIT_BIN:?}" "$@"
+MOCK_GIT
+make_executable "$TEST_ROOT/bin/git"
+
+cat > "$TEST_ROOT/bin/timeout" <<'MOCK_TIMEOUT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$*" >> "${MOCK_TIMEOUT_LOG:?}"
+exec "${MOCK_REAL_TIMEOUT_BIN:?}" "$@"
+MOCK_TIMEOUT
+make_executable "$TEST_ROOT/bin/timeout"
+
 cat > "$TEST_ROOT/bin/chmod" <<'MOCK_CHMOD'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -186,7 +240,34 @@ make_executable "$TEST_ROOT/bin/systemctl"
 cat > "$TEST_ROOT/bin/curl" <<'MOCK_CURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+printf '%s\n' "$*" >> "${MOCK_CURL_LOG:?}"
 url="${@: -1}"
+output=""
+previous=""
+for argument in "$@"; do
+  if [[ "$previous" == "--output" ]]; then
+    output=$argument
+  fi
+  previous=$argument
+done
+if [[ "$url" == */commits/main ]]; then
+  [[ "${MOCK_SITE_API_FAIL:-0}" != "1" ]] || exit 22
+  [[ -n "$output" && "$output" != "/dev/null" ]]
+  tree_sha="${MOCK_SITE_TREE_SHA:?}"
+  if [[ "${MOCK_SITE_TREE_MISMATCH:-0}" == "1" ]]; then
+    tree_sha='2222222222222222222222222222222222222222'
+  fi
+  printf '{"sha":"%s","commit":{"tree":{"sha":"%s"}}}\n' \
+    "${MOCK_SITE_SOURCE_SHA:?}" "$tree_sha" > "$output"
+  exit 0
+fi
+if [[ "$url" == */tarball/* ]]; then
+  [[ "${MOCK_SITE_TARBALL_FAIL:-0}" != "1" ]] || exit 22
+  [[ "$url" == */tarball/"${MOCK_SITE_SOURCE_SHA:?}" ]]
+  [[ -n "$output" && "$output" != "/dev/null" ]]
+  cp -- "${MOCK_SITE_ARCHIVE:?}" "$output"
+  exit 0
+fi
 if [[ "$*" == *"--write-out"* ]]; then
   if [[ "${MOCK_DELETE_URL_200:-0}" == "1" && "$url" == */zh/insights/example-id ]]; then
     printf '200'
@@ -208,6 +289,9 @@ make_executable "$TEST_ROOT/bin/curl"
 
 export MOCK_NPM_LOG="$TEST_ROOT/npm.log"
 export MOCK_CHMOD_LOG="$TEST_ROOT/chmod.log"
+export MOCK_GIT_LOG="$TEST_ROOT/git.log"
+export MOCK_CURL_LOG="$TEST_ROOT/curl.log"
+export MOCK_TIMEOUT_LOG="$TEST_ROOT/timeout.log"
 export MOCK_SERVICE_STATE="$TEST_ROOT/service-active"
 
 git_setup "$TEST_ROOT/workbench-source"
@@ -371,6 +455,9 @@ common_env=(
   ALGAE_INCOMING_ROOT="$TEST_ROOT/incoming"
   ALGAE_SITE_ROOT="$TEST_ROOT/site"
   ALGAE_SITE_REPOSITORY_URL="$site_source_url"
+  ALGAE_SITE_REPOSITORY_API_URL="https://api.github.invalid/repos/linsiyuan523-star/algae-atlas"
+  ALGAE_GIT_BIN="$TEST_ROOT/bin/git"
+  ALGAE_TIMEOUT_BIN="$TEST_ROOT/bin/timeout"
   ALGAE_NPM_BIN="$TEST_ROOT/bin/npm"
   ALGAE_CHMOD_BIN="$TEST_ROOT/bin/chmod"
   ALGAE_SYSTEMCTL_BIN="$TEST_ROOT/bin/systemctl"
@@ -379,6 +466,11 @@ common_env=(
   ALGAE_LOCAL_BASE_URL="http://127.0.0.1:3000"
   ALGAE_HEALTH_ATTEMPTS=1
   ALGAE_TEST_LINK_FILES=1
+  MOCK_REAL_GIT_BIN="$GIT_BIN"
+  MOCK_REAL_TIMEOUT_BIN="$REAL_TIMEOUT_BIN"
+  MOCK_SITE_SOURCE_SHA="$fallback_site_source_sha"
+  MOCK_SITE_TREE_SHA="$site_source_tree_sha"
+  MOCK_SITE_ARCHIVE="$site_source_archive"
 )
 
 placeholder_head=$("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD)
@@ -398,7 +490,10 @@ assert_json_field "$first_build_json" code BUILD_FAILED
 [[ ! -e "$FORMAL_REPOSITORY/public/images/uploads/2026/07/example-image.webp" ]] || { printf 'failed first build installed bundle image\n' >&2; exit 1; }
 [[ ! -e "$TEST_ROOT/site/current" && ! -e "$TEST_ROOT/site/previous" ]] || { printf 'failed first build changed release markers\n' >&2; exit 1; }
 
-publish_json=$(env "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$INCOMING_JOB" --json)
+: > "$MOCK_GIT_LOG"
+: > "$MOCK_CURL_LOG"
+: > "$MOCK_TIMEOUT_LOG"
+publish_json=$(env MOCK_SITE_CLONE_FAIL=1 "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$INCOMING_JOB" --json)
 assert_json_field "$publish_json" ok true
 assert_json_field "$publish_json" action publish
 assert_json_field "$publish_json" stableId example-id
@@ -410,7 +505,17 @@ assert_bootstrap_sentinels "$FORMAL_REPOSITORY"
 first_release=$(<"$TEST_ROOT/site/current")
 [[ -f "$first_release/public/images/uploads/2026/07/example-image.webp" ]] || { printf 'release image was not overlaid\n' >&2; exit 1; }
 assert_bootstrap_sentinels "$first_release"
-[[ $(<"$first_release/.release-sha") == "$site_source_sha" ]] || { printf 'release did not reuse the prepared fresh-main SHA\n' >&2; exit 1; }
+[[ $(<"$first_release/.release-sha") == "$fallback_site_source_sha" ]] || { printf 'fallback release did not preserve the GitHub API commit SHA\n' >&2; exit 1; }
+[[ $("$GIT_BIN" -C "$first_release" rev-parse 'HEAD^{tree}') == "$site_source_tree_sha" ]] || { printf 'fallback release did not preserve the API source tree\n' >&2; exit 1; }
+[[ $("$GIT_BIN" -C "$first_release" rev-parse HEAD) != "$fallback_site_source_sha" ]] || { printf 'fallback test did not exercise a synthetic local snapshot commit\n' >&2; exit 1; }
+[[ $("$GIT_BIN" -C "$first_release" ls-files -s scripts/fallback-executable.sh) == 100755\ * ]] || { printf 'fallback release did not preserve the executable tree mode\n' >&2; exit 1; }
+[[ $(grep -c -- '--depth 1' "$MOCK_GIT_LOG") -eq 2 ]] || { printf 'shallow clone fallback did not use two attempts\n' >&2; exit 1; }
+grep -Fq -- "--signal=TERM --kill-after=10s 60s $TEST_ROOT/bin/git" "$MOCK_TIMEOUT_LOG" || { printf 'shallow clone attempts did not use the 60-second hard timeout\n' >&2; exit 1; }
+grep -q -- '--connect-timeout 10 --max-time 90 --retry 2 --retry-delay 2 --retry-max-time 180' "$MOCK_CURL_LOG" || { printf 'GitHub fallback metadata request did not use bounded curl retries and timeouts\n' >&2; exit 1; }
+grep -q -- '--connect-timeout 10 --max-time 900 --retry 2 --retry-delay 2 --retry-max-time 900' "$MOCK_CURL_LOG" || { printf 'GitHub fallback archive request did not allow a bounded slow download\n' >&2; exit 1; }
+grep -Fq -- "--signal=TERM --kill-after=10s 180s $TEST_ROOT/bin/curl" "$MOCK_TIMEOUT_LOG" || { printf 'GitHub fallback metadata request did not have a hard total timeout\n' >&2; exit 1; }
+grep -Fq -- "--signal=TERM --kill-after=10s 900s $TEST_ROOT/bin/curl" "$MOCK_TIMEOUT_LOG" || { printf 'GitHub fallback archive request did not have a hard total timeout\n' >&2; exit 1; }
+grep -q -- "/tarball/$fallback_site_source_sha" "$MOCK_CURL_LOG" || { printf 'GitHub fallback did not request the exact API commit archive\n' >&2; exit 1; }
 assert_release_readable "$first_release"
 
 list_json=$(env "${common_env[@]}" bash "$CONTROLLER" list --json)
@@ -428,6 +533,58 @@ assert_json_field "$update_json" stableId example-id
 grep -q 'v2' "$FORMAL_REPOSITORY/content/records/science-article/example-id/record.json"
 grep -q 'image-v2' "$FORMAL_REPOSITORY/public/images/uploads/2026/07/example-image.webp"
 assert_bootstrap_sentinels "$FORMAL_REPOSITORY"
+
+assert_site_source_failure() {
+  local failure_flag=$1
+  local expected_message=$2
+  local formal_head_before
+  local current_release_before
+  local failure_json
+  formal_head_before=$("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD)
+  current_release_before=$(<"$TEST_ROOT/site/current")
+  if failure_json=$(env MOCK_SITE_CLONE_FAIL=1 "$failure_flag=1" "${common_env[@]}" \
+    bash "$CONTROLLER" delete --type science-article --id example-id --json); then
+    printf '%s unexpectedly allowed a delete transaction\n' "$failure_flag" >&2
+    exit 1
+  fi
+  assert_json_field "$failure_json" ok false
+  assert_json_field "$failure_json" action delete
+  assert_json_field "$failure_json" code SITE_SOURCE_FAILED
+  assert_json_field "$failure_json" message "$expected_message"
+  [[ $("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD) == "$formal_head_before" ]] || { printf '%s changed formal content\n' "$failure_flag" >&2; exit 1; }
+  [[ $(<"$TEST_ROOT/site/current") == "$current_release_before" ]] || { printf '%s changed the current release\n' "$failure_flag" >&2; exit 1; }
+}
+
+assert_site_source_failure MOCK_SITE_API_FAIL "Cannot query the GitHub main source metadata"
+assert_site_source_failure MOCK_SITE_TREE_MISMATCH "GitHub main source archive tree does not match the API tree"
+assert_site_source_failure MOCK_SITE_TARBALL_FAIL "Cannot download the exact GitHub main source archive"
+
+assert_unsafe_site_archive_failure() {
+  local label=$1
+  local archive=$2
+  local outside_path=$3
+  local formal_head_before
+  local current_release_before
+  local failure_json
+  [[ ! -e "$outside_path" && ! -L "$outside_path" ]] || { printf '%s outside path already exists\n' "$label" >&2; exit 1; }
+  formal_head_before=$("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD)
+  current_release_before=$(<"$TEST_ROOT/site/current")
+  if failure_json=$(env MOCK_SITE_CLONE_FAIL=1 "${common_env[@]}" MOCK_SITE_ARCHIVE="$archive" \
+    bash "$CONTROLLER" delete --type science-article --id example-id --json); then
+    printf '%s archive unexpectedly allowed a delete transaction\n' "$label" >&2
+    exit 1
+  fi
+  assert_json_field "$failure_json" ok false
+  assert_json_field "$failure_json" action delete
+  assert_json_field "$failure_json" code SITE_SOURCE_FAILED
+  assert_json_field "$failure_json" message "GitHub main source archive is unsafe or invalid"
+  [[ ! -e "$outside_path" && ! -L "$outside_path" ]] || { printf '%s archive created an outside path\n' "$label" >&2; exit 1; }
+  [[ $("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD) == "$formal_head_before" ]] || { printf '%s archive changed formal content\n' "$label" >&2; exit 1; }
+  [[ $(<"$TEST_ROOT/site/current") == "$current_release_before" ]] || { printf '%s archive changed the current release\n' "$label" >&2; exit 1; }
+}
+
+assert_unsafe_site_archive_failure symlink "$unsafe_symlink_archive" "$TEST_ROOT/archive-symlink-target"
+assert_unsafe_site_archive_failure path-traversal "$unsafe_traversal_archive" "$TEST_ROOT/archive-path-traversal-created"
 
 current_before=$(<"$TEST_ROOT/site/current")
 previous_before=$(<"$TEST_ROOT/site/previous")

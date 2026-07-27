@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Kept workbench fields focused and editable while background autosave is in progress.
 - Removed author-directory, source-verification, disclosure, and approval gates from direct publishing across all content types while retaining structural and media-safety validation.
 - Secured uploaded delivery directories and files before invoking the production content controller.
+- Added a bounded, tree-verified GitHub API tarball fallback when the production controller cannot shallow-clone the current `main` source.
 
 ## [1.0.1] - 2026-07-20
 
