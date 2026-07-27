@@ -1619,16 +1619,16 @@ run_build_command() {
   shift
   (
     cd "$build_directory"
-    CONTENT_REPOSITORY_SOURCE=records "$@"
+    CONTENT_REPOSITORY_SOURCE=overlay "$@"
   ) >>"$OP_LOG" 2>&1
 }
 
-write_records_runtime_config() {
+write_content_runtime_config() {
   local build_directory=$1
   local runtime_environment="$build_directory/.env.production.local"
   [[ ! -e "$runtime_environment" && ! -L "$runtime_environment" ]] || \
     fail "BUILD_FAILED" "Website source runtime environment file is reserved" true
-  if ! printf '%s\n' 'CONTENT_REPOSITORY_SOURCE=records' > "$runtime_environment"; then
+  if ! printf '%s\n' 'CONTENT_REPOSITORY_SOURCE=overlay' > "$runtime_environment"; then
     fail "BUILD_FAILED" "Website runtime content source cannot be configured" true
   fi
   "$CHMOD_BIN" 0644 -- "$runtime_environment" || \
@@ -1661,7 +1661,7 @@ build_release() {
   rm -rf -- "$build_directory/public/images/uploads"
   cp -a -- "$CANDIDATE_REPOSITORY/public/images/uploads" "$build_directory/public/images/uploads"
   chmod -R a+rX -- "$build_directory/public/images/uploads"
-  write_records_runtime_config "$build_directory"
+  write_content_runtime_config "$build_directory"
   if ! run_build_command "$build_directory" "$NPM_BIN" ci --include=dev; then
     fail "BUILD_FAILED" "Website dependency installation failed" true
   fi

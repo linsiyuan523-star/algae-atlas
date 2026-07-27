@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createLegacyContentSource } from "../../lib/content-repository/legacy-source";
 import type { PublicContentRepository } from "../../lib/content-repository/types";
 
 type DefaultRepositoryModule = {
@@ -54,6 +55,23 @@ test("CONTENT_REPOSITORY_SOURCE=records uses content/records", async () => {
       websiteContentRepository.get("science-article", "what-are-algae", "en"),
       null,
     );
+  });
+});
+
+test("CONTENT_REPOSITORY_SOURCE=overlay preserves legacy entries for draft migrations", async () => {
+  await withRepositorySource("overlay", async () => {
+    const { websiteContentRepository } = await importDefaultRepository("overlay");
+    assert.equal(websiteContentRepository.sourceKind("science-article"), "overlay");
+    assert.equal(
+      websiteContentRepository.get("science-article", "what-are-algae", "en")?.source,
+      "legacy",
+    );
+    const entries = websiteContentRepository.entries("science-article");
+    assert.deepEqual(
+      entries.map((entry) => entry.id),
+      createLegacyContentSource().entries("science-article").map((entry) => entry.id),
+    );
+    assert.ok(entries.every((entry) => entry.source === "legacy"));
   });
 });
 

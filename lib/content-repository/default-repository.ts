@@ -24,18 +24,25 @@ const legacySource = createLegacyContentSource();
 
 export function resolveContentRepositorySource(
   configuredSource = process.env.CONTENT_REPOSITORY_SOURCE,
-): "legacy" | "records" {
+): "legacy" | "records" | "overlay" {
   if (!configuredSource || configuredSource === "legacy") return "legacy";
   if (configuredSource === "records") return "records";
+  if (configuredSource === "overlay") return "overlay";
   throw new Error(
-    `Invalid CONTENT_REPOSITORY_SOURCE value "${configuredSource}". Expected "records" or "legacy".`,
+    `Invalid CONTENT_REPOSITORY_SOURCE value "${configuredSource}". Expected "overlay", "records", or "legacy".`,
   );
 }
 
 const contentRepositorySource = resolveContentRepositorySource();
 
 export const websiteContentRepository =
-  contentRepositorySource === "records"
+  contentRepositorySource === "overlay"
+    ? await createFileBackedContentRepository(
+        process.cwd(),
+        createCollectionSourceSelection("records"),
+        "overlay",
+      )
+    : contentRepositorySource === "records"
     ? await createFileBackedContentRepository(
         process.cwd(),
         createCollectionSourceSelection("records"),

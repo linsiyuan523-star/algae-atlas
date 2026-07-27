@@ -7,7 +7,7 @@ Contract versions: content schema 1, repository API 1
 
 The website adapter reads the Stage-01 JSON/Markdown repository contract, validates the complete snapshot, derives independently publishable Chinese and English records, and presents legacy TypeScript data and repository records through one `PublicContentRepository` interface.
 
-Stage-02 does not migrate real content. Every real collection in `lib/content-repository/default-repository.ts` deliberately selects `legacy`, so the current public site remains unchanged. The records source is exercised only with fictional fixtures below `tests/fixtures/content-repository/` until Stage-03 performs a reviewed collection migration.
+The repository supports explicit `legacy`, `records`, and `overlay` runtime modes. Production direct publishing uses `overlay`: existing legacy content remains visible while a public repository record can take ownership of the same type and stable ID.
 
 ## 2. Repository layout
 
@@ -50,9 +50,21 @@ The loader builds one `RepositorySnapshot` and calls the shared `parseRecord`, `
 
 A schema or repository error throws `ContentRepositoryLoadError`; it is never converted into a silent legacy fallback.
 
-## 5. Explicit source selection
+## 5. Explicit repository modes
 
-`CollectionSourceSelection` is an exhaustive mapping for all 11 schema content types. The router selects exactly one source for a whole content type:
+`CONTENT_REPOSITORY_SOURCE` selects one of three fail-closed modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `legacy` | Read only the code-owned legacy source selected for each content type. |
+| `records` | Read only eligible locales from the validated file-backed repository. A missing ID or locale never falls back to legacy. |
+| `overlay` | Start with legacy entries, then let each record with at least one eligible locale replace the whole same-type, same-ID legacy entry. Records with no eligible locale are omitted and do not hide legacy. |
+
+Overlay ownership is per record, not per locale. If legacy has both Chinese and English but a same-ID record publishes only Chinese, Chinese comes from the record and English is unavailable; the repository must not mix the legacy English locale back into that ID. A new public record with no legacy counterpart is available normally through repository lookup and the registered code-owned route family.
+
+The file-backed snapshot is loaded and validated before mode selection. Schema, loader, or reference errors still fail the build; `overlay` does not turn such errors into a legacy fallback.
+
+`CollectionSourceSelection` remains an exhaustive mapping for all 11 schema content types. It can explicitly select one source for a whole content type when constructing a repository directly:
 
 ~~~ts
 const selection = {
@@ -61,7 +73,7 @@ const selection = {
 } satisfies CollectionSourceSelection;
 ~~~
 
-The repository never merges records and legacy entries by ID. If a migrated type selects `records`, absent or invalid repository entries do not fall back to a same-ID legacy entry. Stage-03 owns real migration evidence and source-switch changes; rollback is the explicit code/config switch back to `legacy`, followed by the full validation gates.
+Strict `records` selection never merges by ID. Overlay mode uses the record-level ownership rule above; rollback is the explicit runtime switch back to `legacy`, followed by the normal validation gates.
 
 ## 6. Code-owned detail routes
 
@@ -126,8 +138,9 @@ The fictional fixtures are test-only and must never be copied into `content/` or
 
 ## 11. Known boundaries
 
-- Stage-02 contains no real repository record, author, or media migration.
-- All current production collections still select `legacy`; current visible pages remain equivalent.
+- Overlay changes content ownership only; it cannot create new route families.
+- A non-public record does not act as a tombstone for legacy content.
+- Locale availability always comes from the single owning entry; locales are never combined across sources.
 - Only existing detail route families listed above are integrated.
 - Image byte/signature/dimension/EXIF processing remains Stage-05B work.
 - Desktop editing, preview, Git publishing, remote operations, deployment, and production changes are outside this stage.

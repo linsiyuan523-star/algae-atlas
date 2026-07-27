@@ -8,6 +8,7 @@ import {
 import type {
   CollectionSourceSelection,
   ContentAvailability,
+  ContentRepositoryMode,
   ContentSourceKind,
   PublicContentEntry,
   PublicContentRepository,
@@ -91,6 +92,7 @@ export function createCollectionSourceSelection(
 
 export function createPublicContentRepository(options: {
   selection: CollectionSourceSelection;
+  mode?: ContentRepositoryMode;
   legacySource?: PublicContentSource;
   recordSource?: PublicContentSource;
 }): PublicContentRepository {
@@ -98,36 +100,49 @@ export function createPublicContentRepository(options: {
   if (options.legacySource) sources.set("legacy", options.legacySource);
   if (options.recordSource) sources.set("records", options.recordSource);
 
-  function selectedSource(type: ContentType): PublicContentSource {
-    const kind = options.selection[type];
+  function sourceEntries(
+    type: ContentType,
+    kind: ContentSourceKind,
+  ): readonly PublicContentEntry[] {
     const source = sources.get(kind);
     if (!source) {
-      throw new Error(`内容类型 ${type} 已选择 ${kind}，但对应 source 未配置`);
+      throw new Error(`Content type ${type} requires the unavailable ${kind} source.`);
     }
-    return source;
+    return source.entries(type);
+  }
+
+  function selectedEntries(type: ContentType): readonly PublicContentEntry[] {
+    const mode = options.mode ?? options.selection[type];
+    if (mode !== "overlay") return sourceEntries(type, mode);
+
+    const records = sourceEntries(type, "records").filter((entry) =>
+      Boolean(entry.locales.zh || entry.locales.en),
+    );
+    const recordIds = new Set(records.map((entry) => entry.id));
+    return [
+      ...sourceEntries(type, "legacy").filter((entry) => !recordIds.has(entry.id)),
+      ...records,
+    ];
   }
 
   return {
     entries(type) {
-      return selectedSource(type).entries(type);
+      return selectedEntries(type);
     },
     list(type, locale, filter) {
-      return selectedSource(type)
-        .entries(type)
+      return selectedEntries(type)
         .filter((entry) => Boolean(entry.locales[locale]) && matchesFilter(entry, filter))
         .sort((left, right) => compareEntries(left, right, locale))
         .map((entry) => localizedRecord(entry, locale))
         .filter((entry): entry is PublicRecord => entry !== null);
     },
     get(type, id, locale) {
-      const entry = selectedSource(type)
-        .entries(type)
+      const entry = selectedEntries(type)
         .find((candidate) => candidate.id === id);
       return entry ? localizedRecord(entry, locale) : null;
     },
     availability(type, id): ContentAvailability | null {
-      const entry = selectedSource(type)
-        .entries(type)
+      const entry = selectedEntries(type)
         .find((candidate) => candidate.id === id);
       if (!entry) return null;
       return {
@@ -140,7 +155,7 @@ export function createPublicContentRepository(options: {
       };
     },
     sourceKind(type) {
-      return options.selection[type];
+      return options.mode ?? options.selection[type];
     },
   };
 }
