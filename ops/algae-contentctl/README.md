@@ -53,18 +53,28 @@ must have a four-digit year, a real two-digit month, a stable lowercase ID, and
 an approved image suffix. Bundle entries must remain ordinary Git blobs; links,
 traversal, and every other `public/` path are rejected.
 
-The controller never reads `/srv/algae-atlas/source`. Each publish or deletion
-prepares one shallow snapshot of the configured GitHub `main`, then reuses that
-exact snapshot for both the candidate bootstrap and website build. It overlays a
-candidate `content/` directory, runs `npm ci --include=dev`, `npm run check`, and
-`npm run build:next` with `CONTENT_REPOSITORY_SOURCE=records`, synchronizes
-candidate uploads into the fresh build, and then creates a release. Only after the
-site restart, loopback health check, and exact published URL check succeed does
-it replace the formal content repository. Any failure rolls `current` and
-`previous` back and leaves the formal repository unchanged. If restoring the
-formal repository or release links itself fails, the root-only transaction
-workspace and new release are retained for manual recovery instead of being
-deleted.
+The controller never reads `/srv/algae-atlas/source` or uses the active
+`current` release as source. Each publish or deletion first makes two bounded
+60-second shallow-clone attempts against the configured GitHub `main`. If that
+transport fails, the controller queries the official GitHub commit API for the
+branch's exact commit and tree SHA and downloads the tarball for that commit.
+Both HTTP requests retain three attempts with bounded per-attempt and total
+timeouts. The controller rejects unsafe archive entries and initializes a local
+Git snapshot only after its written tree, including executable modes, matches
+the API tree SHA. The release SHA remains the real GitHub commit SHA; the local
+snapshot commit is merely a clean build workspace whose tree is rechecked
+before use.
+
+The controller reuses that exact prepared tree for both the candidate bootstrap
+and website build. It overlays a candidate `content/` directory, runs
+`npm ci --include=dev`, `npm run check`, and `npm run build:next` with
+`CONTENT_REPOSITORY_SOURCE=records`, synchronizes candidate uploads into the
+fresh build, and then creates a release. Only after the site restart, loopback
+health check, and exact published URL check succeed does it replace the formal
+content repository. Any failure rolls `current` and `previous` back and leaves
+the formal repository unchanged. If restoring the formal repository or release
+links itself fails, the root-only transaction workspace and new release are
+retained for manual recovery instead of being deleted.
 
 All registered content types have records-backed website detail routes. The
 controller still treats the exact URL check as a transaction gate: any routing
@@ -122,8 +132,11 @@ logs to stdout, so callers can parse one JSON object per invocation.
 ## Tests
 
 The test script creates an isolated temporary content repository, bundle,
-mock website source, mock `npm`, mock service manager, and mock health client.
-It never touches `/srv/algae-atlas` or `/srv/algae-content`.
+mock website source and GitHub API archive, mock `npm`, mock service manager,
+and mock health client. It covers clone-failure fallback plus API, tree, and
+tarball failures, including executable modes, symlink entries, and path
+traversal attempts, without touching `/srv/algae-atlas` or
+`/srv/algae-content`.
 
 ```bash
 bash ops/algae-contentctl/tests/test-algae-contentctl.sh
