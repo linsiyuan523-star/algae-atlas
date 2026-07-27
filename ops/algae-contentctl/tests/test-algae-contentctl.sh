@@ -66,7 +66,7 @@ assert_release_readable() {
       printf 'controller did not normalize permissions on the complete release tree\n' >&2
       exit 1
     }
-    [[ -r "$release/package.json" && -x "$release" && -r "$release/.next/mock-build" ]] || {
+    [[ -r "$release/package.json" && -r "$release/.env.production.local" && -x "$release" && -r "$release/.next/mock-build" ]] || {
       printf 'release files are not readable through the test runtime\n' >&2
       exit 1
     }
@@ -76,6 +76,8 @@ assert_release_readable() {
   (( (8#$mode & 0005) == 0005 )) || { printf 'release root is not readable and traversable by the service user\n' >&2; exit 1; }
   mode=$(stat -c '%a' -- "$release/package.json")
   (( (8#$mode & 0004) == 0004 )) || { printf 'release source file is not readable by the service user\n' >&2; exit 1; }
+  mode=$(stat -c '%a' -- "$release/.env.production.local")
+  (( (8#$mode & 0004) == 0004 )) || { printf 'release runtime environment is not readable by the service user\n' >&2; exit 1; }
   mode=$(stat -c '%a' -- "$release/.next")
   (( (8#$mode & 0005) == 0005 )) || { printf 'release build directory is not readable and traversable by the service user\n' >&2; exit 1; }
   mode=$(stat -c '%a' -- "$release/.next/mock-build")
@@ -651,6 +653,10 @@ assert_bootstrap_sentinels "$FORMAL_REPOSITORY"
 [[ -z "$("$GIT_BIN" -C "$FORMAL_REPOSITORY" remote)" ]] || { printf 'formal content repository unexpectedly has a Git remote\n' >&2; exit 1; }
 first_release=$(<"$TEST_ROOT/site/current")
 [[ -f "$first_release/public/images/uploads/2026/07/example-image.webp" ]] || { printf 'release image was not overlaid\n' >&2; exit 1; }
+[[ $(<"$first_release/.env.production.local") == 'CONTENT_REPOSITORY_SOURCE=records' ]] || {
+  printf 'release runtime did not select the records content source\n' >&2
+  exit 1
+}
 assert_bootstrap_sentinels "$first_release"
 [[ ! -e "$first_release/content/authors/retry-ancestor-only.json" ]] || {
   printf 'successful retry released an unrelated ancestor path\n' >&2
