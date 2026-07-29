@@ -847,6 +847,7 @@ export default function App({
               serverContentItems={serverContentItems}
               onViewServerContent={handleViewServerContent}
               onDeleteServerContent={handleDeleteServerContent}
+              onOpenPublishedUrl={openPublicSiteUrl}
               onQueryPublishStatus={handleQueryPublishStatus}
             />
           ) : currentSection === "server-content" ? (

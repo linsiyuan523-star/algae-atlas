@@ -722,13 +722,15 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
   onboardingApi.status = vi.fn(async () => onboardingStatus(true));
   const repositoryApi = createRepositoryApi();
   const serverApi = createServerApi();
+  const open = vi.mocked(openPublicSiteUrl);
+  open.mockResolvedValue(undefined);
   serverApi.publishContent = vi.fn<ServerApi["publishContent"]>(async () => ({
     ok: true,
     action: "publish",
     message: "Published",
     contentType: "team-news",
     stableId: "fictional-draft",
-    url: "https://example.invalid/zh/news/fictional-draft",
+    url: "https://sycszy.icu/zh/news/fictional-draft",
     releaseSha: "c".repeat(40),
     publishedAt: "2026-07-26T09:00:00Z",
   }));
@@ -804,6 +806,21 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
   );
   await waitFor(() =>
     expect(document.querySelector(".publish-result")).toHaveTextContent("Published"),
+  );
+  const publishedLink = screen.getByRole("link", { name: "打开线上页面" });
+  expect(publishedLink).toHaveAttribute(
+    "href",
+    "https://sycszy.icu/zh/news/fictional-draft",
+  );
+  await user.click(publishedLink);
+  expect(open).toHaveBeenCalledWith(
+    "https://sycszy.icu/zh/news/fictional-draft",
+  );
+
+  open.mockRejectedValueOnce(new Error("Windows could not open the public website."));
+  await user.click(publishedLink);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "无法打开线上页面：Windows could not open the public website.",
   );
   expect(screen.getByRole("button", { name: "保存并更新服务器" })).toBeEnabled();
 });

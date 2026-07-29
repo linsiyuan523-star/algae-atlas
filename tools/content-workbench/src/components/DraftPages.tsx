@@ -265,6 +265,7 @@ type DraftsPageProps = {
   serverContentItems?: readonly DirectServerContent[];
   onViewServerContent?: (item: DirectServerContent) => void;
   onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
+  onOpenPublishedUrl?: (url: string) => void | Promise<void>;
   onQueryPublishStatus?: (
     transactionId: string,
     onFailure?: (progress: ServerPublishProgress) => void,
@@ -283,6 +284,7 @@ export function DraftsPage({
   serverContentItems = [],
   onViewServerContent,
   onDeleteServerContent,
+  onOpenPublishedUrl,
   onQueryPublishStatus,
 }: DraftsPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>(initialDraft ? [initialDraft] : []);
@@ -451,6 +453,7 @@ export function DraftsPage({
                 serverContentItems={serverContentItems}
                 onViewServerContent={onViewServerContent}
                 onDeleteServerContent={onDeleteServerContent}
+                onOpenPublishedUrl={onOpenPublishedUrl}
                 onQueryPublishStatus={onQueryPublishStatus}
               />
             ) : (
@@ -483,6 +486,7 @@ type DraftEditorProps = {
   serverContentItems: readonly DirectServerContent[];
   onViewServerContent?: (item: DirectServerContent) => void;
   onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
+  onOpenPublishedUrl?: (url: string) => void | Promise<void>;
   onQueryPublishStatus?: (
     transactionId: string,
     onFailure?: (progress: ServerPublishProgress) => void,
@@ -515,6 +519,7 @@ function DraftEditor({
   serverContentItems,
   onViewServerContent,
   onDeleteServerContent,
+  onOpenPublishedUrl,
   onQueryPublishStatus,
 }: DraftEditorProps) {
   const initialInspection = inspectDraft(draft);
@@ -1537,6 +1542,18 @@ function DraftEditor({
     }
   }
 
+  async function handleOpenPublishedUrl(url: string) {
+    if (!onOpenPublishedUrl) {
+      return;
+    }
+    setPublishError(null);
+    try {
+      await onOpenPublishedUrl(url);
+    } catch (caught) {
+      setPublishError(`无法打开线上页面：${describeError(caught)}`);
+    }
+  }
+
   function handleEndLocalPublishTransaction() {
     const current = publishProgressRef.current;
     if (
@@ -2029,7 +2046,19 @@ function DraftEditor({
             {publishResult.releaseSha ? <code>{publishResult.releaseSha}</code> : null}
             <PublishResultDetails result={publishResult} />
             {publishResult.url ? (
-              <a href={publishResult.url} target="_blank" rel="noopener noreferrer">
+              <a
+                href={publishResult.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(event) => {
+                  const url = publishResult.url;
+                  if (!onOpenPublishedUrl || !url) {
+                    return;
+                  }
+                  event.preventDefault();
+                  void handleOpenPublishedUrl(url);
+                }}
+              >
                 <ExternalLink aria-hidden="true" size={16} />
                 打开线上页面
               </a>
