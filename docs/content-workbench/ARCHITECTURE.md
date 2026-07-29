@@ -19,7 +19,7 @@ Windows Tauri workbench                       Next.js website
                    main-only production deploy
 ~~~
 
-The desktop app does not talk to production, GitHub, D1, Nginx, or systemd. The website does not require the desktop, a database, network access, or secrets to build.
+The desktop app has no arbitrary production shell, GitHub, D1, Nginx, or systemd access. Its optional direct-publish path is limited to fixed SSH/SCP operations and a root-owned controller with a narrow JSON command contract. The website does not require the desktop, a database, network access, or secrets to build.
 
 ## 2. Components
 
@@ -81,12 +81,12 @@ Existing page components should migrate to this API incrementally. Route-family 
 
 The Windows-first application uses Tauri + React + TypeScript. Responsibilities are separated:
 
-- React UI: type selection, forms, locale workflow, review view, media metadata, validation presentation, diff confirmation.
+- React UI: type selection, forms, locale workflow, review view, media metadata, validation presentation, diff confirmation, and persisted publish progress.
 - Shared schema: all content policy and serialization.
-- Tauri command layer: approved path access, atomic file operations, media inspection/normalization, and explicit Git commands.
+- Tauri command layer: approved path access, atomic file operations, media inspection/normalization, explicit Git commands, and the fixed server-publish protocol.
 - Workspace service: identifies the repository/worktree, branch, base, remotes, cleanliness, and changed allowlist.
 - Preview service: renders a local, non-public preview from draft data without marking it published.
-- Delivery service: produces summaries for later bundle handoff; it cannot create or enable a remote.
+- Delivery service: produces complete bundles and summaries for later handoff or controlled direct publication; it cannot create or enable a Git remote.
 
 The desktop must open an operator-selected existing worktree. It does not clone from GitHub or create arbitrary repositories.
 
@@ -107,6 +107,33 @@ It prohibits `fetch`, `pull`, `push`, remote add/set-url, merge of protected bra
 ### 2.6 Integration and delivery
 
 Stage workers export complete branch bundles and SHA-256 sidecars. The integration host verifies them, imports them under namespaced local refs, and merges only in the topological order in [STAGE-DEPENDENCIES.md](STAGE-DEPENDENCIES.md). Remote enablement happens only after all stages pass and the operator explicitly authorizes the separate GitHub workflow.
+
+### 2.7 Direct server publication
+
+Formal server publication is a recoverable transaction rather than an opaque
+SSH call. The desktop creates one random 32-character lowercase hexadecimal ID
+before the local publication commit and reuses it for the branch name, Bundle,
+SHA-256, upload, controller call, status queries, and retries. It uploads only to
+the fixed incoming root, writes a transaction-scoped `.partial-<id>` directory,
+checks the remote Bundle hash, and atomically renames the completed delivery.
+
+The root-owned controller persists a mode `0600` JSON state document and JSONL
+event timeline below `/srv/algae-content/publish-state`, whose directory mode is
+`0700`. State replacement is atomic and entries are retained for 30 days. The
+fixed `publish-status --transaction <id> --json` command lets the desktop poll
+or recover after restart and after an ambiguous SSH result. A repeated publish
+returns retained success or running state; a deterministic failure stays
+terminal; a retryable pre-switch failure can resume under the same ID, with at
+most three controller attempts. A completed production switch is never retried.
+
+The controller checks the exact verified source cache first. On a miss it uses
+the exact GitHub API archive before at most one 30-second shallow-clone fallback,
+with a 90-second hard ceiling across metadata, archive, and clone network work,
+and verifies commit/tree identity for both paths. Bundle integrity, content
+shape, clean source, build, release, rollback, and production URL gates remain
+unchanged. The React layer combines Tauri progress events with bounded status
+polling, stores the latest transaction per draft locally, prevents a second
+in-flight publication, and exposes stage, retry, duration, and recovery state.
 
 ## 3. Trust boundaries
 

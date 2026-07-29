@@ -48,6 +48,7 @@ import {
 } from "./repository";
 import type { RepositoryApi } from "./repository";
 import {
+  isServerPublishProgress,
   normalizeServerContentItem,
   normalizeServerUrl,
   serverResultError,
@@ -55,7 +56,14 @@ import {
   tauriServerApi,
   unavailableServerApi,
 } from "./server";
-import type { ServerApi, ServerPublishRequest } from "./server";
+import type {
+  PublishStage,
+  ServerApi,
+  ServerCommandResult,
+  ServerPublishData,
+  ServerPublishProgress,
+  ServerPublishRequest,
+} from "./server";
 import {
   tauriOnboardingApi,
   unavailableOnboardingApi,
@@ -65,6 +73,70 @@ import type { OnboardingApi, OnboardingStatus } from "./onboarding";
 const APP_VERSION = "0.1.0";
 const DELETE_SERVER_CONTENT_CONFIRMATION =
   "删除后该网页将从线上移除，但服务器会保留历史版本。确认删除？";
+
+const RETRYABLE_CLIENT_ERROR_CODES = new Set([
+  "SSH_UNAVAILABLE",
+  "SSH_TIMEOUT",
+  "SERVER_TIMEOUT",
+  "SERVER_PROCESS_FAILED",
+  "SERVER_COMMAND_FAILED",
+  "TAURI_INVOKE_FAILED",
+  "UPLOAD_FAILED",
+  "UPLOAD_TIMEOUT",
+  "UPLOAD_PROCESS_FAILED",
+  "STATUS_QUERY_FAILED",
+  "STATUS_QUERY_TIMEOUT",
+  "STATUS_QUERY_PROCESS_FAILED",
+  "STATUS_QUERY_TOOL_UNAVAILABLE",
+]);
+
+function createClientPublishProgress(
+  transactionId: string,
+  stage: PublishStage,
+  message: string,
+): ServerPublishProgress {
+  const now = new Date().toISOString();
+  return {
+    transactionId,
+    status: "running",
+    stage,
+    message,
+    startedAt: now,
+    stageStartedAt: now,
+    updatedAt: now,
+    elapsedMs: 0,
+    stageElapsedMs: 0,
+    attempt: 1,
+    retryable: false,
+    isUploading: false,
+    serverStarted: false,
+    safeToCancel: true,
+    safeToRetry: false,
+  };
+}
+
+function createClientPublishFailure(
+  result: ServerCommandResult,
+  transactionId: string,
+  stage: PublishStage,
+): ServerPublishProgress {
+  const retryable =
+    result.retryable ??
+    RETRYABLE_CLIENT_ERROR_CODES.has(result.errorCode ?? result.code ?? "");
+  return {
+    ...createClientPublishProgress(transactionId, stage, serverResultError(result)),
+    status: "failed",
+    retryable,
+    safeToCancel: false,
+    safeToRetry: retryable,
+    errorCode: result.errorCode ?? result.code ?? "CLIENT_PUBLISH_FAILED",
+    userMessage: result.userMessage ?? result.message,
+    technicalSummary:
+      result.technicalSummary ??
+      `${result.errorCode ?? result.code ?? "CLIENT_PUBLISH_FAILED"}: ${result.message}`,
+    failedStage: result.failedStage ?? stage,
+  };
+}
 
 const singleUserNavigationItems = [
   {
@@ -423,54 +495,96 @@ export default function App({
     }
 
     const fields = inspectDraft(snapshot.draft).fields;
-    options.onProgress?.("checking");
-    const connection = await activeServerApi.testConnection();
-    if (!connection.ok) {
-      const message = serverResultError(connection);
-      setServerConnectionState("unavailable");
-      setServerConnectionError(message);
-      throw new Error(message);
+    let published: ServerCommandResult<ServerPublishData> | null = null;
+
+    if (options.resume) {
+      const existing = await handleQueryPublishStatus(
+        options.transactionId,
+        options.onProgress,
+      );
+      options.onProgress?.(existing);
+      if (existing.status === "succeeded") {
+        published = { ...existing, ok: true, action: "publish" };
+      } else if (existing.status === "failed" && !existing.retryable) {
+        throw new Error(existing.userMessage || existing.message);
+      }
+    } else {
+      options.onProgress?.(
+        createClientPublishProgress(
+          options.transactionId,
+          "checking_server",
+          "正在检查服务器连接",
+        ),
+      );
+      const connection = await activeServerApi.testConnection();
+      if (!connection.ok) {
+        const failure = createClientPublishFailure(
+          connection,
+          options.transactionId,
+          "checking_server",
+        );
+        options.onProgress?.(failure);
+        const message = serverResultError(connection);
+        setServerConnectionState("unavailable");
+        setServerConnectionError(message);
+        throw new Error(message);
+      }
+      setServerConnectionState("available");
+      setServerConnectionError(null);
+
+      const plannedAt = new Date();
+      const branchName = createDirectPublishBranchName(
+        fields.stableId,
+        options.transactionId,
+      );
+      const publicationOptions = { directPublish: true, branchName } as const;
+      const dryRun = await runRepositoryExportDryRun(
+        activeRepositoryApi,
+        repositoryPath,
+        snapshot.draft,
+        snapshot.stagedImages,
+        plannedAt,
+        publicationOptions,
+      );
+      if (!dryRun.ready) {
+        const issue =
+          dryRun.schema.issues.find((candidate) => candidate.severity === "error")
+            ?.message ?? dryRun.conflicts[0]?.message;
+        throw new Error(issue || "本地发布校验未通过。");
+      }
+
+      await runRepositoryLocalCommit(
+        activeRepositoryApi,
+        repositoryPath,
+        snapshot.draft,
+        snapshot.stagedImages,
+        dryRun,
+        plannedAt,
+        publicationOptions,
+      );
     }
-    setServerConnectionState("available");
-    setServerConnectionError(null);
 
-    const plannedAt = new Date();
-    const branchName = createDirectPublishBranchName(fields.stableId);
-    const publicationOptions = { directPublish: true, branchName } as const;
-    options.onProgress?.("materializing");
-    const dryRun = await runRepositoryExportDryRun(
-      activeRepositoryApi,
-      repositoryPath,
-      snapshot.draft,
-      snapshot.stagedImages,
-      plannedAt,
-      publicationOptions,
+    published ??= await activeServerApi.publishContent(
+      {
+        repositoryPath,
+        contentType: fields.contentType as ServerPublishRequest["contentType"],
+        stableId: fields.stableId,
+        transactionId: options.transactionId,
+      },
+      options.onProgress,
     );
-    if (!dryRun.ready) {
-      const issue =
-        dryRun.schema.issues.find((candidate) => candidate.severity === "error")
-          ?.message ?? dryRun.conflicts[0]?.message;
-      throw new Error(issue || "本地发布校验未通过。");
-    }
-
-    options.onProgress?.("committing");
-    await runRepositoryLocalCommit(
-      activeRepositoryApi,
-      repositoryPath,
-      snapshot.draft,
-      snapshot.stagedImages,
-      dryRun,
-      plannedAt,
-      publicationOptions,
-    );
-
-    options.onProgress?.("publishing");
-    const published = await activeServerApi.publishContent({
-      repositoryPath,
-      contentType: fields.contentType as ServerPublishRequest["contentType"],
-      stableId: fields.stableId,
-    });
     if (!published.ok) {
+      if (isServerPublishProgress(published, options.transactionId)) {
+        options.onProgress?.(published);
+      } else {
+        options.onProgress?.(
+          createClientPublishFailure(
+            published,
+            options.transactionId,
+            "connecting_server",
+          ),
+        );
+      }
       if (serverResultIndicatesUnavailable(published)) {
         setServerConnectionState("unavailable");
         setServerConnectionError(serverResultError(published));
@@ -503,7 +617,55 @@ export default function App({
       url: url || undefined,
       releaseSha: published.releaseSha,
       publishedAt,
+      transactionId: published.transactionId ?? options.transactionId,
+      contentSha: published.contentCommit ?? published.contentSha,
+      siteSha: published.siteCommit ?? published.releaseSha,
+      releaseId: published.releaseId,
+      totalDurationMs: published.elapsedMs,
+      stageDurationsMs: published.stageDurationsMs,
+      bundleUploadDurationMs: published.bundleUploadDurationMs,
     };
+  }
+
+  async function handleQueryPublishStatus(
+    transactionId: string,
+    onFailure?: (progress: ServerPublishProgress) => void,
+  ): Promise<ServerPublishProgress> {
+    const result = await activeServerApi.getPublishStatus({ transactionId });
+    if (!result.ok) {
+      const message = serverResultError(result);
+      onFailure?.(
+        createClientPublishFailure(
+          result,
+          transactionId,
+          "confirming_server_status",
+        ),
+      );
+      if (serverResultIndicatesUnavailable(result)) {
+        setServerConnectionState("unavailable");
+        setServerConnectionError(message);
+      }
+      throw new Error(message);
+    }
+    if (!isServerPublishProgress(result, transactionId)) {
+      const message = "服务器返回的发布事务状态无效。";
+      onFailure?.(
+        createClientPublishFailure(
+          {
+            ok: false,
+            action: "publish-status",
+            code: "SERVER_RESPONSE_INVALID",
+            message,
+          },
+          transactionId,
+          "confirming_server_status",
+        ),
+      );
+      throw new Error(message);
+    }
+    setServerConnectionState("available");
+    setServerConnectionError(null);
+    return result;
   }
 
   if (
@@ -618,6 +780,7 @@ export default function App({
               serverContentItems={serverContentItems}
               onViewServerContent={handleViewServerContent}
               onDeleteServerContent={handleDeleteServerContent}
+              onQueryPublishStatus={handleQueryPublishStatus}
             />
           ) : currentSection === "server-content" ? (
             <ServerContentPage

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Controlled server-side publisher for the Algae Atlas content workbench.
-# This script deliberately accepts only four fixed commands. It never reads
+# This script deliberately accepts only five fixed commands. It never reads
 # /srv/algae-atlas/source and it never executes helpers uploaded with a bundle.
 
 set -Eeuo pipefail
@@ -27,13 +27,14 @@ readonly MAX_SNAPSHOT_MEDIA_IDS=256
 readonly MAX_SNAPSHOT_BYTES=$MAX_BUNDLE_BYTES
 readonly MAX_SITE_API_BYTES=$((1024 * 1024))
 readonly MAX_SITE_ARCHIVE_BYTES=$((512 * 1024 * 1024))
-readonly SITE_CLONE_ATTEMPTS=2
+readonly SITE_CLONE_ATTEMPTS=1
 readonly SITE_HTTP_ATTEMPTS=3
-readonly SITE_CLONE_TIMEOUT_SECONDS=60
-readonly SITE_API_ATTEMPT_TIMEOUT_SECONDS=90
-readonly SITE_API_TOTAL_TIMEOUT_SECONDS=180
-readonly SITE_ARCHIVE_ATTEMPT_TIMEOUT_SECONDS=900
-readonly SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS=900
+readonly SITE_CLONE_TIMEOUT_SECONDS=30
+readonly SITE_API_ATTEMPT_TIMEOUT_SECONDS=10
+readonly SITE_API_TOTAL_TIMEOUT_SECONDS=20
+readonly SITE_ARCHIVE_ATTEMPT_TIMEOUT_SECONDS=20
+readonly SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS=40
+readonly PUBLISH_STATE_RETENTION_DAYS=30
 
 JSON_MODE=false
 ACTION=""
@@ -64,6 +65,32 @@ declare -A SNAPSHOT_MEDIA_HAS_THUMBNAILS=()
 SITE_SOURCE_REPOSITORY=""
 SITE_SOURCE_SHA=""
 SITE_SOURCE_TREE_SHA=""
+SITE_SOURCE_METHOD=""
+PUBLISH_TRANSACTION_ID=""
+PUBLISH_EXPECTED_BUNDLE_SHA256=""
+PUBLISH_STATE_FILE=""
+PUBLISH_EVENT_LOG=""
+PUBLISH_STATUS=""
+PUBLISH_STAGE=""
+PUBLISH_FAILED_STAGE=""
+PUBLISH_STAGE_STARTED_AT=""
+PUBLISH_STAGE_STARTED_MS=0
+PUBLISH_STARTED_AT=""
+PUBLISH_STARTED_MS=0
+PUBLISH_UPDATED_AT=""
+PUBLISH_ATTEMPT=1
+PUBLISH_RETRYABLE=false
+PUBLISH_ERROR_CODE=""
+PUBLISH_MESSAGE=""
+PUBLISH_TECHNICAL_SUMMARY=""
+PUBLISH_RELEASE_ID=""
+PUBLISH_CONTENT_COMMIT=""
+PUBLISH_CONTENT_TYPE=""
+PUBLISH_STABLE_ID=""
+PUBLISH_URL=""
+PUBLISH_SWITCH_COMPLETED=false
+PUBLISH_STATE_INITIALIZED=false
+declare -A PUBLISH_STAGE_DURATIONS_MS=()
 
 if [[ "${ALGAE_CONTENTCTL_TESTING:-}" == "1" && "$(realpath -m -- "$0")" != "$INSTALLED_PATH" ]]; then
   TEST_MODE=true
@@ -97,6 +124,7 @@ configuration_value() {
 CONTENT_ROOT="$(configuration_value ALGAE_CONTENT_ROOT "$DEFAULT_CONTENT_ROOT")"
 CONTENT_REPOSITORY="$CONTENT_ROOT/repository"
 TRANSACTION_ROOT="$CONTENT_ROOT/transactions"
+PUBLISH_STATE_ROOT="$CONTENT_ROOT/publish-state"
 SITE_SOURCE_CACHE_ROOT="$CONTENT_ROOT/site-source-cache"
 INCOMING_ROOT="$(configuration_value ALGAE_INCOMING_ROOT "$DEFAULT_INCOMING_ROOT")"
 SITE_ROOT="$(configuration_value ALGAE_SITE_ROOT "$DEFAULT_SITE_ROOT")"
@@ -129,7 +157,10 @@ usage() {
 Usage:
   algae-contentctl status --json
   algae-contentctl list --json
-  algae-contentctl publish --bundle /home/ubuntu/algae-content-workbench/incoming/<job-id> --json
+  algae-contentctl publish-status --transaction <transaction-id> --json
+  algae-contentctl publish --transaction <transaction-id> \
+    --bundle /home/ubuntu/algae-content-workbench/incoming/<transaction-id> \
+    --bundle-sha256 <sha256> --json
   algae-contentctl delete --type <content-type> --id <stable-id> --json
 USAGE
 }
@@ -153,11 +184,18 @@ emit_error() {
   local log_tail=${3:-}
   local error_action="unknown"
   case "$ACTION" in
-    status|list|publish|delete) error_action=$ACTION ;;
+    status|list|publish-status|publish|delete) error_action=$ACTION ;;
   esac
   ERROR_EMITTED=true
   if $JSON_MODE; then
     printf '{"ok":false,"action":%s,"code":%s,"message":%s' "$(json_quote "$error_action")" "$(json_quote "$code")" "$(json_quote "$message")"
+    if [[ "$error_action" == "publish" || "$error_action" == "publish-status" ]]; then
+      printf ',"errorCode":%s,"retryable":%s,"userMessage":%s,"technicalSummary":%s,"failedStage":%s,"transactionId":%s,"attempt":%d' \
+        "$(json_quote "$code")" "$PUBLISH_RETRYABLE" "$(json_quote "$message")" \
+        "$(json_quote "${PUBLISH_TECHNICAL_SUMMARY:-$code: $message}")" \
+        "$(json_quote "${PUBLISH_FAILED_STAGE:-${PUBLISH_STAGE:-unknown}}")" \
+        "$(json_quote "$PUBLISH_TRANSACTION_ID")" "$PUBLISH_ATTEMPT"
+    fi
     if [[ -n "$log_tail" ]]; then
       printf ',"logTail":%s' "$(json_quote "$log_tail")"
     fi
@@ -191,6 +229,16 @@ fail() {
   if [[ "$include_log" == "true" ]]; then
     details=$(log_tail || true)
   fi
+  if [[ "$ACTION" == "publish" && -n "$PUBLISH_TRANSACTION_ID" ]]; then
+    if publish_error_is_retryable "$code" && ! $PUBLISH_SWITCH_COMPLETED; then
+      PUBLISH_RETRYABLE=true
+    else
+      PUBLISH_RETRYABLE=false
+    fi
+    PUBLISH_FAILED_STAGE=${PUBLISH_STAGE:-unknown}
+    PUBLISH_TECHNICAL_SUMMARY="${code}: ${message}"
+    fail_publish_state "$code" "$message" "$details"
+  fi
   emit_error "$code" "$message" "$details"
   exit 1
 }
@@ -205,6 +253,9 @@ on_unexpected_error() {
     message="The controller stopped unexpectedly and release rollback is incomplete; recovery state was retained"
   fi
   if ! $ERROR_EMITTED; then
+    if [[ "$ACTION" == "publish" && -n "$PUBLISH_TRANSACTION_ID" ]]; then
+      fail_publish_state "$code" "$message" "$(log_tail || true)"
+    fi
     emit_error "$code" "$message" "$(log_tail || true)"
   fi
   exit "$status"
@@ -226,6 +277,14 @@ is_stable_id() {
 is_job_id() {
   local value=$1
   [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]]
+}
+
+is_publish_transaction_id() {
+  [[ "$1" =~ ^[0-9a-f]{32}$ ]]
+}
+
+is_bundle_sha256() {
+  [[ "$1" =~ ^[0-9A-F]{64}$ ]]
 }
 
 is_content_type() {
@@ -322,15 +381,24 @@ assert_no_symlinks_in_tree() {
   [[ -z "$link" ]] || fail "UNSAFE_PATH" "Repository contains a symbolic link"
 }
 
-prepare_runtime() {
+prepare_publish_status_runtime() {
   if ! $TEST_MODE && [[ $EUID -ne 0 ]]; then
     fail "PERMISSION_DENIED" "This controller must run through the restricted sudo rule"
   fi
-  assert_regular_command "git" "$GIT_BIN"
   assert_regular_command "node" "$NODE_BIN"
+  ensure_safe_directory "$CONTENT_ROOT"
+  ensure_safe_directory "$PUBLISH_STATE_ROOT"
+  if ! $TEST_MODE; then
+    [[ $(stat -c '%U' -- "$PUBLISH_STATE_ROOT") == "root" ]] || fail "PUBLISH_STATE_INVALID" "Publish state directory must be root owned"
+    [[ $(stat -c '%a' -- "$PUBLISH_STATE_ROOT") == "700" ]] || fail "PUBLISH_STATE_INVALID" "Publish state directory must use mode 0700"
+  fi
+}
+
+prepare_runtime() {
+  prepare_publish_status_runtime
+  assert_regular_command "git" "$GIT_BIN"
   assert_regular_command "chmod" "$CHMOD_BIN"
   [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ && "$HEALTH_ATTEMPTS" -le 60 ]] || fail "CONFIGURATION_ERROR" "Health attempt count is invalid"
-  ensure_safe_directory "$CONTENT_ROOT"
   ensure_safe_directory "$TRANSACTION_ROOT"
   ensure_safe_directory "$SITE_SOURCE_CACHE_ROOT"
   ensure_safe_directory "$SITE_ROOT"
@@ -361,6 +429,19 @@ acquire_lock() {
     # shellcheck disable=SC3045
     exec 9>"$lock_file"
     if ! flock -n 9; then
+      if [[ "$ACTION" == "publish" && -n "$PUBLISH_TRANSACTION_ID" ]]; then
+        initialize_publish_state_context
+        local state_wait
+        for state_wait in {1..10}; do
+          [[ -f "$PUBLISH_STATE_FILE" && ! -L "$PUBLISH_STATE_FILE" ]] && break
+          sleep 0.1
+        done
+        if [[ -f "$PUBLISH_STATE_FILE" && ! -L "$PUBLISH_STATE_FILE" ]] && load_publish_state; then
+          emit_publish_state_json "publish" || fail "STATE_CORRUPT" "Publish transaction state cannot be read"
+          SUCCESS=true
+          exit 0
+        fi
+      fi
       fail "CONTROLLER_BUSY" "Another content operation is in progress"
     fi
     LOCK_FD_OPEN=true
@@ -402,6 +483,312 @@ create_transaction() {
   mkdir -m 0700 -- "$TX_ROOT"
   OP_LOG="$TX_ROOT/controller.log"
   : > "$OP_LOG"
+}
+
+epoch_milliseconds() {
+  date -u +%s%3N
+}
+
+iso_timestamp() {
+  date -u +%Y-%m-%dT%H:%M:%S.%3NZ
+}
+
+publish_error_is_retryable() {
+  case "$1" in
+    CONTROLLER_BUSY|SITE_SOURCE_NETWORK_FAILED|SITE_SOURCE_API_UNAVAILABLE)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+publish_state_path() {
+  printf '%s/%s.json' "$PUBLISH_STATE_ROOT" "$PUBLISH_TRANSACTION_ID"
+}
+
+publish_event_log_path() {
+  printf '%s/%s.events.jsonl' "$PUBLISH_STATE_ROOT" "$PUBLISH_TRANSACTION_ID"
+}
+
+log_publish_event() {
+  $PUBLISH_STATE_INITIALIZED || return 0
+  local stage=$1
+  local status=$2
+  local duration_ms=${3:-0}
+  local error_code=${4:-}
+  local timestamp
+  timestamp=$(iso_timestamp)
+  printf '{"timestamp":%s,"transactionId":%s,"stage":%s,"attempt":%d,"durationMs":%d,"status":%s,"errorCode":%s}\n' \
+    "$(json_quote "$timestamp")" "$(json_quote "$PUBLISH_TRANSACTION_ID")" \
+    "$(json_quote "$stage")" "$PUBLISH_ATTEMPT" "$duration_ms" \
+    "$(json_quote "$status")" "$(json_quote "$error_code")" >> "$PUBLISH_EVENT_LOG"
+  chmod 0600 -- "$PUBLISH_EVENT_LOG"
+}
+
+write_publish_state() {
+  $PUBLISH_STATE_INITIALIZED || return 0
+  local now_ms
+  now_ms=$(epoch_milliseconds)
+  PUBLISH_UPDATED_AT=$(iso_timestamp)
+  local elapsed_ms=$((now_ms - PUBLISH_STARTED_MS))
+  (( elapsed_ms >= 0 )) || elapsed_ms=0
+  local temporary="$PUBLISH_STATE_ROOT/.${PUBLISH_TRANSACTION_ID}.$$.$RANDOM.tmp"
+  local first=true
+  local stage
+  {
+    printf '{"transactionId":%s,"bundleSha256":%s,"contentCommit":%s,"siteCommit":%s' \
+      "$(json_quote "$PUBLISH_TRANSACTION_ID")" "$(json_quote "$PUBLISH_EXPECTED_BUNDLE_SHA256")" \
+      "$(json_quote "$PUBLISH_CONTENT_COMMIT")" "$(json_quote "$SITE_SOURCE_SHA")"
+    printf ',"status":%s,"stage":%s,"failedStage":%s,"stageStartedAt":%s' \
+      "$(json_quote "$PUBLISH_STATUS")" "$(json_quote "$PUBLISH_STAGE")" \
+      "$(json_quote "$PUBLISH_FAILED_STAGE")" "$(json_quote "$PUBLISH_STAGE_STARTED_AT")"
+    printf ',"startedAt":%s,"startedEpochMs":%d,"updatedAt":%s,"elapsedMs":%d' \
+      "$(json_quote "$PUBLISH_STARTED_AT")" "$PUBLISH_STARTED_MS" \
+      "$(json_quote "$PUBLISH_UPDATED_AT")" "$elapsed_ms"
+    printf ',"attempt":%d,"retryable":%s,"errorCode":%s,"message":%s,"userMessage":%s,"technicalSummary":%s' \
+      "$PUBLISH_ATTEMPT" "$PUBLISH_RETRYABLE" "$(json_quote "$PUBLISH_ERROR_CODE")" \
+      "$(json_quote "$PUBLISH_MESSAGE")" "$(json_quote "$PUBLISH_MESSAGE")" \
+      "$(json_quote "$PUBLISH_TECHNICAL_SUMMARY")"
+    printf ',"releaseId":%s,"releaseSha":%s,"contentSha":%s,"contentType":%s,"stableId":%s,"url":%s' \
+      "$(json_quote "$PUBLISH_RELEASE_ID")" "$(json_quote "$SITE_SOURCE_SHA")" \
+      "$(json_quote "$PUBLISH_CONTENT_COMMIT")" "$(json_quote "$PUBLISH_CONTENT_TYPE")" \
+      "$(json_quote "$PUBLISH_STABLE_ID")" "$(json_quote "$PUBLISH_URL")"
+    printf ',"switchCompleted":%s,"sourceMethod":%s,"stageDurationsMs":{' \
+      "$PUBLISH_SWITCH_COMPLETED" "$(json_quote "$SITE_SOURCE_METHOD")"
+    for stage in "${!PUBLISH_STAGE_DURATIONS_MS[@]}"; do
+      if $first; then first=false; else printf ','; fi
+      printf '%s:%d' "$(json_quote "$stage")" "${PUBLISH_STAGE_DURATIONS_MS[$stage]}"
+    done
+    printf '}}\n'
+  } > "$temporary"
+  chmod 0600 -- "$temporary"
+  mv -f -- "$temporary" "$PUBLISH_STATE_FILE"
+}
+
+finish_publish_stage() {
+  local terminal_status=${1:-completed}
+  [[ -n "$PUBLISH_STAGE" && $PUBLISH_STAGE_STARTED_MS -gt 0 ]] || return 0
+  local now_ms
+  now_ms=$(epoch_milliseconds)
+  local duration_ms=$((now_ms - PUBLISH_STAGE_STARTED_MS))
+  (( duration_ms >= 0 )) || duration_ms=0
+  local previous=${PUBLISH_STAGE_DURATIONS_MS[$PUBLISH_STAGE]:-0}
+  PUBLISH_STAGE_DURATIONS_MS[$PUBLISH_STAGE]=$((previous + duration_ms))
+  log_publish_event "$PUBLISH_STAGE" "$terminal_status" "$duration_ms" ""
+}
+
+set_publish_stage() {
+  local stage=$1
+  local message=$2
+  $PUBLISH_STATE_INITIALIZED || return 0
+  finish_publish_stage
+  PUBLISH_STAGE=$stage
+  PUBLISH_FAILED_STAGE=""
+  PUBLISH_STAGE_STARTED_AT=$(iso_timestamp)
+  PUBLISH_STAGE_STARTED_MS=$(epoch_milliseconds)
+  PUBLISH_STATUS="running"
+  PUBLISH_RETRYABLE=false
+  PUBLISH_ERROR_CODE=""
+  PUBLISH_MESSAGE=$message
+  PUBLISH_TECHNICAL_SUMMARY=""
+  write_publish_state
+  log_publish_event "$stage" "running" 0 ""
+}
+
+fail_publish_state() {
+  local code=$1
+  local message=$2
+  local technical=${3:-}
+  $PUBLISH_STATE_INITIALIZED || return 0
+  [[ "$PUBLISH_STATUS" != "failed" && "$PUBLISH_STATUS" != "succeeded" ]] || return 0
+  finish_publish_stage "failed"
+  PUBLISH_FAILED_STAGE=${PUBLISH_STAGE:-unknown}
+  PUBLISH_STATUS="failed"
+  PUBLISH_ERROR_CODE=$code
+  PUBLISH_MESSAGE=$message
+  PUBLISH_TECHNICAL_SUMMARY="${code}: ${message}"
+  if [[ -n "$technical" ]]; then
+    PUBLISH_TECHNICAL_SUMMARY="${PUBLISH_TECHNICAL_SUMMARY}; see retained controller event summary"
+  fi
+  if publish_error_is_retryable "$code" && ! $PUBLISH_SWITCH_COMPLETED && (( PUBLISH_ATTEMPT < 3 )); then
+    PUBLISH_RETRYABLE=true
+  else
+    PUBLISH_RETRYABLE=false
+  fi
+  write_publish_state
+  log_publish_event "$PUBLISH_FAILED_STAGE" "error" 0 "$code"
+}
+
+complete_publish_state() {
+  finish_publish_stage
+  PUBLISH_STATUS="succeeded"
+  PUBLISH_STAGE="succeeded"
+  PUBLISH_FAILED_STAGE=""
+  PUBLISH_STAGE_STARTED_AT=$(iso_timestamp)
+  PUBLISH_STAGE_STARTED_MS=$(epoch_milliseconds)
+  PUBLISH_RETRYABLE=false
+  PUBLISH_ERROR_CODE=""
+  PUBLISH_MESSAGE="Published successfully"
+  PUBLISH_TECHNICAL_SUMMARY=""
+  write_publish_state
+  log_publish_event "succeeded" "completed" 0 ""
+}
+
+load_publish_state() {
+  local -a fields=()
+  mapfile -t fields < <("$NODE_BIN" - "$PUBLISH_STATE_FILE" "$PUBLISH_TRANSACTION_ID" <<'NODE'
+const fs = require("fs");
+const [file, expectedId] = process.argv.slice(2);
+let state;
+try {
+  state = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch {
+  process.exit(2);
+}
+const text = (value, limit = 16384) => typeof value === "string" && value.length <= limit && !/[\u0000-\u001f\u007f]/.test(value);
+const hex = (value, lengths) => text(value, 64) && (value === "" || (lengths.includes(value.length) && /^[0-9a-fA-F]+$/.test(value)));
+if (!state || typeof state !== "object" || Array.isArray(state)) process.exit(2);
+if (state.transactionId !== expectedId || !/^[0-9a-f]{32}$/.test(state.transactionId)) process.exit(3);
+if (!/^[0-9A-F]{64}$/.test(state.bundleSha256)) process.exit(4);
+if (!["running", "failed", "succeeded"].includes(state.status) || !text(state.stage, 64)) process.exit(5);
+if (typeof state.retryable !== "boolean" || typeof state.switchCompleted !== "boolean") process.exit(6);
+if (!Number.isSafeInteger(state.attempt) || state.attempt < 1 || state.attempt > 100) process.exit(7);
+if (!text(state.startedAt, 64) || !Number.isSafeInteger(state.startedEpochMs) || state.startedEpochMs < 0) process.exit(8);
+if (!hex(state.contentCommit, [40, 64]) || !hex(state.siteCommit, [40, 64])) process.exit(9);
+for (const key of ["releaseId", "contentType", "stableId", "url", "message", "errorCode", "failedStage", "sourceMethod"]) {
+  if (!text(state[key] ?? "", key === "message" ? 16384 : 4096)) process.exit(10);
+}
+if (!state.stageDurationsMs || typeof state.stageDurationsMs !== "object" || Array.isArray(state.stageDurationsMs)) process.exit(11);
+const fields = [state.status, state.stage, String(state.retryable), String(state.switchCompleted), state.bundleSha256,
+  String(state.attempt), state.startedAt, String(state.startedEpochMs), state.contentCommit, state.siteCommit,
+  state.releaseId, state.contentType, state.stableId, state.url, state.message, state.errorCode,
+  state.failedStage, state.sourceMethod];
+for (const value of fields) process.stdout.write(`${value}\n`);
+for (const [key, value] of Object.entries(state.stageDurationsMs)) {
+  if (!/^[a-z][a-z0-9_]{0,63}$/.test(key) || !Number.isSafeInteger(value) || value < 0) process.exit(12);
+  process.stdout.write(`duration:${key}:${value}\n`);
+}
+NODE
+  ) || return 1
+  [[ ${#fields[@]} -ge 18 ]] || return 1
+  PUBLISH_STATUS=${fields[0]}
+  PUBLISH_STAGE=${fields[1]}
+  PUBLISH_RETRYABLE=${fields[2]}
+  PUBLISH_SWITCH_COMPLETED=${fields[3]}
+  if [[ -n "$PUBLISH_EXPECTED_BUNDLE_SHA256" && ${fields[4]} != "$PUBLISH_EXPECTED_BUNDLE_SHA256" ]]; then
+    return 2
+  fi
+  PUBLISH_EXPECTED_BUNDLE_SHA256=${fields[4]}
+  PUBLISH_ATTEMPT=${fields[5]}
+  PUBLISH_STARTED_AT=${fields[6]}
+  PUBLISH_STARTED_MS=${fields[7]}
+  PUBLISH_CONTENT_COMMIT=${fields[8]}
+  SITE_SOURCE_SHA=${fields[9]}
+  PUBLISH_RELEASE_ID=${fields[10]}
+  PUBLISH_CONTENT_TYPE=${fields[11]}
+  PUBLISH_STABLE_ID=${fields[12]}
+  PUBLISH_URL=${fields[13]}
+  PUBLISH_MESSAGE=${fields[14]}
+  PUBLISH_ERROR_CODE=${fields[15]}
+  PUBLISH_FAILED_STAGE=${fields[16]}
+  SITE_SOURCE_METHOD=${fields[17]}
+  PUBLISH_STAGE_DURATIONS_MS=()
+  local field
+  for field in "${fields[@]:18}"; do
+    if [[ "$field" =~ ^duration:([a-z][a-z0-9_]{0,63}):([0-9]+)$ ]]; then
+      PUBLISH_STAGE_DURATIONS_MS[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+    else
+      return 1
+    fi
+  done
+}
+
+emit_publish_state_json() {
+  local response_action=$1
+  "$NODE_BIN" - "$PUBLISH_STATE_FILE" "$response_action" <<'NODE'
+const fs = require("fs");
+const [file, action] = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(file, "utf8"));
+const statusQuery = action === "publish-status";
+const failedPublish = !statusQuery && state.status === "failed";
+const output = { ok: !failedPublish, action, ...state };
+if (failedPublish) output.code = state.errorCode || "PUBLISH_FAILED";
+process.stdout.write(`${JSON.stringify(output)}\n`);
+NODE
+}
+
+initialize_publish_state_context() {
+  PUBLISH_STATE_FILE=$(publish_state_path)
+  PUBLISH_EVENT_LOG=$(publish_event_log_path)
+}
+
+begin_publish_state() {
+  initialize_publish_state_context
+  if [[ -e "$PUBLISH_STATE_FILE" || -L "$PUBLISH_STATE_FILE" ]]; then
+    [[ -f "$PUBLISH_STATE_FILE" && ! -L "$PUBLISH_STATE_FILE" ]] || fail "STATE_CORRUPT" "Publish transaction state is unsafe"
+    local load_status=0
+    load_publish_state || load_status=$?
+    if [[ $load_status -eq 2 ]]; then
+      PUBLISH_RETRYABLE=false
+      PUBLISH_FAILED_STAGE="bundle_uploaded"
+      fail "TRANSACTION_BUNDLE_MISMATCH" "This transaction id already belongs to a different Bundle"
+    fi
+    [[ $load_status -eq 0 ]] || fail "STATE_CORRUPT" "Publish transaction state is invalid"
+    case "$PUBLISH_STATUS" in
+      succeeded|running)
+        emit_publish_state_json "publish" || fail "STATE_CORRUPT" "Publish transaction state cannot be read"
+        SUCCESS=true
+        exit 0
+        ;;
+      failed)
+        if [[ "$PUBLISH_RETRYABLE" != "true" || "$PUBLISH_SWITCH_COMPLETED" == "true" ]]; then
+          emit_publish_state_json "publish" || fail "STATE_CORRUPT" "Publish transaction state cannot be read"
+          ERROR_EMITTED=true
+          exit 1
+        fi
+        ((PUBLISH_ATTEMPT += 1))
+        ;;
+      *)
+        fail "STATE_CORRUPT" "Publish transaction state has an unsupported status"
+        ;;
+    esac
+  else
+    PUBLISH_STARTED_AT=$(iso_timestamp)
+    PUBLISH_STARTED_MS=$(epoch_milliseconds)
+    PUBLISH_ATTEMPT=1
+    PUBLISH_STAGE_DURATIONS_MS=()
+  fi
+  PUBLISH_STATE_INITIALIZED=true
+  PUBLISH_STATUS="running"
+  PUBLISH_STAGE="bundle_uploaded"
+  PUBLISH_FAILED_STAGE=""
+  PUBLISH_STAGE_STARTED_AT=$(iso_timestamp)
+  PUBLISH_STAGE_STARTED_MS=$(epoch_milliseconds)
+  PUBLISH_RETRYABLE=false
+  PUBLISH_ERROR_CODE=""
+  PUBLISH_MESSAGE="Bundle upload is complete; server processing is starting"
+  PUBLISH_TECHNICAL_SUMMARY=""
+  write_publish_state
+  log_publish_event "bundle_uploaded" "completed" 0 ""
+}
+
+publish_status() {
+  initialize_publish_state_context
+  if [[ ! -e "$PUBLISH_STATE_FILE" && ! -L "$PUBLISH_STATE_FILE" ]]; then
+    PUBLISH_FAILED_STAGE="status_query"
+    fail "TRANSACTION_NOT_FOUND" "Publish transaction was not found"
+  fi
+  [[ -f "$PUBLISH_STATE_FILE" && ! -L "$PUBLISH_STATE_FILE" ]] || fail "STATE_CORRUPT" "Publish transaction state is unsafe"
+  load_publish_state || fail "STATE_CORRUPT" "Publish transaction state is invalid"
+  emit_publish_state_json "publish-status" || fail "STATE_CORRUPT" "Publish transaction state cannot be read"
+}
+
+cleanup_publish_states() {
+  find -P "$PUBLISH_STATE_ROOT" -maxdepth 1 -type f \
+    \( -name '[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*.json' -o -name '[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*.events.jsonl' \) \
+    -mtime "+$PUBLISH_STATE_RETENTION_DAYS" -delete 2>/dev/null || true
 }
 
 regular_source_tree_is_safe() {
@@ -669,14 +1056,14 @@ initialize_site_source_snapshot() {
   [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]]
 }
 
-prepare_site_source_from_github_archive() {
+try_prepare_site_source_from_github_archive() {
   assert_regular_command "curl" "$CURL_BIN"
   assert_regular_command "tar" "$TAR_BIN"
   local archive_file="$TX_ROOT/site-source.tar.gz"
   if ! download_site_source_file \
     "${SITE_REPOSITORY_API_URL%/}/tarball/$SITE_SOURCE_SHA" "$archive_file" "$MAX_SITE_ARCHIVE_BYTES" \
     'application/vnd.github+json' "$SITE_ARCHIVE_ATTEMPT_TIMEOUT_SECONDS" "$SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS"; then
-    fail "SITE_SOURCE_FAILED" "Cannot download the exact GitHub main source archive" true
+    return 10
   fi
   if ! validate_site_source_archive "$archive_file"; then
     fail "SITE_SOURCE_FAILED" "GitHub main source archive is unsafe or invalid" true
@@ -705,25 +1092,64 @@ prepare_site_source_uncached() {
   SITE_SOURCE_REPOSITORY="$TX_ROOT/site-source"
   [[ ! -e "$SITE_SOURCE_REPOSITORY" && ! -L "$SITE_SOURCE_REPOSITORY" ]] || fail "SITE_SOURCE_FAILED" "Website source staging path already exists"
   assert_regular_command "timeout" "$TIMEOUT_BIN"
-  if ! clone_site_source_shallow; then
-    if ! is_git_object_id "$SITE_SOURCE_SHA" || ! is_git_object_id "$SITE_SOURCE_TREE_SHA"; then
-      if ! fetch_site_source_metadata; then
-        fail "SITE_SOURCE_FAILED" "Cannot query the GitHub main source metadata" true
+  local method_started_ms
+  local method_duration_ms
+  local archive_status=0
+  if is_git_object_id "$SITE_SOURCE_SHA" && is_git_object_id "$SITE_SOURCE_TREE_SHA"; then
+    method_started_ms=$(epoch_milliseconds)
+    try_prepare_site_source_from_github_archive || archive_status=$?
+    method_duration_ms=$(( $(epoch_milliseconds) - method_started_ms ))
+    if [[ $archive_status -eq 0 ]]; then
+      SITE_SOURCE_METHOD="archive"
+      log_publish_event "site_source_archive" "completed" "$method_duration_ms" ""
+    elif [[ $archive_status -eq 10 ]]; then
+      log_publish_event "site_source_archive" "failed" "$method_duration_ms" "SITE_SOURCE_NETWORK_FAILED"
+      rm -rf -- "$SITE_SOURCE_REPOSITORY"
+      printf 'Exact GitHub API archive download failed; trying one bounded shallow clone\n' >> "$OP_LOG"
+      method_started_ms=$(epoch_milliseconds)
+      if ! clone_site_source_shallow; then
+        method_duration_ms=$(( $(epoch_milliseconds) - method_started_ms ))
+        log_publish_event "site_source_clone" "failed" "$method_duration_ms" "SITE_SOURCE_NETWORK_FAILED"
+        fail "SITE_SOURCE_NETWORK_FAILED" "GitHub archive and bounded shallow clone are temporarily unavailable" true
       fi
+      method_duration_ms=$(( $(epoch_milliseconds) - method_started_ms ))
+      log_publish_event "site_source_clone" "completed" "$method_duration_ms" ""
+      SITE_SOURCE_METHOD="clone"
+    else
+      fail "SITE_SOURCE_FAILED" "Cannot prepare the exact GitHub main source archive" true
     fi
-    printf 'Website source shallow clone failed; using the exact GitHub API archive fallback\n' >> "$OP_LOG"
-    prepare_site_source_from_github_archive
   else
+    printf 'GitHub commit metadata is unavailable; trying one bounded shallow clone\n' >> "$OP_LOG"
+    method_started_ms=$(epoch_milliseconds)
+    if ! clone_site_source_shallow; then
+      method_duration_ms=$(( $(epoch_milliseconds) - method_started_ms ))
+      log_publish_event "site_source_clone" "failed" "$method_duration_ms" "SITE_SOURCE_API_UNAVAILABLE"
+      fail "SITE_SOURCE_API_UNAVAILABLE" "GitHub metadata and bounded shallow clone are temporarily unavailable" true
+    fi
+    method_duration_ms=$(( $(epoch_milliseconds) - method_started_ms ))
+    log_publish_event "site_source_clone" "completed" "$method_duration_ms" ""
+    SITE_SOURCE_METHOD="clone"
+  fi
+
+  if [[ "$SITE_SOURCE_METHOD" == "clone" ]]; then
     [[ $("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --is-shallow-repository 2>>"$OP_LOG") == "true" ]] || \
       fail "SITE_SOURCE_FAILED" "Website source clone is not shallow" true
     [[ $("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" symbolic-ref --quiet --short HEAD 2>>"$OP_LOG") == "$SITE_BRANCH" ]] || \
       fail "SITE_SOURCE_FAILED" "Website source branch does not match" true
     [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || \
       fail "SITE_SOURCE_FAILED" "Website source checkout is not clean" true
-    SITE_SOURCE_SHA=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --verify HEAD 2>>"$OP_LOG") || \
+    local cloned_sha
+    local cloned_tree
+    cloned_sha=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --verify HEAD 2>>"$OP_LOG") || \
       fail "SITE_SOURCE_FAILED" "Website source commit cannot be read" true
-    SITE_SOURCE_TREE_SHA=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --verify 'HEAD^{tree}' 2>>"$OP_LOG") || \
+    cloned_tree=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" rev-parse --verify 'HEAD^{tree}' 2>>"$OP_LOG") || \
       fail "SITE_SOURCE_FAILED" "Website source tree cannot be read" true
+    if is_git_object_id "$SITE_SOURCE_SHA" && is_git_object_id "$SITE_SOURCE_TREE_SHA" && \
+       [[ "$cloned_sha" != "$SITE_SOURCE_SHA" || "$cloned_tree" != "$SITE_SOURCE_TREE_SHA" ]]; then
+      fail "SITE_SOURCE_IDENTITY_MISMATCH" "Bounded shallow clone does not match the queried GitHub commit and tree" true
+    fi
+    SITE_SOURCE_SHA=$cloned_sha
+    SITE_SOURCE_TREE_SHA=$cloned_tree
   fi
   [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || \
     fail "SITE_SOURCE_FAILED" "Website source checkout is not clean" true
@@ -744,23 +1170,25 @@ prepare_site_source() {
   local expected_sha=""
   local expected_tree=""
   local cache_hit=false
+  SITE_SOURCE_SHA=""
+  SITE_SOURCE_TREE_SHA=""
+  SITE_SOURCE_METHOD=""
+  set_publish_stage "checking_site_source_cache" "Checking the exact website source cache"
   if fetch_site_source_metadata; then
     expected_sha=$SITE_SOURCE_SHA
     expected_tree=$SITE_SOURCE_TREE_SHA
     if restore_site_source_from_cache; then
       cache_hit=true
+      SITE_SOURCE_METHOD="cache"
     fi
   fi
 
   if ! $cache_hit; then
+    set_publish_stage "preparing_site_source" "Preparing the exact website source"
     prepare_site_source_uncached
     if [[ -n "$expected_sha" && \
           ( "$SITE_SOURCE_SHA" != "$expected_sha" || "$SITE_SOURCE_TREE_SHA" != "$expected_tree" ) ]]; then
-      printf 'Website source fallback did not match the queried GitHub main identity; retrying the exact archive\n' >>"$OP_LOG"
-      rm -rf -- "$SITE_SOURCE_REPOSITORY"
-      SITE_SOURCE_SHA=$expected_sha
-      SITE_SOURCE_TREE_SHA=$expected_tree
-      prepare_site_source_from_github_archive
+      fail "SITE_SOURCE_IDENTITY_MISMATCH" "Prepared website source does not match the queried GitHub commit and tree" true
     fi
   fi
 
@@ -988,6 +1416,7 @@ MANIFEST_BRANCH=""
 MANIFEST_HEAD=""
 MANIFEST_BASE=""
 MANIFEST_RECORD_ID=""
+MANIFEST_TRANSACTION_ID=""
 
 parse_manifest() {
   local delivery=$1
@@ -1011,9 +1440,13 @@ parse_manifest() {
   [[ ${#MANIFEST[@]} -eq 11 ]] || fail "INVALID_MANIFEST" "MANIFEST.txt is incomplete"
   [[ ${MANIFEST[FormatVersion]} == "1" && ${MANIFEST[History]} == "complete" ]] || fail "INVALID_MANIFEST" "Bundle manifest has an unsupported format"
   MANIFEST_BRANCH=${MANIFEST[Branch]}
-  if [[ "$MANIFEST_BRANCH" =~ ^content/direct-[0-9a-f]{32}-([a-z0-9]+(-[a-z0-9]+)*)$ ]]; then
-    MANIFEST_RECORD_ID=${BASH_REMATCH[1]}
+  if [[ "$MANIFEST_BRANCH" =~ ^content/direct-([0-9a-f]{32})-([a-z0-9]+(-[a-z0-9]+)*)$ ]]; then
+    MANIFEST_TRANSACTION_ID=${BASH_REMATCH[1]}
+    MANIFEST_RECORD_ID=${BASH_REMATCH[2]}
+    [[ "$MANIFEST_TRANSACTION_ID" == "$PUBLISH_TRANSACTION_ID" ]] || \
+      fail "TRANSACTION_BUNDLE_MISMATCH" "Bundle branch does not match the publish transaction id"
   elif [[ "$MANIFEST_BRANCH" =~ ^content/[0-9]{8}-([a-z0-9]+(-[a-z0-9]+)*)$ ]]; then
+    MANIFEST_TRANSACTION_ID=""
     MANIFEST_RECORD_ID=${BASH_REMATCH[1]}
   else
     fail "INVALID_MANIFEST" "Bundle branch is invalid"
@@ -1662,16 +2095,20 @@ build_release() {
   cp -a -- "$CANDIDATE_REPOSITORY/public/images/uploads" "$build_directory/public/images/uploads"
   chmod -R a+rX -- "$build_directory/public/images/uploads"
   write_content_runtime_config "$build_directory"
+  set_publish_stage "preparing_dependencies" "Preparing website dependencies"
   if ! run_build_command "$build_directory" "$NPM_BIN" ci --include=dev; then
     fail "BUILD_FAILED" "Website dependency installation failed" true
   fi
+  set_publish_stage "validating_site" "Running website content validation"
   if ! run_build_command "$build_directory" "$NPM_BIN" run content:validate -- --json; then
     fail "BUILD_FAILED" "Website content validation failed" true
   fi
+  set_publish_stage "building_site" "Building the website"
   if ! run_build_command "$build_directory" "$NPM_BIN" run build:next; then
     fail "BUILD_FAILED" "Website build failed" true
   fi
 
+  set_publish_stage "creating_release" "Creating the release"
   RELEASE_NAME="$(date -u +%Y%m%dT%H%M%SZ)-${SITE_SOURCE_SHA:0:12}-${CANDIDATE_CONTENT_SHA:0:12}"
   RELEASE_DIRECTORY="$RELEASES_ROOT/$RELEASE_NAME"
   [[ ! -e "$RELEASE_DIRECTORY" ]] || fail "BUILD_FAILED" "Release identifier already exists"
@@ -1681,6 +2118,8 @@ build_release() {
   mv -- "$build_directory" "$RELEASE_DIRECTORY"
   BUILD_STAGING_DIRECTORY=""
   NEW_RELEASE_DIRECTORY="$RELEASE_DIRECTORY"
+  PUBLISH_RELEASE_ID=$RELEASE_NAME
+  write_publish_state
 }
 
 activate_release() {
@@ -1691,15 +2130,20 @@ activate_release() {
   read_release_target "$PREVIOUS_LINK"
   OLD_PREVIOUS_RELEASE=$RESOLVED_RELEASE_TARGET
   RELEASE_ACTIVATED=true
+  set_publish_stage "switching_release" "Switching the active release"
   if [[ -n "$OLD_CURRENT_RELEASE" ]]; then
     make_link_atomically "$OLD_CURRENT_RELEASE" "$PREVIOUS_LINK" || fail "RELEASE_SWITCH_FAILED" "Cannot update the previous release link" true
   else
     rm -f -- "$PREVIOUS_LINK"
   fi
   make_link_atomically "$RELEASE_DIRECTORY" "$CURRENT_LINK" || fail "RELEASE_SWITCH_FAILED" "Cannot switch the current release link" true
+  PUBLISH_SWITCH_COMPLETED=true
+  write_publish_state
+  set_publish_stage "restarting_service" "Restarting the website service"
   if ! run_logged "$SYSTEMCTL_BIN" restart "$SERVICE_NAME"; then
     fail "SERVICE_RESTART_FAILED" "Website service restart failed" true
   fi
+  set_publish_stage "verifying_production_url" "Verifying the production service and URL"
   local attempt
   local healthy=false
   for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt += 1)); do
@@ -1754,12 +2198,21 @@ swap_formal_repository() {
 
 publish() {
   local bundle_directory=$1
+  [[ $(basename -- "$bundle_directory") == "$PUBLISH_TRANSACTION_ID" ]] || \
+    fail "TRANSACTION_BUNDLE_MISMATCH" "Bundle directory does not match the publish transaction id"
   create_transaction "publish"
+  set_publish_stage "verifying_bundle" "Verifying the uploaded Bundle"
   copy_uploaded_delivery "$bundle_directory"
   local delivery=$DELIVERY_COPY
   parse_manifest "$delivery"
+  [[ ${MANIFEST[BundleSha256]} == "$PUBLISH_EXPECTED_BUNDLE_SHA256" ]] || \
+    fail "TRANSACTION_BUNDLE_MISMATCH" "Bundle SHA-256 does not match the publish transaction"
   validate_delivery_artifacts "$delivery"
+  set_publish_stage "checking_content_commit" "Checking the content commit and snapshot"
   import_and_validate_bundle "$delivery"
+  PUBLISH_CONTENT_TYPE=$BUNDLE_CONTENT_TYPE
+  PUBLISH_STABLE_ID=$BUNDLE_STABLE_ID
+  write_publish_state
   prepare_bundle_snapshot
   validate_changed_paths_against_snapshot
   prepare_site_source
@@ -1769,17 +2222,16 @@ publish() {
   install_bundle_snapshot
   validate_candidate_record "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID"
   commit_candidate "content: publish $BUNDLE_STABLE_ID"
+  PUBLISH_CONTENT_COMMIT=$CANDIDATE_CONTENT_SHA
+  write_publish_state
   build_release "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID"
   activate_release
   verify_published_url "$(local_content_url "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID")"
   swap_formal_repository
+  PUBLISH_URL=$(content_url "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID")
+  complete_publish_state
   SUCCESS=true
-  printf '{"ok":true,"action":"publish","contentType":%s,"stableId":%s,"url":%s,"releaseSha":%s,"contentSha":%s,"message":"Published successfully"}\n' \
-    "$(json_quote "$BUNDLE_CONTENT_TYPE")" \
-    "$(json_quote "$BUNDLE_STABLE_ID")" \
-    "$(json_quote "$(content_url "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID")")" \
-    "$(json_quote "$SITE_SOURCE_SHA")" \
-    "$(json_quote "$CANDIDATE_CONTENT_SHA")"
+  emit_publish_state_json "publish" || fail "STATE_CORRUPT" "Completed publish state cannot be read"
 }
 
 delete_content() {
@@ -1896,6 +2348,8 @@ parse_arguments() {
   ACTION=$1
   shift
   local bundle=""
+  local transaction_id=""
+  local bundle_sha256=""
   local content_type=""
   local stable_id=""
   local json_count=0
@@ -1908,6 +2362,17 @@ parse_arguments() {
       --bundle)
         [[ -z "$bundle" && $# -ge 2 ]] || fail "INVALID_ARGUMENTS" "--bundle requires one value"
         bundle=$2
+        shift
+        ;;
+      --transaction)
+        [[ -z "$transaction_id" && $# -ge 2 ]] || fail "INVALID_ARGUMENTS" "--transaction requires one value"
+        transaction_id=$2
+        PUBLISH_TRANSACTION_ID=$transaction_id
+        shift
+        ;;
+      --bundle-sha256)
+        [[ -z "$bundle_sha256" && $# -ge 2 ]] || fail "INVALID_ARGUMENTS" "--bundle-sha256 requires one value"
+        bundle_sha256=$2
         shift
         ;;
       --type)
@@ -1929,14 +2394,25 @@ parse_arguments() {
   [[ $json_count -eq 1 ]] || fail "INVALID_ARGUMENTS" "--json is required exactly once"
   case "$ACTION" in
     status|list)
-      [[ -z "$bundle$content_type$stable_id" ]] || fail "INVALID_ARGUMENTS" "This command does not accept values"
+      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id" ]] || fail "INVALID_ARGUMENTS" "This command does not accept values"
+      ;;
+    publish-status)
+      [[ -z "$bundle$bundle_sha256$content_type$stable_id" && -n "$transaction_id" ]] || \
+        fail "INVALID_ARGUMENTS" "publish-status requires only --transaction"
+      is_publish_transaction_id "$transaction_id" || fail "INVALID_TRANSACTION_ID" "Publish transaction id is invalid"
+      PUBLISH_TRANSACTION_ID=$transaction_id
       ;;
     publish)
-      [[ -n "$bundle" && -z "$content_type$stable_id" ]] || fail "INVALID_ARGUMENTS" "publish requires only --bundle"
+      [[ -n "$bundle" && -n "$transaction_id" && -n "$bundle_sha256" && -z "$content_type$stable_id" ]] || \
+        fail "INVALID_ARGUMENTS" "publish requires --transaction, --bundle, and --bundle-sha256"
+      is_publish_transaction_id "$transaction_id" || fail "INVALID_TRANSACTION_ID" "Publish transaction id is invalid"
+      is_bundle_sha256 "$bundle_sha256" || fail "INVALID_BUNDLE_SHA256" "Publish Bundle SHA-256 is invalid"
+      PUBLISH_TRANSACTION_ID=$transaction_id
+      PUBLISH_EXPECTED_BUNDLE_SHA256=$bundle_sha256
       PARSED_BUNDLE=$bundle
       ;;
     delete)
-      [[ -z "$bundle" && -n "$content_type" && -n "$stable_id" ]] || fail "INVALID_ARGUMENTS" "delete requires --type and --id"
+      [[ -z "$bundle$transaction_id$bundle_sha256" && -n "$content_type" && -n "$stable_id" ]] || fail "INVALID_ARGUMENTS" "delete requires --type and --id"
       PARSED_CONTENT_TYPE=$content_type
       PARSED_STABLE_ID=$stable_id
       ;;
@@ -1953,12 +2429,44 @@ main() {
     [[ "$argument" == "--json" ]] && JSON_MODE=true
   done
   parse_arguments "$@"
+  if [[ "$ACTION" == "publish-status" ]]; then
+    prepare_publish_status_runtime
+    publish_status
+    return
+  fi
+  if [[ "$ACTION" == "publish" ]]; then
+    prepare_publish_status_runtime
+    initialize_publish_state_context
+    if [[ -e "$PUBLISH_STATE_FILE" || -L "$PUBLISH_STATE_FILE" ]]; then
+      [[ -f "$PUBLISH_STATE_FILE" && ! -L "$PUBLISH_STATE_FILE" ]] || fail "STATE_CORRUPT" "Publish transaction state is unsafe"
+      local existing_status=0
+      load_publish_state || existing_status=$?
+      if [[ $existing_status -eq 2 ]]; then
+        fail "TRANSACTION_BUNDLE_MISMATCH" "This transaction id already belongs to a different Bundle"
+      fi
+      [[ $existing_status -eq 0 ]] || fail "STATE_CORRUPT" "Publish transaction state is invalid"
+      if [[ "$PUBLISH_STATUS" == "succeeded" || "$PUBLISH_STATUS" == "running" || \
+            "$PUBLISH_RETRYABLE" != "true" || "$PUBLISH_SWITCH_COMPLETED" == "true" ]]; then
+        emit_publish_state_json "publish" || fail "STATE_CORRUPT" "Publish transaction state cannot be read"
+        if [[ "$PUBLISH_STATUS" == "failed" ]]; then
+          ERROR_EMITTED=true
+          exit 1
+        fi
+        SUCCESS=true
+        return
+      fi
+    fi
+  fi
   prepare_runtime
+  cleanup_publish_states
   acquire_lock
   case "$ACTION" in
     status) status ;;
     list) list_content ;;
-    publish) publish "$PARSED_BUNDLE" ;;
+    publish)
+      begin_publish_state
+      publish "$PARSED_BUNDLE"
+      ;;
     delete) delete_content "$PARSED_CONTENT_TYPE" "$PARSED_STABLE_ID" ;;
   esac
 }

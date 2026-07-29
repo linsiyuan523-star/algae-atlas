@@ -493,12 +493,20 @@ export function createExportPlan(
   };
 }
 
-export function createDirectPublishBranchName(recordId: string) {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  const nonce = [...bytes]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
+export function createDirectPublishBranchName(
+  recordId: string,
+  transactionId?: string,
+) {
+  const nonce = transactionId ?? randomHexId();
+  if (!/^[0-9a-f]{32}$/.test(nonce)) {
+    throw new Error("发布事务 ID 无效。");
+  }
   return `content/direct-${nonce}-${recordId}`;
+}
+
+function randomHexId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function serializeMarkdown(body: string) {

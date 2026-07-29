@@ -78,6 +78,15 @@ import {
   unavailableMediaApi,
 } from "../media";
 import type { MediaApi, StagedImage } from "../media";
+import {
+  PUBLISH_STAGE_LABELS,
+  PUBLISH_STAGE_ORDER,
+  createPublishTransactionId,
+} from "../server";
+import type {
+  PublishStage,
+  ServerPublishProgress,
+} from "../server";
 import { ArticleEditor } from "./ArticleEditor";
 import { ContentPreview } from "./ContentPreview";
 import type { DetailPreviewMedia, DetailPreviewValue } from "./DetailPreview";
@@ -199,12 +208,7 @@ export function NewDraftPage({ api, onCreated }: NewDraftPageProps) {
   );
 }
 
-export type DirectPublishProgressStage =
-  | "saving"
-  | "checking"
-  | "materializing"
-  | "committing"
-  | "publishing";
+export type DirectPublishProgressStage = PublishStage;
 
 export type DirectPublishSnapshot = {
   draft: Draft;
@@ -216,6 +220,13 @@ export type DirectPublishResult = {
   url?: string;
   releaseSha?: string;
   publishedAt?: string;
+  transactionId?: string;
+  contentSha?: string;
+  siteSha?: string;
+  releaseId?: string;
+  totalDurationMs?: number;
+  stageDurationsMs?: Partial<Record<PublishStage, number>>;
+  bundleUploadDurationMs?: number;
 };
 
 export type DirectServerContent = {
@@ -233,7 +244,9 @@ export type DirectPublishServerState =
 
 export type DirectPublishOptions = {
   operatorId: string;
-  onProgress?: (stage: DirectPublishProgressStage) => void;
+  transactionId: string;
+  resume?: boolean;
+  onProgress?: (progress: ServerPublishProgress) => void;
 };
 
 type DraftsPageProps = {
@@ -251,6 +264,9 @@ type DraftsPageProps = {
   serverContentItems?: readonly DirectServerContent[];
   onViewServerContent?: (item: DirectServerContent) => void;
   onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
+  onQueryPublishStatus?: (
+    transactionId: string,
+  ) => Promise<ServerPublishProgress | null>;
 };
 
 export function DraftsPage({
@@ -265,6 +281,7 @@ export function DraftsPage({
   serverContentItems = [],
   onViewServerContent,
   onDeleteServerContent,
+  onQueryPublishStatus,
 }: DraftsPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>(initialDraft ? [initialDraft] : []);
   const [selectedDraft, setSelectedDraft] = useState<Draft | null>(initialDraft);
@@ -432,6 +449,7 @@ export function DraftsPage({
                 serverContentItems={serverContentItems}
                 onViewServerContent={onViewServerContent}
                 onDeleteServerContent={onDeleteServerContent}
+                onQueryPublishStatus={onQueryPublishStatus}
               />
             ) : (
               <div className="editor-empty-state" role="status">
@@ -463,6 +481,9 @@ type DraftEditorProps = {
   serverContentItems: readonly DirectServerContent[];
   onViewServerContent?: (item: DirectServerContent) => void;
   onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
+  onQueryPublishStatus?: (
+    transactionId: string,
+  ) => Promise<ServerPublishProgress | null>;
 };
 
 type EditorInput = {
@@ -491,6 +512,7 @@ function DraftEditor({
   serverContentItems,
   onViewServerContent,
   onDeleteServerContent,
+  onQueryPublishStatus,
 }: DraftEditorProps) {
   const initialInspection = inspectDraft(draft);
   const initialFormInspection = getContentFormAdapter(initialInspection.fields.contentType)
@@ -520,7 +542,10 @@ function DraftEditor({
   >(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
-  const [publishProgress, setPublishProgress] = useState<DirectPublishProgressStage>();
+  const [publishProgress, setPublishProgress] = useState<ServerPublishProgress | null>(
+    () => loadPublishProgress(draft.draftId),
+  );
+  const [publishClock, setPublishClock] = useState(() => Date.now());
   const [publishResult, setPublishResult] = useState<DirectPublishResult | null>(null);
   const [stagedImages, setStagedImages] = useState<StagedImage[]>([]);
   const [mediaLoadPending, setMediaLoadPending] = useState(true);
@@ -531,6 +556,9 @@ function DraftEditor({
   const recordDraftRef = useRef(draft.recordDraft);
   const hydratedDraftRef = useRef(draft);
   const saveInFlightRef = useRef(false);
+  const publishInFlightRef = useRef(false);
+  const publishProgressRef = useRef(publishProgress);
+  const queryPublishStatusRef = useRef(onQueryPublishStatus);
   const mountedRef = useRef(true);
   const stagedImagesRef = useRef<StagedImage[]>([]);
   const dirtyImageIdsRef = useRef<Set<string>>(new Set());
@@ -548,6 +576,51 @@ function DraftEditor({
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    queryPublishStatusRef.current = onQueryPublishStatus;
+  }, [onQueryPublishStatus]);
+
+  const updatePublishProgress = useCallback(
+    (progress: ServerPublishProgress) => {
+      const normalized = mergePublishProgress(publishProgressRef.current, progress);
+      publishProgressRef.current = normalized;
+      savePublishProgress(draft.draftId, normalized);
+      setPublishProgress(normalized);
+    },
+    [draft.draftId],
+  );
+
+  useEffect(() => {
+    const stored = publishProgressRef.current;
+    if (!stored || stored.status !== "running" || !queryPublishStatusRef.current) {
+      return;
+    }
+    let cancelled = false;
+    void queryPublishStatusRef.current(stored.transactionId).then((progress) => {
+      if (!cancelled && progress) {
+        updatePublishProgress(progress);
+        if (progress.status === "succeeded") {
+          setPublishResult(publishResultFromProgress(progress));
+        }
+      }
+    }).catch((caught: unknown) => {
+      if (!cancelled) {
+        setPublishError(describeError(caught));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.draftId, updatePublishProgress]);
+
+  useEffect(() => {
+    if (publishProgress?.status !== "running") {
+      return;
+    }
+    const timer = window.setInterval(() => setPublishClock(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [publishProgress?.status]);
 
   useEffect(() => {
     if (hydratedDraftRef.current === draft) {
@@ -1319,18 +1392,54 @@ function DraftEditor({
   }
 
   async function handlePublish() {
-    if (!onPublishToServer) {
+    if (!onPublishToServer || publishInFlightRef.current) {
       return;
     }
 
+    if (publishProgress?.status === "running") {
+      await handleRefreshPublishStatus();
+      return;
+    }
+    if (publishProgress?.status === "failed" && !publishProgress.retryable) {
+      setPublishError("该事务不能安全自动重试，请先按诊断信息人工处理。");
+      return;
+    }
+
+    publishInFlightRef.current = true;
     setPendingAction("publish");
     setPublishError(null);
     setPublishResult(null);
-    setPublishProgress("saving");
+    const resume = publishProgress?.status === "failed" && publishProgress.retryable;
+    const transactionId = resume
+      ? publishProgress.transactionId
+      : createPublishTransactionId();
+    const initialProgress = createLocalPublishProgress(
+      transactionId,
+      resume ? "confirming_server_status" : "saving",
+      resume ? "正在确认上次事务状态" : "正在保存当前内容",
+    );
+    updatePublishProgress(
+      resume && publishProgress
+        ? {
+            ...initialProgress,
+            startedAt: publishProgress.startedAt,
+            clientStartedAt:
+              publishProgress.clientStartedAt ?? publishProgress.startedAt,
+            elapsedMs: publishProgress.elapsedMs,
+            attempt: publishProgress.attempt,
+            serverStarted: publishProgress.serverStarted,
+            safeToCancel: false,
+          }
+        : initialProgress,
+    );
     try {
-      const saved = await persist(editorInputRef.current);
-      if (!saved) {
-        return;
+      let saved = draft;
+      if (!resume) {
+        const persisted = await persist(editorInputRef.current);
+        if (!persisted) {
+          return;
+        }
+        saved = persisted;
       }
 
       const candidate = await persist(editorInputFromDraft(saved), true, false);
@@ -1345,7 +1454,9 @@ function DraftEditor({
         },
         {
           operatorId: SINGLE_USER_DIRECT_OPERATOR_ID,
-          onProgress: setPublishProgress,
+          transactionId,
+          resume,
+          onProgress: updatePublishProgress,
         },
       );
 
@@ -1358,10 +1469,61 @@ function DraftEditor({
       if (result) {
         setPublishResult(result);
       }
+      const currentProgress = publishProgressRef.current;
+      if (currentProgress?.status !== "succeeded") {
+        const succeeded = createLocalPublishProgress(
+          transactionId,
+          "succeeded",
+          result?.message ?? "发布成功",
+          "succeeded",
+        );
+        updatePublishProgress(succeeded);
+      }
+    } catch (caught) {
+      setPublishError(describeError(caught));
+      const currentProgress = publishProgressRef.current;
+      if (currentProgress && currentProgress.status !== "failed") {
+        const failed: ServerPublishProgress = {
+          ...currentProgress,
+          status: "failed",
+          retryable: false,
+          errorCode: "CLIENT_PUBLISH_FAILED",
+          userMessage: describeError(caught),
+          technicalSummary: describeError(caught),
+          failedStage: currentProgress.stage,
+          message: describeError(caught),
+          updatedAt: new Date().toISOString(),
+        };
+        updatePublishProgress(failed);
+      }
+    } finally {
+      publishInFlightRef.current = false;
+      setPendingAction(null);
+    }
+  }
+
+  async function handleRefreshPublishStatus() {
+    if (!publishProgress || !queryPublishStatusRef.current || publishInFlightRef.current) {
+      return;
+    }
+    publishInFlightRef.current = true;
+    setPendingAction("publish");
+    setPublishError(null);
+    try {
+      const refreshed = await queryPublishStatusRef.current(
+        publishProgress.transactionId,
+      );
+      if (!refreshed) {
+        throw new Error("暂时无法读取该发布事务状态。");
+      }
+      updatePublishProgress(refreshed);
+      if (refreshed.status === "succeeded") {
+        setPublishResult(publishResultFromProgress(refreshed));
+      }
     } catch (caught) {
       setPublishError(describeError(caught));
     } finally {
-      setPublishProgress(undefined);
+      publishInFlightRef.current = false;
       setPendingAction(null);
     }
   }
@@ -1413,6 +1575,12 @@ function DraftEditor({
   const publishButtonLabel =
     pendingAction === "publish"
       ? "正在发布..."
+      : publishProgress?.status === "running"
+        ? "查看当前发布状态"
+        : publishProgress?.status === "failed" && publishProgress.retryable
+          ? "安全重试"
+          : publishProgress?.status === "failed"
+            ? "需要人工处理"
       : serverChecking
         ? "正在检查服务器"
         : !serverAvailable
@@ -1724,7 +1892,12 @@ function DraftEditor({
               <button
                 className="secondary-button"
                 type="button"
-                disabled={isBusy || !onPublishToServer || !serverAvailable}
+                disabled={
+                  isBusy ||
+                  !onPublishToServer ||
+                  !serverAvailable ||
+                  (publishProgress?.status === "failed" && !publishProgress.retryable)
+                }
                 title={
                   serverAvailable
                     ? serverContent
@@ -1737,6 +1910,17 @@ function DraftEditor({
                 <CloudUpload aria-hidden="true" size={17} />
                 {publishButtonLabel}
               </button>
+              {publishProgress && onQueryPublishStatus ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => void handleRefreshPublishStatus()}
+                >
+                  <RefreshCw aria-hidden="true" size={17} />
+                  查看当前发布状态
+                </button>
+              ) : null}
               {serverContent?.urlZh && onViewServerContent ? (
                 <button
                   className="secondary-button"
@@ -1790,12 +1974,9 @@ function DraftEditor({
         </div>
         <SaveStatusIndicator status={saveStatus} error={saveError} />
         {publishProgress ? (
-          <p className="save-status save-status-saving" role="status" aria-live="polite">
-            <LoaderCircle className="save-status-spinner" aria-hidden="true" size={17} />
-            {publishProgressLabel(publishProgress)}
-          </p>
+          <PublishProgressPanel progress={publishProgress} now={publishClock} />
         ) : null}
-        {publishError ? (
+        {publishError && publishProgress?.status !== "failed" ? (
           <p className="operation-error" role="alert">
             {publishError}
           </p>
@@ -1810,6 +1991,7 @@ function DraftEditor({
               </time>
             ) : null}
             {publishResult.releaseSha ? <code>{publishResult.releaseSha}</code> : null}
+            <PublishResultDetails result={publishResult} />
             {publishResult.url ? (
               <a href={publishResult.url} target="_blank" rel="noopener noreferrer">
                 <ExternalLink aria-hidden="true" size={16} />
@@ -2155,15 +2337,362 @@ function formatTimestamp(value: string) {
   }).format(parsed);
 }
 
-function publishProgressLabel(stage: DirectPublishProgressStage) {
-  const labels: Record<DirectPublishProgressStage, string> = {
-    saving: "正在保存当前内容",
-    checking: "正在检查服务器",
-    materializing: "正在生成并验证 Bundle",
-    committing: "正在创建本地内容提交",
-    publishing: "正在上传、构建并切换版本",
+function PublishProgressPanel({
+  progress,
+  now,
+}: {
+  progress: ServerPublishProgress;
+  now: number;
+}) {
+  const clientStarted = Date.parse(progress.clientStartedAt ?? progress.startedAt ?? "");
+  const stageStarted = Date.parse(progress.stageStartedAt ?? "");
+  const totalElapsed = Number.isNaN(clientStarted)
+    ? progress.elapsedMs
+    : Math.max(0, now - clientStarted);
+  const stageElapsed =
+    progress.status === "running" && !Number.isNaN(stageStarted)
+      ? Math.max(0, now - stageStarted)
+      : (progress.stageDurationsMs?.[progress.stage] ?? 0);
+  const currentIndex = PUBLISH_STAGE_ORDER.indexOf(progress.stage);
+  const completedLabels = PUBLISH_STAGE_ORDER.filter((stage, index) => {
+    if (stage === "succeeded") {
+      return false;
+    }
+    return progress.status === "succeeded" || (currentIndex >= 0 && index < currentIndex);
+  }).map((stage) => PUBLISH_STAGE_LABELS[stage]);
+  const diagnostic = [
+    progress.errorCode,
+    progress.failedStage,
+    progress.transactionId,
+    progress.technicalSummary,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  return (
+    <section className="publish-progress-panel" aria-label="当前发布状态">
+      <div className="publish-progress-heading" aria-live="polite">
+        {progress.status === "running" ? (
+          <LoaderCircle className="save-status-spinner" aria-hidden="true" size={18} />
+        ) : progress.status === "succeeded" ? (
+          <CheckCircle2 aria-hidden="true" size={18} />
+        ) : (
+          <CircleAlert aria-hidden="true" size={18} />
+        )}
+        <div>
+          <strong>{PUBLISH_STAGE_LABELS[progress.stage]}</strong>
+          <span>{progress.message}</span>
+        </div>
+      </div>
+
+      {completedLabels.length > 0 ? (
+        <p className="publish-completed-summary">
+          已完成：{completedLabels.join("、")}
+        </p>
+      ) : null}
+
+      <dl className="publish-timing-grid">
+        <div>
+          <dt>当前阶段</dt>
+          <dd>{formatDuration(stageElapsed)}</dd>
+        </div>
+        <div>
+          <dt>总耗时</dt>
+          <dd>{formatDuration(totalElapsed)}</dd>
+        </div>
+        <div>
+          <dt>重试次数</dt>
+          <dd>{Math.max(0, progress.attempt - 1)}</dd>
+        </div>
+        <div>
+          <dt>文件上传</dt>
+          <dd>{progress.isUploading ? "进行中" : "未在上传"}</dd>
+        </div>
+        <div>
+          <dt>服务器处理</dt>
+          <dd>{progress.serverStarted ? "已开始" : "尚未开始"}</dd>
+        </div>
+        <div>
+          <dt>操作安全性</dt>
+          <dd>
+            {progress.safeToCancel
+              ? "可取消"
+              : progress.status === "failed" && progress.retryable
+                ? "可安全重试"
+                : "不可强制取消"}
+          </dd>
+        </div>
+      </dl>
+
+      {progress.bundleUploadedAt ? (
+        <p className="publish-upload-complete">
+          Bundle 已上传，用时 {formatDuration(progress.bundleUploadDurationMs ?? 0)}；
+          完成于 {formatTimestamp(progress.bundleUploadedAt)}。
+        </p>
+      ) : null}
+
+      <ol className="publish-stage-list">
+        {PUBLISH_STAGE_ORDER.map((stage, index) => {
+          const state = publishStageState(progress, stage, index, currentIndex);
+          return (
+            <li key={stage} data-state={state}>
+              <span aria-hidden="true" />
+              <strong>{PUBLISH_STAGE_LABELS[stage]}</strong>
+              <small>{publishStageStateLabel(state)}</small>
+              {progress.stageDurationsMs?.[stage] !== undefined ? (
+                <time>{formatDuration(progress.stageDurationsMs[stage] ?? 0)}</time>
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
+
+      <div className="publish-transaction-row">
+        <span>事务 ID</span>
+        <code>{progress.transactionId}</code>
+      </div>
+
+      {progress.status === "failed" ? (
+        <div className="publish-failure-summary" role="alert">
+          <strong>{progress.userMessage || progress.message}</strong>
+          <span>
+            失败阶段：{PUBLISH_STAGE_LABELS[progress.failedStage as PublishStage] ?? progress.failedStage}
+          </span>
+          <span>
+            {progress.retryable
+              ? `可安全重试，已尝试 ${progress.attempt} 次。`
+              : "不会自动重试，需要人工处理。"}
+          </span>
+          {diagnostic ? (
+            <button
+              className="secondary-button publish-copy-diagnostic"
+              type="button"
+              onClick={() => void navigator.clipboard?.writeText(diagnostic)}
+            >
+              <Copy aria-hidden="true" size={15} />
+              复制诊断摘要
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+type PublishStageVisualState =
+  | "pending"
+  | "running"
+  | "completed"
+  | "retrying"
+  | "failed"
+  | "skipped"
+  | "recovered";
+
+function publishStageState(
+  progress: ServerPublishProgress,
+  stage: PublishStage,
+  index: number,
+  currentIndex: number,
+): PublishStageVisualState {
+  if (stage === "preparing_site_source" && progress.sourceMethod === "cache") {
+    return "skipped";
+  }
+  if (stage === progress.stage) {
+    if (progress.status === "failed") {
+      return "failed";
+    }
+    if (progress.retrying) {
+      return "retrying";
+    }
+    return progress.status === "succeeded" ? "completed" : "running";
+  }
+  if (stage === "uploading_bundle" && progress.bundleUploadedAt && progress.bundleUploadDurationMs === 0) {
+    return "recovered";
+  }
+  if (progress.status === "succeeded" || (currentIndex >= 0 && index < currentIndex)) {
+    return "completed";
+  }
+  return "pending";
+}
+
+function publishStageStateLabel(state: PublishStageVisualState) {
+  const labels: Record<PublishStageVisualState, string> = {
+    pending: "未开始",
+    running: "进行中",
+    completed: "已完成",
+    retrying: "正在重试",
+    failed: "失败",
+    skipped: "已跳过",
+    recovered: "已从上次事务恢复",
   };
-  return labels[stage];
+  return labels[state];
+}
+
+function PublishResultDetails({ result }: { result: DirectPublishResult }) {
+  const durations = result.stageDurationsMs ?? {};
+  const sourceDuration = sumDurations(durations, [
+    "checking_site_source_cache",
+    "preparing_site_source",
+  ]);
+  const switchDuration = sumDurations(durations, [
+    "switching_release",
+    "restarting_service",
+    "verifying_production_url",
+  ]);
+  const rows = [
+    ["Bundle 上传", result.bundleUploadDurationMs],
+    ["服务器处理", result.totalDurationMs],
+    ["源码准备", sourceDuration],
+    ["依赖准备", durations.preparing_dependencies],
+    ["网站构建", durations.building_site],
+    ["切换与验证", switchDuration],
+    ["总耗时", result.totalDurationMs],
+  ] as const;
+  return (
+    <dl className="publish-result-details">
+      {rows.map(([label, duration]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{duration === undefined ? "未记录" : formatDuration(duration)}</dd>
+        </div>
+      ))}
+      {result.releaseId ? <ResultIdentity label="release" value={result.releaseId} /> : null}
+      {result.contentSha ? <ResultIdentity label="内容提交" value={result.contentSha} /> : null}
+      {result.siteSha ? <ResultIdentity label="网站源码" value={result.siteSha} /> : null}
+      {result.transactionId ? (
+        <ResultIdentity label="事务 ID" value={result.transactionId} />
+      ) : null}
+    </dl>
+  );
+}
+
+function ResultIdentity({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd><code>{value}</code></dd>
+    </div>
+  );
+}
+
+function sumDurations(
+  durations: Partial<Record<PublishStage, number>>,
+  stages: PublishStage[],
+) {
+  const values = stages
+    .map((stage) => durations[stage])
+    .filter((value): value is number => value !== undefined);
+  return values.length > 0 ? values.reduce((total, value) => total + value, 0) : undefined;
+}
+
+function formatDuration(milliseconds: number) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) {
+    return "未记录";
+  }
+  return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)} 秒`;
+}
+
+function createLocalPublishProgress(
+  transactionId: string,
+  stage: PublishStage,
+  message: string,
+  status: ServerPublishProgress["status"] = "running",
+): ServerPublishProgress {
+  const now = new Date().toISOString();
+  return {
+    transactionId,
+    status,
+    stage,
+    message,
+    startedAt: now,
+    clientStartedAt: now,
+    stageStartedAt: now,
+    updatedAt: now,
+    elapsedMs: 0,
+    stageElapsedMs: 0,
+    attempt: 1,
+    retryable: false,
+    isUploading: false,
+    serverStarted: false,
+    safeToCancel: true,
+    safeToRetry: false,
+  };
+}
+
+function mergePublishProgress(
+  current: ServerPublishProgress | null,
+  progress: ServerPublishProgress,
+) {
+  const sameTransaction = current?.transactionId === progress.transactionId;
+  return {
+    ...progress,
+    clientStartedAt:
+      sameTransaction
+        ? current.clientStartedAt ??
+          current.startedAt ??
+          progress.clientStartedAt ??
+          progress.startedAt
+        : progress.clientStartedAt ?? progress.startedAt,
+    elapsedMs: sameTransaction
+      ? Math.max(current.elapsedMs, progress.elapsedMs)
+      : progress.elapsedMs,
+    attempt: sameTransaction
+      ? Math.max(current.attempt, progress.attempt)
+      : progress.attempt,
+    bundleUploadedAt: progress.bundleUploadedAt ?? current?.bundleUploadedAt,
+    bundleUploadDurationMs:
+      progress.bundleUploadDurationMs ?? current?.bundleUploadDurationMs,
+  };
+}
+
+function publishProgressStorageKey(draftId: string) {
+  return `algae-content-workbench:publish:${draftId}`;
+}
+
+function savePublishProgress(draftId: string, progress: ServerPublishProgress) {
+  try {
+    localStorage.setItem(publishProgressStorageKey(draftId), JSON.stringify(progress));
+  } catch {
+    // The visible in-memory status remains authoritative for this app session.
+  }
+}
+
+function loadPublishProgress(draftId: string): ServerPublishProgress | null {
+  try {
+    const raw = localStorage.getItem(publishProgressStorageKey(draftId));
+    if (!raw) {
+      return null;
+    }
+    const progress = JSON.parse(raw) as Partial<ServerPublishProgress>;
+    if (
+      typeof progress.transactionId !== "string" ||
+      !/^[0-9a-f]{32}$/.test(progress.transactionId) ||
+      typeof progress.stage !== "string" ||
+      !(progress.stage in PUBLISH_STAGE_LABELS) ||
+      !["running", "failed", "succeeded"].includes(progress.status ?? "")
+    ) {
+      return null;
+    }
+    return progress as ServerPublishProgress;
+  } catch {
+    return null;
+  }
+}
+
+function publishResultFromProgress(progress: ServerPublishProgress): DirectPublishResult {
+  return {
+    message: progress.message,
+    url: progress.url,
+    releaseSha: progress.releaseSha,
+    publishedAt: progress.updatedAt,
+    transactionId: progress.transactionId,
+    contentSha: progress.contentCommit ?? progress.contentSha,
+    siteSha: progress.siteCommit ?? progress.releaseSha,
+    releaseId: progress.releaseId,
+    totalDurationMs: progress.elapsedMs,
+    stageDurationsMs: progress.stageDurationsMs,
+    bundleUploadDurationMs: progress.bundleUploadDurationMs,
+  };
 }
 
 function describeError(error: unknown) {
