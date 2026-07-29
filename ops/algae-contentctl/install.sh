@@ -14,6 +14,7 @@ readonly CONTROLLER_DESTINATION="/usr/local/sbin/algae-contentctl"
 readonly CONTENT_ROOT="/srv/algae-content"
 readonly CONTENT_REPOSITORY="$CONTENT_ROOT/repository"
 readonly TRANSACTION_ROOT="$CONTENT_ROOT/transactions"
+readonly PUBLISH_STATE_ROOT="$CONTENT_ROOT/publish-state"
 readonly SITE_SOURCE_CACHE_ROOT="$CONTENT_ROOT/site-source-cache"
 readonly INCOMING_ROOT="/home/ubuntu/algae-content-workbench/incoming"
 readonly SUDOERS_DESTINATION="/etc/sudoers.d/algae-contentctl"
@@ -85,6 +86,7 @@ export GIT_TERMINAL_PROMPT=0
 
 run install -d -o root -g root -m 0755 "$CONTENT_ROOT"
 run install -d -o root -g root -m 0700 "$TRANSACTION_ROOT"
+run install -d -o root -g root -m 0700 "$PUBLISH_STATE_ROOT"
 run install -d -o root -g root -m 0700 "$SITE_SOURCE_CACHE_ROOT"
 run install -d -o ubuntu -g ubuntu -m 0750 "$INCOMING_ROOT"
 

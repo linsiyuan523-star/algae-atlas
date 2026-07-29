@@ -7,8 +7,12 @@ subcommand. The workbench calls only these JSON commands:
 ```bash
 sudo -n /usr/local/sbin/algae-contentctl status --json
 sudo -n /usr/local/sbin/algae-contentctl list --json
+sudo -n /usr/local/sbin/algae-contentctl publish-status \
+  --transaction <32-lowercase-hex-transaction-id> --json
 sudo -n /usr/local/sbin/algae-contentctl publish \
-  --bundle /home/ubuntu/algae-content-workbench/incoming/<job-id> --json
+  --transaction <32-lowercase-hex-transaction-id> \
+  --bundle /home/ubuntu/algae-content-workbench/incoming/<transaction-id> \
+  --bundle-sha256 <sha256> --json
 sudo -n /usr/local/sbin/algae-contentctl delete \
   --type science-article --id example-id --json
 ```
@@ -41,8 +45,9 @@ source update.
 ```text
 /srv/algae-content/repository                 formal independent content Git repo
 /srv/algae-content/transactions               root-only candidate workspaces
+/srv/algae-content/publish-state              root-only transaction JSON and JSONL timelines
 /srv/algae-content/site-source-cache          root-only verified GitHub source snapshots
-/home/ubuntu/algae-content-workbench/incoming/<job-id>
+/home/ubuntu/algae-content-workbench/incoming/<transaction-id>
 /srv/algae-atlas/releases/<release-id>         fresh website builds
 /srv/algae-atlas/current                       active release symlink
 /srv/algae-atlas/previous                      rollback release symlink
@@ -60,8 +65,13 @@ GitHub commit API for the branch's exact commit and tree SHA, then checks a
 root-only cache keyed by both values. A cache hit is accepted only after its
 metadata, clean Git state, branch, tree SHA, and managed content trees are
 revalidated; the copied transaction source is validated again before use. A
-cache miss retains the bounded shallow-clone attempts and exact GitHub archive
-fallback. Verified sources are installed into the cache through a
+cache miss first downloads the exact GitHub API archive. A transient archive
+failure permits only one shallow-clone fallback, bounded to 30 seconds; API
+metadata, archive, and clone hard limits are 20, 40, and 30 seconds respectively,
+so the complete uncached network path is capped at 90 seconds. A
+deterministic archive validation failure does not fall through to clone.
+Commit and tree identity remain mandatory for either method. Verified sources
+are installed into the cache through a
 same-directory atomic rename, while invalid entries are quarantined inside the
 current root-only transaction. HTTP requests retain bounded retries and
 timeouts. The controller rejects unsafe archive entries and initializes a
@@ -72,12 +82,17 @@ is rechecked before use.
 
 The controller reuses that exact prepared tree for both the candidate bootstrap
 and website build. It overlays a candidate `content/` directory, runs
-`npm ci --include=dev`, `npm run content:validate -- --json`, and
-`npm run build:next` with `CONTENT_REPOSITORY_SOURCE=overlay`, synchronizes
+`npm ci --include=dev --prefer-offline --no-audit --no-fund`,
+`npm run content:validate -- --json`, and `npm run build:next` with
+`CONTENT_REPOSITORY_SOURCE=overlay`, synchronizes
 candidate uploads into the fresh build, and then creates a release. Full source
 type and lint checks remain pull-request gates; the production transaction
 validates the changing content repository and performs the production Next.js
-build. Overlay mode keeps legacy entries until a same-ID record has at least one
+build. The locked install verifies package integrity, uses the root-owned npm
+cache before the configured registry, and still downloads missing packages.
+Online audit and funding metadata are excluded from the time-critical publish
+transaction; dependency auditing remains a separate maintenance or CI gate.
+Overlay mode keeps legacy entries until a same-ID record has at least one
 publishable locale; a publishable record then owns that ID without silently
 mixing locale renderers. Only after the site restart, loopback health check,
 and exact published URL check succeed does it replace the formal content
@@ -122,7 +137,7 @@ makes the incoming directory owned by `ubuntu`, and installs the controller as
 `/usr/local/sbin/algae-contentctl`. It does not deploy content or change the
 active release.
 
-The supplied sudoers entry gives only `ubuntu` the four fixed invocations above
+The supplied sudoers entry gives only `ubuntu` the five fixed invocations above
 and uses `NOSETENV`. The argument wildcards are necessary for job IDs and
 stable IDs; the script rejects extra arguments, unsafe paths, unsupported
 types, shell metacharacters, symlinks, writable uploads, and paths outside the
@@ -130,23 +145,49 @@ incoming job directory.
 
 ## JSON contract
 
+`status --json` includes `publishProtocolVersion: 1`. The desktop checks this
+field before creating a local publication commit. Missing or older protocol
+versions are incompatible with transaction publication and must be upgraded;
+they are not treated as transient network failures.
+
+Every direct publish uses one 32-character lowercase hexadecimal transaction
+ID from local commit creation through upload, controller invocation, status
+queries, retries, and the final result. The incoming delivery is first uploaded
+as `.partial-<transaction-id>` and atomically renamed only after its remote
+SHA-256 matches. Repeated publish calls with the same ID return the retained
+running or successful state. A retryable pre-switch failure can advance the
+same transaction up to three total controller attempts; deterministic failures
+and any transaction that completed the release switch are not retried.
+
+The controller writes each transaction to a mode `0600` JSON file using a
+same-directory temporary file and atomic rename. A mode `0600` JSONL event file
+records timestamp, transaction, stage, attempt, duration, status, and error
+code. Both live under the root-owned mode `0700` publish-state directory and are
+retained for 30 days. `publish-status` returns the retained JSON without
+starting work, including the current stage, elapsed time, retryability, switch
+state, release identity, source method, and per-stage durations.
+
 Successful publish responses include stable keys such as:
 
 ```json
-{"ok":true,"action":"publish","contentType":"science-article","stableId":"example-id","url":"https://sycszy.icu/zh/insights/example-id","releaseSha":"...","contentSha":"...","message":"Published successfully"}
+{"ok":true,"action":"publish","transactionId":"...","status":"succeeded","stage":"succeeded","attempt":1,"retryable":false,"switchCompleted":true,"releaseId":"...","releaseSha":"...","contentSha":"...","siteCommit":"...","contentType":"science-article","stableId":"example-id","url":"https://sycszy.icu/zh/insights/example-id","message":"Published successfully"}
 ```
 
 Failures always have `ok: false`, a stable `code`, a concise `message`, and a
-bounded `logTail` for build-related errors. The controller writes no progress
-logs to stdout, so callers can parse one JSON object per invocation.
+bounded `logTail` for build-related errors. Publish failures additionally retain
+`errorCode`, `retryable`, `failedStage`, `transactionId`, `userMessage`, and a
+short `technicalSummary`. The controller writes no progress logs to stdout, so
+callers can parse one JSON object per invocation.
 
 ## Tests
 
 The test script creates an isolated temporary content repository, bundle,
 mock website source and GitHub API archive, mock `npm`, mock service manager,
-and mock health client. It covers clone-failure fallback plus API, tree, and
-tarball failures, including executable modes, symlink entries, and path
-traversal attempts, without touching `/srv/algae-atlas` or
+and mock health client. It covers archive-first acquisition with one bounded
+clone fallback; transaction state queries; atomic state writes; corrupt state;
+retry ceilings; running, failed, and successful idempotency; and API, tree, and
+tarball failures including executable modes, symlink entries, and path
+traversal attempts. It does not touch `/srv/algae-atlas` or
 `/srv/algae-content`.
 
 ```bash

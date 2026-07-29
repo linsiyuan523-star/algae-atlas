@@ -134,12 +134,20 @@ function createServerApi(): ServerApi {
       contentRepositoryReady: true,
       serviceActive: true,
       healthy: true,
+      publishProtocolVersion: 1,
     })),
     listContent: vi.fn(async () => ({
       ok: true,
       action: "list",
       message: "Listed",
       items: [],
+    })),
+    getPublishStatus: vi.fn(async ({ transactionId }) => ({
+      ok: false,
+      action: "publish-status",
+      code: "TRANSACTION_NOT_FOUND",
+      message: "Publish transaction was not found",
+      transactionId,
     })),
     publishContent: vi.fn(async () => ({
       ok: true,
@@ -714,13 +722,15 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
   onboardingApi.status = vi.fn(async () => onboardingStatus(true));
   const repositoryApi = createRepositoryApi();
   const serverApi = createServerApi();
+  const open = vi.mocked(openPublicSiteUrl);
+  open.mockResolvedValue(undefined);
   serverApi.publishContent = vi.fn<ServerApi["publishContent"]>(async () => ({
     ok: true,
     action: "publish",
     message: "Published",
     contentType: "team-news",
     stableId: "fictional-draft",
-    url: "https://example.invalid/zh/news/fictional-draft",
+    url: "https://sycszy.icu/zh/news/fictional-draft",
     releaseSha: "c".repeat(40),
     publishedAt: "2026-07-26T09:00:00Z",
   }));
@@ -744,6 +754,7 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
   );
 
   await waitFor(() => expect(serverApi.testConnection).toHaveBeenCalled());
+  await waitFor(() => expect(serverApi.getStatus).toHaveBeenCalled());
   await waitFor(() => expect(repositoryApi.dryRun).toHaveBeenCalledOnce());
   await waitFor(() => expect(repositoryApi.commit).toHaveBeenCalledOnce());
   await waitFor(() => expect(serverApi.publishContent).toHaveBeenCalledOnce());
@@ -768,12 +779,23 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
     shared: { disclosureStatus: "pending", sources: [] },
     locales: { zh: { fields: { authorName: "虚构作者" } } },
   });
-  expect(serverApi.publishContent).toHaveBeenCalledWith({
+  const publishRequest = vi.mocked(serverApi.publishContent).mock.calls[0]?.[0];
+  expect(publishRequest).toMatchObject({
     repositoryPath: "D:\\fictional-worktree",
     contentType: "team-news",
     stableId: "fictional-draft",
+    transactionId: expect.stringMatching(/^[0-9a-f]{32}$/),
   });
+  expect(vi.mocked(serverApi.publishContent).mock.calls[0]?.[1]).toEqual(
+    expect.any(Function),
+  );
+  expect(dryRunRequest?.branchName).toBe(
+    `content/direct-${publishRequest?.transactionId}-fictional-draft`,
+  );
   expect(vi.mocked(serverApi.testConnection).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(serverApi.getStatus).mock.invocationCallOrder[0]!,
+  );
+  expect(vi.mocked(serverApi.getStatus).mock.invocationCallOrder[0]).toBeLessThan(
     vi.mocked(repositoryApi.dryRun).mock.invocationCallOrder[0]!,
   );
   expect(vi.mocked(repositoryApi.dryRun).mock.invocationCallOrder[0]).toBeLessThan(
@@ -782,6 +804,231 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
   expect(vi.mocked(repositoryApi.commit).mock.invocationCallOrder[0]).toBeLessThan(
     vi.mocked(serverApi.publishContent).mock.invocationCallOrder[0]!,
   );
-  expect(await screen.findByText("Published")).toBeVisible();
+  await waitFor(() =>
+    expect(document.querySelector(".publish-result")).toHaveTextContent("Published"),
+  );
+  const publishedLink = screen.getByRole("link", { name: "打开线上页面" });
+  expect(publishedLink).toHaveAttribute(
+    "href",
+    "https://sycszy.icu/zh/news/fictional-draft",
+  );
+  await user.click(publishedLink);
+  expect(open).toHaveBeenCalledWith(
+    "https://sycszy.icu/zh/news/fictional-draft",
+  );
+
+  open.mockRejectedValueOnce(new Error("Windows could not open the public website."));
+  await user.click(publishedLink);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "无法打开线上页面：Windows could not open the public website.",
+  );
   expect(screen.getByRole("button", { name: "保存并更新服务器" })).toBeEnabled();
+});
+
+test("rejects an old controller before creating a local publish commit", async () => {
+  const user = userEvent.setup();
+  const publishable = makePublishableDraft();
+  const draftApi = createApi();
+  draftApi.listDrafts = vi.fn(async () => [publishable]);
+  draftApi.openDraft = vi.fn(async () => publishable);
+  const onboardingApi = createOnboardingApi();
+  onboardingApi.status = vi.fn(async () => onboardingStatus(true));
+  const repositoryApi = createRepositoryApi();
+  const serverApi = createServerApi();
+  serverApi.getStatus = vi.fn(async () => ({
+    ok: true,
+    action: "status",
+    message: "Legacy controller is healthy",
+    ready: true,
+    contentRepositoryReady: true,
+    serviceActive: true,
+    healthy: true,
+  }));
+
+  render(
+    <App
+      draftApi={draftApi}
+      onboardingApi={onboardingApi}
+      repositoryApi={repositoryApi}
+      serverApi={serverApi}
+    />,
+  );
+
+  const navigation = await screen.findByRole("navigation", {
+    name: "工作台导航",
+  });
+  await user.click(within(navigation).getByRole("button", { name: "草稿箱" }));
+  await user.click(await screen.findByRole("button", { name: "打开 可发布虚构标题" }));
+  await user.click(screen.getByRole("button", { name: "发布到服务器" }));
+
+  const panel = await screen.findByRole("region", { name: "当前发布状态" });
+  expect(within(panel).getAllByText(/服务器控制器版本过旧/).length).toBeGreaterThan(0);
+  expect(within(panel).getByText(/不会自动重试/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "结束本地事务" })).toBeEnabled();
+  expect(serverApi.testConnection).toHaveBeenCalledOnce();
+  expect(serverApi.getStatus).toHaveBeenCalledOnce();
+  expect(repositoryApi.dryRun).not.toHaveBeenCalled();
+  expect(repositoryApi.commit).not.toHaveBeenCalled();
+  expect(serverApi.publishContent).not.toHaveBeenCalled();
+});
+
+test("queries and resumes the same transaction without another local commit", async () => {
+  const user = userEvent.setup();
+  const transactionId = "f".repeat(32);
+  const publishable = makePublishableDraft();
+  const draftApi = createApi();
+  draftApi.listDrafts = vi.fn(async () => [publishable]);
+  draftApi.openDraft = vi.fn(async () => publishable);
+  const onboardingApi = createOnboardingApi();
+  onboardingApi.status = vi.fn(async () => onboardingStatus(true));
+  const repositoryApi = createRepositoryApi();
+  const serverApi = createServerApi();
+  serverApi.getPublishStatus = vi.fn(async () => ({
+    ok: true,
+    action: "publish-status",
+    message: "Temporary source network failure",
+    transactionId,
+    status: "failed" as const,
+    stage: "preparing_site_source" as const,
+    failedStage: "preparing_site_source",
+    updatedAt: "2026-07-29T12:00:00Z",
+    elapsedMs: 12_000,
+    attempt: 1,
+    retryable: true,
+  }));
+  serverApi.publishContent = vi.fn(async (request) => ({
+    ok: true,
+    action: "publish",
+    message: "Resumed publish succeeded",
+    transactionId: request.transactionId,
+    status: "succeeded" as const,
+    stage: "succeeded" as const,
+    updatedAt: "2026-07-29T12:00:20Z",
+    elapsedMs: 32_000,
+    attempt: 2,
+    retryable: false,
+    contentCommit: "1".repeat(40),
+    siteCommit: "2".repeat(40),
+    releaseId: "20260729T120020Z-resumed",
+  }));
+  localStorage.setItem(
+    `algae-content-workbench:publish:${publishable.draftId}`,
+    JSON.stringify({
+      transactionId,
+      status: "failed",
+      stage: "preparing_site_source",
+      failedStage: "preparing_site_source",
+      message: "Temporary source network failure",
+      updatedAt: "2026-07-29T12:00:00Z",
+      elapsedMs: 12_000,
+      attempt: 1,
+      retryable: true,
+      serverStarted: true,
+      safeToRetry: true,
+    }),
+  );
+
+  render(
+    <App
+      draftApi={draftApi}
+      onboardingApi={onboardingApi}
+      repositoryApi={repositoryApi}
+      serverApi={serverApi}
+    />,
+  );
+  const navigation = await screen.findByRole("navigation", {
+    name: "工作台导航",
+  });
+  await user.click(within(navigation).getByRole("button", { name: "草稿箱" }));
+  await user.click(await screen.findByRole("button", { name: "打开 可发布虚构标题" }));
+  await user.click(await screen.findByRole("button", { name: "安全重试" }));
+
+  await waitFor(() => expect(serverApi.getPublishStatus).toHaveBeenCalledOnce());
+  await waitFor(() => expect(serverApi.publishContent).toHaveBeenCalledOnce());
+  expect(serverApi.getPublishStatus).toHaveBeenCalledWith({ transactionId });
+  expect(vi.mocked(serverApi.publishContent).mock.calls[0]?.[0]).toMatchObject({
+    transactionId,
+    stableId: "fictional-draft",
+  });
+  expect(serverApi.testConnection).not.toHaveBeenCalled();
+  expect(repositoryApi.dryRun).not.toHaveBeenCalled();
+  expect(repositoryApi.commit).not.toHaveBeenCalled();
+  expect(vi.mocked(serverApi.getPublishStatus).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(serverApi.publishContent).mock.invocationCallOrder[0]!,
+  );
+  await waitFor(() =>
+    expect(document.querySelector(".publish-result")).toHaveTextContent(
+      "20260729T120020Z-resumed",
+    ),
+  );
+});
+
+test("keeps a transaction retryable when its recovery status query is interrupted", async () => {
+  const user = userEvent.setup();
+  const transactionId = "e".repeat(32);
+  const publishable = makePublishableDraft();
+  const draftApi = createApi();
+  draftApi.listDrafts = vi.fn(async () => [publishable]);
+  draftApi.openDraft = vi.fn(async () => publishable);
+  const onboardingApi = createOnboardingApi();
+  onboardingApi.status = vi.fn(async () => onboardingStatus(true));
+  const repositoryApi = createRepositoryApi();
+  const serverApi = createServerApi();
+  serverApi.getPublishStatus = vi.fn(async () => ({
+    ok: false,
+    action: "publish-status",
+    code: "SSH_TIMEOUT",
+    message: "Status connection timed out",
+  }));
+  localStorage.setItem(
+    `algae-content-workbench:publish:${publishable.draftId}`,
+    JSON.stringify({
+      transactionId,
+      status: "failed",
+      stage: "preparing_site_source",
+      failedStage: "preparing_site_source",
+      startedAt: "2026-07-29T12:00:00Z",
+      updatedAt: "2026-07-29T12:00:12Z",
+      elapsedMs: 12_000,
+      attempt: 2,
+      retryable: true,
+      serverStarted: true,
+      safeToRetry: true,
+    }),
+  );
+
+  render(
+    <App
+      draftApi={draftApi}
+      onboardingApi={onboardingApi}
+      repositoryApi={repositoryApi}
+      serverApi={serverApi}
+    />,
+  );
+  const navigation = await screen.findByRole("navigation", {
+    name: "工作台导航",
+  });
+  await user.click(within(navigation).getByRole("button", { name: "草稿箱" }));
+  await user.click(await screen.findByRole("button", { name: "打开 可发布虚构标题" }));
+  await user.click(await screen.findByRole("button", { name: "安全重试" }));
+
+  await waitFor(() => expect(serverApi.getPublishStatus).toHaveBeenCalledWith({ transactionId }));
+  expect(serverApi.publishContent).not.toHaveBeenCalled();
+  expect(repositoryApi.dryRun).not.toHaveBeenCalled();
+  expect(repositoryApi.commit).not.toHaveBeenCalled();
+  await waitFor(() => {
+    const stored = JSON.parse(
+      localStorage.getItem(
+        `algae-content-workbench:publish:${publishable.draftId}`,
+      ) ?? "{}",
+    );
+    expect(stored).toMatchObject({
+      transactionId,
+      status: "failed",
+      retryable: true,
+      attempt: 2,
+      errorCode: "SSH_TIMEOUT",
+      failedStage: "confirming_server_status",
+    });
+  });
 });

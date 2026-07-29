@@ -12,9 +12,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tempfile::Builder;
-use uuid::Uuid;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const SSH_HOST: &str = "algae-server";
 const CONTROLLER_PATH: &str = "/usr/local/sbin/algae-contentctl";
@@ -33,6 +33,9 @@ const MIN_UPLOAD_BYTES_PER_SECOND: u64 = 8 * 1024;
 const UPLOAD_PERMISSIONS_TIMEOUT: Duration = Duration::from_secs(30);
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const LOCAL_VALIDATOR_TIMEOUT: Duration = Duration::from_secs(90);
+const PUBLISH_PROGRESS_EVENT: &str = "server-publish-progress";
+const MAX_NETWORK_ATTEMPTS: usize = 3;
+const REQUIRED_PUBLISH_PROTOCOL_VERSION: u64 = 1;
 
 const CONTENT_TYPES: [&str; 11] = [
     "team-news",
@@ -54,6 +57,13 @@ pub struct PublishContentRequest {
     pub repository_path: String,
     pub content_type: String,
     pub stable_id: String,
+    pub transaction_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublishStatusRequest {
+    pub transaction_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -159,12 +169,27 @@ pub async fn list_server_content() -> ServerCommandResult {
 }
 
 #[tauri::command]
+pub async fn get_publish_status(request: PublishStatusRequest) -> ServerCommandResult {
+    spawn_server_command("publish-status", move || {
+        if !is_publish_transaction_id(&request.transaction_id) {
+            return invalid_request("publish-status", "transactionId");
+        }
+        query_publish_status(&request.transaction_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn publish_content_to_server(
     app: tauri::AppHandle,
     request: PublishContentRequest,
 ) -> Result<ServerCommandResult, String> {
     let publisher = app.state::<RepositoryPublisher>().inner().clone();
-    Ok(spawn_server_command("publish", move || publish_content(&publisher, request)).await)
+    let publish_app = app.clone();
+    Ok(spawn_server_command("publish", move || {
+        publish_content(&publish_app, &publisher, request)
+    })
+    .await)
 }
 
 #[tauri::command]
@@ -210,20 +235,117 @@ where
     }
 }
 
+struct PublishTimeline {
+    started: Instant,
+    started_at: String,
+    stage_started: Instant,
+    stage_started_at: String,
+}
+
+struct PublishTransition<'a> {
+    stage: &'a str,
+    message: &'a str,
+    attempt: usize,
+    is_uploading: bool,
+    server_started: bool,
+    extra: Option<Value>,
+}
+
+impl PublishTimeline {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            started_at: current_timestamp(),
+            stage_started: Instant::now(),
+            stage_started_at: current_timestamp(),
+        }
+    }
+
+    fn transition(
+        &mut self,
+        app: &tauri::AppHandle,
+        transaction_id: &str,
+        transition: PublishTransition<'_>,
+    ) {
+        let PublishTransition {
+            stage,
+            message,
+            attempt,
+            is_uploading,
+            server_started,
+            extra,
+        } = transition;
+        self.stage_started = Instant::now();
+        self.stage_started_at = current_timestamp();
+        let mut payload = json!({
+            "transactionId": transaction_id,
+            "status": "running",
+            "stage": stage,
+            "stageStartedAt": self.stage_started_at,
+            "startedAt": self.started_at,
+            "updatedAt": current_timestamp(),
+            "stageElapsedMs": 0,
+            "elapsedMs": self.started.elapsed().as_millis() as u64,
+            "attempt": attempt,
+            "retryable": false,
+            "message": message,
+            "isUploading": is_uploading,
+            "serverStarted": server_started,
+            "safeToCancel": !server_started,
+            "safeToRetry": false,
+        });
+        if let (Some(target), Some(source)) = (
+            payload.as_object_mut(),
+            extra.and_then(|v| v.as_object().cloned()),
+        ) {
+            target.extend(source);
+        }
+        let _ = app.emit(PUBLISH_PROGRESS_EVENT, payload);
+    }
+}
+
+fn current_timestamp() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+}
+
+fn is_publish_transaction_id(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
 fn publish_content(
+    app: &tauri::AppHandle,
     publisher: &RepositoryPublisher,
     request: PublishContentRequest,
 ) -> ServerCommandResult {
     if let Err(field) = validate_publish_request(&request) {
         return invalid_request("publish", field);
     }
+    let mut timeline = PublishTimeline::new();
+    timeline.transition(
+        app,
+        &request.transaction_id,
+        PublishTransition {
+            stage: "checking_server",
+            message: "Checking for an existing publish transaction",
+            attempt: 1,
+            is_uploading: false,
+            server_started: false,
+            extra: None,
+        },
+    );
 
-    let connection = test_connection();
-    if !connection.ok {
-        return ServerCommandResult {
-            action: "publish".to_owned(),
-            ..connection
-        };
+    let existing = query_publish_status(&request.transaction_id);
+    if existing.ok {
+        if !status_allows_publish_retry(&existing) {
+            return publish_result_from_status(existing, &request);
+        }
+    } else if existing.code.as_deref() != Some("TRANSACTION_NOT_FOUND") {
+        return publish_error_for_transaction(existing, &request.transaction_id);
     }
 
     let temporary = match Builder::new().prefix("algae-server-publish-").tempdir() {
@@ -238,26 +360,49 @@ fn publish_content(
             );
         }
     };
-    let job_id = Uuid::new_v4().simple().to_string();
-    let upload_root = temporary.path().join(&job_id);
-    // The controller requires the uploaded delivery itself to be the direct
-    // child of its incoming root, so the job directory contains the nine
-    // standard artifacts without an extra nesting level. The destination must
-    // stay absent until the existing atomic Bundle exporter installs it.
+    let job_id = request.transaction_id.clone();
+    let upload_root = temporary.path().join(format!(".partial-{job_id}"));
     let delivery = upload_root.clone();
 
+    timeline.transition(
+        app,
+        &job_id,
+        PublishTransition {
+            stage: "generating_bundle",
+            message: "Generating the Git Bundle",
+            attempt: 1,
+            is_uploading: false,
+            server_started: false,
+            extra: None,
+        },
+    );
     let export = match export_server_delivery(publisher, &request, &delivery) {
         Ok(export) => export,
-        Err(error) => return *error,
+        Err(error) => return publish_error_for_transaction(*error, &job_id),
     };
+    timeline.transition(
+        app,
+        &job_id,
+        PublishTransition {
+            stage: "verifying_sha256",
+            message: "Verifying the Bundle SHA-256",
+            attempt: 1,
+            is_uploading: false,
+            server_started: false,
+            extra: None,
+        },
+    );
     if let Err(error) = validate_portable_bundle(&delivery, &export.bundle_file_name) {
-        return *error;
+        return publish_error_for_transaction(*error, &job_id);
     }
-    if let Err(error) = upload_delivery(&upload_root, export.bundle_size_bytes) {
-        return *error;
-    }
-    if let Err(error) = secure_uploaded_delivery(&job_id) {
-        return *error;
+
+    let current = query_publish_status(&job_id);
+    if current.ok {
+        if !status_allows_publish_retry(&current) {
+            return publish_result_from_status_with_sha(current, &request, &export.sha256);
+        }
+    } else if current.code.as_deref() != Some("TRANSACTION_NOT_FOUND") {
+        return publish_error_for_transaction(current, &job_id);
     }
 
     let Some(remote_delivery) = remote_delivery_path(&job_id) else {
@@ -269,6 +414,85 @@ fn publish_content(
             None,
         );
     };
+
+    let upload_started = Instant::now();
+    let uploaded_at;
+    let upload_duration_ms;
+    match remote_bundle_state(&job_id, &export.bundle_file_name, &export.sha256) {
+        RemoteBundleState::Matches => {
+            uploaded_at = current_timestamp();
+            upload_duration_ms = 0;
+        }
+        RemoteBundleState::Missing => {
+            timeline.transition(
+                app,
+                &job_id,
+                PublishTransition {
+                    stage: "uploading_bundle",
+                    message: "Uploading the Bundle",
+                    attempt: 1,
+                    is_uploading: true,
+                    server_started: false,
+                    extra: None,
+                },
+            );
+            if let Err(error) = upload_delivery_atomically(
+                app,
+                &mut timeline,
+                &job_id,
+                &upload_root,
+                &export.bundle_file_name,
+                &export.sha256,
+                export.bundle_size_bytes,
+            ) {
+                return publish_error_for_transaction(*error, &job_id);
+            }
+            uploaded_at = current_timestamp();
+            upload_duration_ms = upload_started.elapsed().as_millis() as u64;
+        }
+        RemoteBundleState::Mismatch => {
+            return publish_error_for_transaction(
+                ServerCommandResult::error(
+                    "publish",
+                    "REMOTE_BUNDLE_MISMATCH",
+                    "The transaction already has a different uploaded Bundle.",
+                    None,
+                    None,
+                ),
+                &job_id,
+            );
+        }
+        RemoteBundleState::Unavailable(error) => {
+            return publish_error_for_transaction(error, &job_id);
+        }
+    }
+    timeline.transition(
+        app,
+        &job_id,
+        PublishTransition {
+            stage: "bundle_uploaded",
+            message: "Bundle upload is complete; server processing is starting",
+            attempt: 1,
+            is_uploading: false,
+            server_started: false,
+            extra: Some(json!({
+                "bundleUploadedAt": uploaded_at,
+                "bundleUploadDurationMs": upload_duration_ms,
+            })),
+        },
+    );
+    timeline.transition(
+        app,
+        &job_id,
+        PublishTransition {
+            stage: "connecting_server",
+            message: "Connecting to the server publish controller",
+            attempt: 1,
+            is_uploading: false,
+            server_started: true,
+            extra: None,
+        },
+    );
     let response = controller_json(
         "publish",
         &[
@@ -276,13 +500,38 @@ fn publish_content(
             "-n",
             CONTROLLER_PATH,
             "publish",
+            "--transaction",
+            &job_id,
             "--bundle",
             &remote_delivery,
+            "--bundle-sha256",
+            &export.sha256,
             "--json",
         ],
         PUBLISH_TIMEOUT,
     );
-    validate_mutation_identity(response, &request.content_type, &request.stable_id)
+    if publish_result_is_ambiguous(&response) {
+        timeline.transition(
+            app,
+            &job_id,
+            PublishTransition {
+                stage: "confirming_server_status",
+                message: "Connection was interrupted; confirming the server transaction status",
+                attempt: 1,
+                is_uploading: false,
+                server_started: true,
+                extra: None,
+            },
+        );
+        if let Some(status) = query_publish_status_with_retry(&job_id) {
+            return publish_result_from_status_with_sha(status, &request, &export.sha256);
+        }
+    }
+    validate_mutation_identity(
+        publish_error_for_transaction(response, &job_id),
+        &request.content_type,
+        &request.stable_id,
+    )
 }
 
 fn validate_publish_request(request: &PublishContentRequest) -> Result<(), &'static str> {
@@ -292,7 +541,180 @@ fn validate_publish_request(request: &PublishContentRequest) -> Result<(), &'sta
     {
         return Err("repositoryPath");
     }
+    if !is_publish_transaction_id(&request.transaction_id) {
+        return Err("transactionId");
+    }
     validate_content_identity(&request.content_type, &request.stable_id)
+}
+
+fn query_publish_status(transaction_id: &str) -> ServerCommandResult {
+    let response = controller_json(
+        "publish-status",
+        &[
+            "sudo",
+            "-n",
+            CONTROLLER_PATH,
+            "publish-status",
+            "--transaction",
+            transaction_id,
+            "--json",
+        ],
+        QUERY_TIMEOUT,
+    );
+    if response.ok {
+        validate_publish_status_response(response)
+    } else {
+        publish_error_for_transaction(response, transaction_id)
+    }
+}
+
+fn status_allows_publish_retry(response: &ServerCommandResult) -> bool {
+    matches!(response.details.get("status"), Some(Value::String(status)) if status == "failed")
+        && matches!(response.details.get("retryable"), Some(Value::Bool(true)))
+        && !matches!(
+            response.details.get("switchCompleted"),
+            Some(Value::Bool(true))
+        )
+        && response
+            .details
+            .get("attempt")
+            .and_then(Value::as_u64)
+            .is_some_and(|attempt| attempt < MAX_NETWORK_ATTEMPTS as u64)
+}
+
+fn publish_result_from_status(
+    response: ServerCommandResult,
+    request: &PublishContentRequest,
+) -> ServerCommandResult {
+    publish_result_from_status_with_sha(response, request, "")
+}
+
+fn publish_result_from_status_with_sha(
+    mut response: ServerCommandResult,
+    request: &PublishContentRequest,
+    expected_sha256: &str,
+) -> ServerCommandResult {
+    let transaction_matches = matches!(
+        response.details.get("transactionId"),
+        Some(Value::String(value)) if value == &request.transaction_id
+    );
+    let hash_matches = expected_sha256.is_empty()
+        || matches!(
+            response.details.get("bundleSha256"),
+            Some(Value::String(value)) if value == expected_sha256
+        );
+    let content_matches = ["contentType", "stableId"].iter().all(|key| {
+        let expected = if *key == "contentType" {
+            &request.content_type
+        } else {
+            &request.stable_id
+        };
+        match response.details.get(*key).and_then(Value::as_str) {
+            Some("") | None => true,
+            Some(value) => value == expected,
+        }
+    });
+    if !transaction_matches || !hash_matches || !content_matches {
+        return publish_error_for_transaction(
+            ServerCommandResult::error(
+                "publish",
+                "TRANSACTION_STATE_MISMATCH",
+                "The saved publish transaction does not match this content or Bundle.",
+                None,
+                None,
+            ),
+            &request.transaction_id,
+        );
+    }
+    response.action = "publish".to_owned();
+    if matches!(response.details.get("status"), Some(Value::String(status)) if status == "failed") {
+        response.ok = false;
+        response.code = response
+            .details
+            .get("errorCode")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| Some("PUBLISH_FAILED".to_owned()));
+    }
+    response
+}
+
+fn publish_error_for_transaction(
+    mut response: ServerCommandResult,
+    transaction_id: &str,
+) -> ServerCommandResult {
+    response.action = "publish".to_owned();
+    response.details.insert(
+        "transactionId".to_owned(),
+        Value::String(transaction_id.to_owned()),
+    );
+    if !response.ok {
+        let code = response
+            .code
+            .clone()
+            .unwrap_or_else(|| "PUBLISH_FAILED".to_owned());
+        let retryable = retryable_client_error(&code);
+        response
+            .details
+            .entry("errorCode".to_owned())
+            .or_insert_with(|| Value::String(code.clone()));
+        response
+            .details
+            .entry("retryable".to_owned())
+            .or_insert(Value::Bool(retryable));
+        response
+            .details
+            .entry("userMessage".to_owned())
+            .or_insert_with(|| Value::String(response.message.clone()));
+        response
+            .details
+            .entry("technicalSummary".to_owned())
+            .or_insert_with(|| Value::String(format!("{code}: {}", response.message)));
+        response
+            .details
+            .entry("failedStage".to_owned())
+            .or_insert_with(|| Value::String("client_connection".to_owned()));
+    }
+    response
+}
+
+fn retryable_client_error(code: &str) -> bool {
+    matches!(
+        code,
+        "SSH_UNAVAILABLE"
+            | "SSH_TIMEOUT"
+            | "SERVER_TIMEOUT"
+            | "SERVER_PROCESS_FAILED"
+            | "SERVER_COMMAND_FAILED"
+            | "SERVER_RESPONSE_INVALID"
+            | "UPLOAD_FAILED"
+            | "UPLOAD_TIMEOUT"
+            | "UPLOAD_PROCESS_FAILED"
+            | "STATUS_QUERY_FAILED"
+            | "STATUS_QUERY_TIMEOUT"
+            | "STATUS_QUERY_PROCESS_FAILED"
+            | "STATUS_QUERY_TOOL_UNAVAILABLE"
+    )
+}
+
+fn publish_result_is_ambiguous(response: &ServerCommandResult) -> bool {
+    !response.ok && response.code.as_deref().is_some_and(retryable_client_error)
+}
+
+fn query_publish_status_with_retry(transaction_id: &str) -> Option<ServerCommandResult> {
+    for attempt in 0..MAX_NETWORK_ATTEMPTS {
+        let response = query_publish_status(transaction_id);
+        if response.ok {
+            return Some(response);
+        }
+        if !retryable_client_error(response.code.as_deref().unwrap_or_default()) {
+            return None;
+        }
+        if attempt + 1 < MAX_NETWORK_ATTEMPTS {
+            thread::sleep(Duration::from_secs([1, 3][attempt.min(1)]));
+        }
+    }
+    None
 }
 
 fn validate_content_identity(content_type: &str, stable_id: &str) -> Result<(), &'static str> {
@@ -512,7 +934,7 @@ fn validate_portable_bundle(
     Ok(())
 }
 
-fn upload_delivery(
+fn upload_delivery_once(
     upload_root: &Path,
     bundle_size_bytes: u64,
 ) -> Result<(), Box<ServerCommandResult>> {
@@ -542,40 +964,151 @@ fn upload_delivery(
     Ok(())
 }
 
-fn secure_uploaded_delivery(job_id: &str) -> Result<(), Box<ServerCommandResult>> {
-    let commands = remote_upload_chmod_specs(job_id).ok_or_else(|| {
+fn upload_delivery_atomically(
+    app: &tauri::AppHandle,
+    timeline: &mut PublishTimeline,
+    job_id: &str,
+    upload_root: &Path,
+    bundle_file_name: &str,
+    bundle_sha256: &str,
+    bundle_size_bytes: u64,
+) -> Result<(), Box<ServerCommandResult>> {
+    let mut last_error = None;
+    for attempt in 1..=MAX_NETWORK_ATTEMPTS {
+        if matches!(
+            remote_bundle_state(job_id, bundle_file_name, bundle_sha256),
+            RemoteBundleState::Matches
+        ) {
+            return Ok(());
+        }
+        if attempt > 1 {
+            timeline.transition(
+                app,
+                job_id,
+                PublishTransition {
+                    stage: "uploading_bundle",
+                    message: "Retrying the interrupted Bundle upload",
+                    attempt,
+                    is_uploading: true,
+                    server_started: false,
+                    extra: Some(json!({ "retrying": true })),
+                },
+            );
+        }
+        let attempt_result = prepare_remote_partial_upload(job_id)
+            .and_then(|_| upload_delivery_once(upload_root, bundle_size_bytes))
+            .and_then(|_| secure_uploaded_partial_delivery(job_id))
+            .and_then(|_| finalize_remote_upload(job_id));
+        match attempt_result {
+            Ok(()) => match remote_bundle_state(job_id, bundle_file_name, bundle_sha256) {
+                RemoteBundleState::Matches => return Ok(()),
+                RemoteBundleState::Mismatch => {
+                    return Err(Box::new(ServerCommandResult::error(
+                        "publish",
+                        "REMOTE_BUNDLE_MISMATCH",
+                        "The uploaded Bundle SHA-256 does not match the local Bundle.",
+                        None,
+                        None,
+                    )));
+                }
+                RemoteBundleState::Missing => {
+                    last_error = Some(Box::new(ServerCommandResult::error(
+                        "publish",
+                        "UPLOAD_FAILED",
+                        "The uploaded Bundle was not installed atomically.",
+                        None,
+                        None,
+                    )));
+                }
+                RemoteBundleState::Unavailable(error) => last_error = Some(Box::new(error)),
+            },
+            Err(error) => {
+                if !retryable_client_error(error.code.as_deref().unwrap_or_default()) {
+                    return Err(error);
+                }
+                last_error = Some(error);
+            }
+        }
+        if attempt < MAX_NETWORK_ATTEMPTS {
+            thread::sleep(Duration::from_secs([1, 3][attempt - 1]));
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
         Box::new(ServerCommandResult::error(
             "publish",
-            "UPLOAD_PATH_INVALID",
-            "The uploaded Bundle path could not be derived safely.",
+            "UPLOAD_FAILED",
+            "The Bundle upload retry limit was reached.",
             None,
             None,
         ))
-    })?;
+    }))
+}
+
+fn prepare_remote_partial_upload(job_id: &str) -> Result<(), Box<ServerCommandResult>> {
+    let command = remote_upload_cleanup_spec(job_id).ok_or_else(upload_path_error)?;
+    run_fixed_upload_command(command, "UPLOAD_PREPARE")
+}
+
+fn secure_uploaded_partial_delivery(job_id: &str) -> Result<(), Box<ServerCommandResult>> {
+    let commands = remote_upload_chmod_specs(job_id).ok_or_else(upload_path_error)?;
     for command in commands {
-        let output = run_process(command).map_err(|failure| {
-            Box::new(process_failure("publish", "UPLOAD_PERMISSIONS", failure))
-        })?;
-        if output.stdout.truncated {
-            return Err(Box::new(ServerCommandResult::error(
-                "publish",
-                "OUTPUT_LIMIT_EXCEEDED",
-                "The upload permission command produced too much output.",
-                output.stderr.log_tail(),
-                None,
-            )));
-        }
-        if !output.status.success() {
-            return Err(Box::new(ServerCommandResult::error(
-                "publish",
-                "UPLOAD_PERMISSIONS_FAILED",
-                "The uploaded Bundle permissions could not be secured.",
-                output.stderr.log_tail(),
-                None,
-            )));
-        }
+        run_fixed_upload_command(command, "UPLOAD_PERMISSIONS")?;
     }
     Ok(())
+}
+
+fn finalize_remote_upload(job_id: &str) -> Result<(), Box<ServerCommandResult>> {
+    let command = remote_upload_finalize_spec(job_id).ok_or_else(upload_path_error)?;
+    run_fixed_upload_command(command, "UPLOAD_FINALIZE")
+}
+
+fn upload_path_error() -> Box<ServerCommandResult> {
+    Box::new(ServerCommandResult::error(
+        "publish",
+        "UPLOAD_PATH_INVALID",
+        "The uploaded Bundle path could not be derived safely.",
+        None,
+        None,
+    ))
+}
+
+fn run_fixed_upload_command(
+    command: CommandSpec,
+    phase: &str,
+) -> Result<(), Box<ServerCommandResult>> {
+    let output = run_process(command)
+        .map_err(|failure| Box::new(process_failure("publish", phase, failure)))?;
+    if output.stdout.truncated {
+        return Err(Box::new(ServerCommandResult::error(
+            "publish",
+            "OUTPUT_LIMIT_EXCEEDED",
+            "A fixed upload command produced too much output.",
+            output.stderr.log_tail(),
+            None,
+        )));
+    }
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr.bytes).to_ascii_lowercase();
+    let authentication_failed = stderr.contains("permission denied")
+        || stderr.contains("authentication failed")
+        || stderr.contains("publickey");
+    Err(Box::new(ServerCommandResult::error(
+        "publish",
+        if authentication_failed {
+            "SSH_AUTHENTICATION_FAILED"
+        } else {
+            "UPLOAD_FAILED"
+        },
+        if authentication_failed {
+            "SSH authentication failed; the upload was not retried."
+        } else {
+            "The fixed remote upload operation was interrupted."
+        },
+        output.stderr.log_tail(),
+        None,
+    )))
 }
 
 fn test_connection() -> ServerCommandResult {
@@ -648,6 +1181,9 @@ fn controller_json(action: &str, remote_args: &[&str], timeout: Duration) -> Ser
             response
         }
         Err(_) => {
+            if let Some(error) = legacy_controller_protocol_error(&output.stdout.bytes, action) {
+                return error;
+            }
             let ssh_unavailable = output.status.code() == Some(255);
             ServerCommandResult::error(
                 action,
@@ -670,6 +1206,32 @@ fn controller_json(action: &str, remote_args: &[&str], timeout: Duration) -> Ser
             )
         }
     }
+}
+
+fn legacy_controller_protocol_error(
+    bytes: &[u8],
+    expected_action: &str,
+) -> Option<ServerCommandResult> {
+    if !matches!(expected_action, "publish" | "publish-status") {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    let object = value.as_object()?;
+    let is_legacy_rejection = object.get("ok") == Some(&Value::Bool(false))
+        && object.get("action").and_then(Value::as_str) == Some("unknown")
+        && object.get("code").and_then(Value::as_str) == Some("INVALID_ARGUMENTS")
+        && object.get("message").and_then(Value::as_str) == Some("Unknown argument");
+    is_legacy_rejection.then(|| {
+        ServerCommandResult::error(
+            expected_action,
+            "CONTROLLER_UPGRADE_REQUIRED",
+            "The server controller must be upgraded before reliable publish transactions can be used.",
+            None,
+            Some(json!({
+                "requiredPublishProtocolVersion": REQUIRED_PUBLISH_PROTOCOL_VERSION,
+            })),
+        )
+    })
 }
 
 fn parse_server_json(bytes: &[u8], expected_action: &str) -> Result<ServerCommandResult, ()> {
@@ -775,7 +1337,13 @@ fn validate_status_response(response: ServerCommandResult) -> ServerCommandResul
                 Some(Value::Null) | None => true,
                 Some(_) => false,
             }
-        });
+        })
+        && match response.details.get("publishProtocolVersion") {
+            Some(value) => value
+                .as_u64()
+                .is_some_and(|version| (1..=100).contains(&version)),
+            None => true,
+        };
     if valid {
         response
     } else {
@@ -787,6 +1355,172 @@ fn validate_status_response(response: ServerCommandResult) -> ServerCommandResul
             None,
         )
     }
+}
+
+fn validate_publish_status_response(response: ServerCommandResult) -> ServerCommandResult {
+    let string_field = |key: &str, maximum: usize| {
+        response
+            .details
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.len() <= maximum && !value.chars().any(char::is_control))
+    };
+    let transaction_valid = response
+        .details
+        .get("transactionId")
+        .and_then(Value::as_str)
+        .is_some_and(is_publish_transaction_id);
+    let hash_valid = response
+        .details
+        .get("bundleSha256")
+        .and_then(Value::as_str)
+        .is_some_and(valid_bundle_sha256);
+    let status_valid = matches!(
+        response.details.get("status"),
+        Some(Value::String(value)) if matches!(value.as_str(), "running" | "failed" | "succeeded")
+    );
+    let stage_valid = response
+        .details
+        .get("stage")
+        .and_then(Value::as_str)
+        .is_some_and(valid_publish_stage);
+    let booleans_valid = ["retryable", "switchCompleted"]
+        .iter()
+        .all(|key| matches!(response.details.get(*key), Some(Value::Bool(_))));
+    let elapsed_valid = response
+        .details
+        .get("elapsedMs")
+        .and_then(Value::as_u64)
+        .is_some();
+    let attempt_valid = response
+        .details
+        .get("attempt")
+        .and_then(Value::as_u64)
+        .is_some_and(|attempt| (1..=100).contains(&attempt));
+    let summaries_valid = [
+        "errorCode",
+        "failedStage",
+        "contentType",
+        "stableId",
+        "releaseId",
+        "sourceMethod",
+        "userMessage",
+        "technicalSummary",
+    ]
+    .iter()
+    .all(|key| string_field(key, 16 * 1024));
+    let timestamps_valid = ["stageStartedAt", "startedAt", "updatedAt"]
+        .iter()
+        .all(|key| {
+            response
+                .details
+                .get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(valid_publish_timestamp)
+        });
+    let identity_valid = response
+        .details
+        .get("contentType")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.is_empty() || CONTENT_TYPES.contains(&value))
+        && response
+            .details
+            .get("stableId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.is_empty() || is_stable_id(value));
+    let failure_valid = response
+        .details
+        .get("failedStage")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.is_empty() || valid_publish_stage(value))
+        && response
+            .details
+            .get("errorCode")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.is_empty() || valid_error_code(value));
+    let source_method_valid = matches!(
+        response.details.get("sourceMethod").and_then(Value::as_str),
+        Some("" | "cache" | "archive" | "clone")
+    );
+    let commits_valid = ["contentCommit", "siteCommit", "releaseSha", "contentSha"]
+        .iter()
+        .all(|key| {
+            response
+                .details
+                .get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.is_empty() || valid_release_sha(value))
+        });
+    let url_valid = response
+        .details
+        .get("url")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.is_empty() || valid_https_url(value));
+    let durations_valid = response
+        .details
+        .get("stageDurationsMs")
+        .and_then(Value::as_object)
+        .is_some_and(|durations| {
+            durations
+                .iter()
+                .all(|(stage, value)| valid_publish_stage(stage) && value.as_u64().is_some())
+        });
+    if transaction_valid
+        && hash_valid
+        && status_valid
+        && stage_valid
+        && booleans_valid
+        && elapsed_valid
+        && attempt_valid
+        && summaries_valid
+        && timestamps_valid
+        && identity_valid
+        && failure_valid
+        && source_method_valid
+        && commits_valid
+        && url_valid
+        && durations_valid
+    {
+        response
+    } else {
+        ServerCommandResult::error(
+            "publish-status",
+            "SERVER_RESPONSE_INVALID",
+            "The publish transaction status has an invalid structure.",
+            None,
+            None,
+        )
+    }
+}
+
+fn valid_publish_stage(value: &str) -> bool {
+    matches!(
+        value,
+        "saving"
+            | "checking_server"
+            | "generating_bundle"
+            | "verifying_sha256"
+            | "uploading_bundle"
+            | "bundle_uploaded"
+            | "connecting_server"
+            | "verifying_bundle"
+            | "checking_content_commit"
+            | "checking_site_source_cache"
+            | "preparing_site_source"
+            | "preparing_dependencies"
+            | "validating_site"
+            | "building_site"
+            | "creating_release"
+            | "switching_release"
+            | "restarting_service"
+            | "verifying_production_url"
+            | "confirming_server_status"
+            | "succeeded"
+    )
+}
+
+fn valid_publish_timestamp(value: &str) -> bool {
+    value.len() <= 64 && OffsetDateTime::parse(value, &Rfc3339).is_ok()
 }
 
 fn valid_server_content_item(value: &Value) -> bool {
@@ -821,6 +1555,23 @@ fn validate_mutation_identity(
 ) -> ServerCommandResult {
     if !response.ok {
         return response;
+    }
+    if response.action == "publish" && response.details.contains_key("status") {
+        let mut status_response = response.clone();
+        status_response.action = "publish-status".to_owned();
+        let validated = validate_publish_status_response(status_response);
+        if !validated.ok {
+            return ServerCommandResult {
+                action: "publish".to_owned(),
+                ..validated
+            };
+        }
+        if !matches!(
+            response.details.get("status"),
+            Some(Value::String(status)) if status == "succeeded"
+        ) {
+            return response;
+        }
     }
     let content_type_matches = matches!(response.details.get("contentType"), Some(Value::String(value)) if value == content_type);
     let stable_id_matches = matches!(response.details.get("stableId"), Some(Value::String(value)) if value == stable_id);
@@ -874,7 +1625,10 @@ fn valid_release_sha(value: &str) -> bool {
 }
 
 fn valid_action(value: &str) -> bool {
-    matches!(value, "status" | "list" | "publish" | "delete")
+    matches!(
+        value,
+        "status" | "list" | "publish-status" | "publish" | "delete"
+    )
 }
 
 fn valid_error_code(value: &str) -> bool {
@@ -932,15 +1686,116 @@ fn ssh_command_spec(remote_args: &[&str], timeout: Duration) -> CommandSpec {
 }
 
 fn remote_delivery_path(job_id: &str) -> Option<String> {
-    let valid = job_id.len() == 32
-        && job_id
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
-    valid.then(|| format!("{REMOTE_INCOMING_DIRECTORY}/{job_id}"))
+    is_publish_transaction_id(job_id).then(|| format!("{REMOTE_INCOMING_DIRECTORY}/{job_id}"))
+}
+
+fn remote_partial_delivery_path(job_id: &str) -> Option<String> {
+    is_publish_transaction_id(job_id)
+        .then(|| format!("{REMOTE_INCOMING_DIRECTORY}/.partial-{job_id}"))
+}
+
+enum RemoteBundleState {
+    Matches,
+    Missing,
+    Mismatch,
+    Unavailable(ServerCommandResult),
+}
+
+fn remote_bundle_state(
+    job_id: &str,
+    bundle_file_name: &str,
+    expected_sha256: &str,
+) -> RemoteBundleState {
+    if !valid_remote_bundle_file_name(bundle_file_name) || !valid_bundle_sha256(expected_sha256) {
+        return RemoteBundleState::Unavailable(ServerCommandResult::error(
+            "publish",
+            "UPLOAD_PATH_INVALID",
+            "The remote Bundle path or SHA-256 is invalid.",
+            None,
+            None,
+        ));
+    }
+    let Some(remote_delivery) = remote_delivery_path(job_id) else {
+        return RemoteBundleState::Unavailable(*upload_path_error());
+    };
+    let remote_bundle = format!("{remote_delivery}/{bundle_file_name}");
+    let output = match run_process(ssh_command_spec(
+        &["/usr/bin/sha256sum", "--", &remote_bundle],
+        QUERY_TIMEOUT,
+    )) {
+        Ok(output) => output,
+        Err(failure) => {
+            return RemoteBundleState::Unavailable(process_failure(
+                "publish",
+                "STATUS_QUERY",
+                failure,
+            ));
+        }
+    };
+    if output.status.success() && !output.stdout.truncated {
+        let stdout = String::from_utf8_lossy(&output.stdout.bytes);
+        let Some(actual) = stdout.split_whitespace().next() else {
+            return RemoteBundleState::Unavailable(ServerCommandResult::error(
+                "publish",
+                "SERVER_RESPONSE_INVALID",
+                "The remote Bundle SHA-256 response is invalid.",
+                output.stderr.log_tail(),
+                None,
+            ));
+        };
+        return if actual.eq_ignore_ascii_case(expected_sha256) {
+            RemoteBundleState::Matches
+        } else {
+            RemoteBundleState::Mismatch
+        };
+    }
+    if output.status.code() == Some(1) {
+        return RemoteBundleState::Missing;
+    }
+    RemoteBundleState::Unavailable(ServerCommandResult::error(
+        "publish",
+        if output.status.code() == Some(255) {
+            "SSH_UNAVAILABLE"
+        } else {
+            "STATUS_QUERY_FAILED"
+        },
+        "The remote Bundle status could not be checked.",
+        output.stderr.log_tail(),
+        None,
+    ))
+}
+
+fn valid_remote_bundle_file_name(value: &str) -> bool {
+    value.len() <= 512
+        && value.ends_with(".bundle")
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'.'
+        })
+}
+
+fn valid_bundle_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn remote_upload_cleanup_spec(job_id: &str) -> Option<CommandSpec> {
+    let partial = remote_partial_delivery_path(job_id)?;
+    Some(ssh_command_spec(
+        &["/usr/bin/rm", "-rf", "--", &partial],
+        UPLOAD_PERMISSIONS_TIMEOUT,
+    ))
+}
+
+fn remote_upload_finalize_spec(job_id: &str) -> Option<CommandSpec> {
+    let partial = remote_partial_delivery_path(job_id)?;
+    let delivery = remote_delivery_path(job_id)?;
+    Some(ssh_command_spec(
+        &["/usr/bin/mv", "-T", "--", &partial, &delivery],
+        UPLOAD_PERMISSIONS_TIMEOUT,
+    ))
 }
 
 fn remote_upload_chmod_specs(job_id: &str) -> Option<[CommandSpec; 2]> {
-    let remote_delivery = remote_delivery_path(job_id)?;
+    let remote_delivery = remote_partial_delivery_path(job_id)?;
     let remote_artifacts = format!("{remote_delivery}/*");
     Some([
         ssh_command_spec(
@@ -1149,13 +2004,16 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        bundle_matches_request, parse_server_json, remote_upload_chmod_specs, scp_command_spec,
-        ssh_command_spec, upload_timeout, valid_https_url, validate_content_identity,
-        validate_list_response, validate_mutation_identity, validate_status_response,
-        CapturedOutput, ServerCommandResult,
+        bundle_matches_request, is_publish_transaction_id, legacy_controller_protocol_error,
+        parse_server_json, publish_error_for_transaction, publish_result_from_status,
+        remote_upload_chmod_specs, remote_upload_cleanup_spec, remote_upload_finalize_spec,
+        retryable_client_error, scp_command_spec, ssh_command_spec, status_allows_publish_retry,
+        upload_timeout, valid_https_url, validate_content_identity, validate_list_response,
+        validate_mutation_identity, validate_publish_request, validate_publish_status_response,
+        validate_status_response, CapturedOutput, PublishContentRequest, ServerCommandResult,
     };
     use crate::repository::RepositoryBundlePreflightResult;
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::{ffi::OsString, path::Path, time::Duration};
 
     fn preflight(branch: &str, changed_files: Vec<&str>) -> RepositoryBundlePreflightResult {
@@ -1172,6 +2030,55 @@ mod tests {
             conflicts: Vec::new(),
             ready: true,
         }
+    }
+
+    fn publish_request() -> PublishContentRequest {
+        PublishContentRequest {
+            repository_path: "C:\\fake".to_owned(),
+            content_type: "science-article".to_owned(),
+            stable_id: "example-id".to_owned(),
+            transaction_id: "0123456789abcdef0123456789abcdef".to_owned(),
+        }
+    }
+
+    fn publish_status(
+        status: &str,
+        stage: &str,
+        retryable: bool,
+        attempt: u64,
+        switch_completed: bool,
+    ) -> ServerCommandResult {
+        ServerCommandResult::success(
+            "publish-status",
+            "Publish transaction status",
+            Some(json!({
+                "transactionId": "0123456789abcdef0123456789abcdef",
+                "bundleSha256": "A".repeat(64),
+                "contentCommit": "b".repeat(40),
+                "siteCommit": "c".repeat(40),
+                "status": status,
+                "stage": stage,
+                "failedStage": if status == "failed" { stage } else { "" },
+                "stageStartedAt": "2026-07-29T12:00:01.000Z",
+                "startedAt": "2026-07-29T12:00:00.000Z",
+                "updatedAt": "2026-07-29T12:00:02.000Z",
+                "elapsedMs": 2_000,
+                "attempt": attempt,
+                "retryable": retryable,
+                "errorCode": if status == "failed" { "SITE_SOURCE_NETWORK_FAILED" } else { "" },
+                "userMessage": "Publish transaction status",
+                "technicalSummary": "",
+                "releaseId": "20260729T120002Z-example",
+                "releaseSha": "c".repeat(40),
+                "contentSha": "b".repeat(40),
+                "contentType": "science-article",
+                "stableId": "example-id",
+                "url": "https://example.invalid/zh/example-id",
+                "switchCompleted": switch_completed,
+                "sourceMethod": "cache",
+                "stageDurationsMs": { "verifying_bundle": 250 }
+            })),
+        )
     }
 
     #[test]
@@ -1284,6 +2191,17 @@ mod tests {
     }
 
     #[test]
+    fn identifies_the_legacy_controller_transaction_rejection() {
+        let bytes = br#"{"ok":false,"action":"unknown","code":"INVALID_ARGUMENTS","message":"Unknown argument"}"#;
+        let error = legacy_controller_protocol_error(bytes, "publish-status")
+            .expect("legacy transaction command is recognized");
+        assert!(!error.ok);
+        assert_eq!(error.action, "publish-status");
+        assert_eq!(error.code.as_deref(), Some("CONTROLLER_UPGRADE_REQUIRED"));
+        assert!(legacy_controller_protocol_error(bytes, "status").is_none());
+    }
+
+    #[test]
     fn validates_list_items_before_returning_them_to_the_frontend() {
         let response = ServerCommandResult::success(
             "list",
@@ -1318,6 +2236,7 @@ mod tests {
                 "contentRepositoryReady": true,
                 "serviceActive": true,
                 "healthy": false,
+                "publishProtocolVersion": 1,
                 "currentRelease": "/srv/algae-atlas/releases/example",
                 "previousRelease": null
             })),
@@ -1337,6 +2256,135 @@ mod tests {
             })),
         );
         assert!(!validate_status_response(incomplete).ok);
+
+        let invalid_protocol = ServerCommandResult::success(
+            "status",
+            "Checked",
+            Some(json!({
+                "ready": true,
+                "contentRepositoryReady": true,
+                "serviceActive": true,
+                "healthy": true,
+                "publishProtocolVersion": "1"
+            })),
+        );
+        assert!(!validate_status_response(invalid_protocol).ok);
+    }
+
+    #[test]
+    fn validates_publish_status_and_rejects_unknown_or_incomplete_stages() {
+        assert!(
+            validate_publish_status_response(publish_status(
+                "running",
+                "building_site",
+                false,
+                1,
+                false,
+            ))
+            .ok
+        );
+
+        let mut unknown = publish_status("running", "unknown_stage", false, 1, false);
+        unknown
+            .details
+            .insert("stageDurationsMs".to_owned(), json!({ "unknown_stage": 1 }));
+        assert!(!validate_publish_status_response(unknown).ok);
+
+        let mut missing_timestamp = publish_status("running", "building_site", false, 1, false);
+        missing_timestamp.details.remove("updatedAt");
+        assert!(!validate_publish_status_response(missing_timestamp).ok);
+    }
+
+    #[test]
+    fn transaction_validation_and_retry_ceiling_are_bounded() {
+        assert!(is_publish_transaction_id(
+            "0123456789abcdef0123456789abcdef"
+        ));
+        assert!(validate_publish_request(&publish_request()).is_ok());
+        for invalid in [
+            "0123456789ABCDEF0123456789ABCDEF",
+            "0123456789abcdef",
+            "../0123456789abcdef0123456789abc",
+        ] {
+            assert!(!is_publish_transaction_id(invalid));
+        }
+
+        assert!(status_allows_publish_retry(&publish_status(
+            "failed",
+            "preparing_site_source",
+            true,
+            2,
+            false,
+        )));
+        assert!(!status_allows_publish_retry(&publish_status(
+            "failed",
+            "preparing_site_source",
+            true,
+            3,
+            false,
+        )));
+        assert!(!status_allows_publish_retry(&publish_status(
+            "failed",
+            "switching_release",
+            true,
+            1,
+            true,
+        )));
+    }
+
+    #[test]
+    fn classifies_transient_transport_errors_without_retrying_auth_or_validation() {
+        for retryable in [
+            "SSH_TIMEOUT",
+            "UPLOAD_FAILED",
+            "STATUS_QUERY_TIMEOUT",
+            "SERVER_PROCESS_FAILED",
+        ] {
+            assert!(retryable_client_error(retryable));
+        }
+        for deterministic in [
+            "SSH_AUTHENTICATION_FAILED",
+            "REMOTE_BUNDLE_MISMATCH",
+            "INVALID_BUNDLE",
+            "BUILD_FAILED",
+        ] {
+            assert!(!retryable_client_error(deterministic));
+        }
+
+        let transient = publish_error_for_transaction(
+            ServerCommandResult::error("publish", "SSH_TIMEOUT", "SSH timed out", None, None),
+            "0123456789abcdef0123456789abcdef",
+        );
+        assert_eq!(transient.details.get("retryable"), Some(&json!(true)));
+        let deterministic = publish_error_for_transaction(
+            ServerCommandResult::error(
+                "publish",
+                "INVALID_BUNDLE",
+                "Bundle is invalid",
+                None,
+                None,
+            ),
+            "0123456789abcdef0123456789abcdef",
+        );
+        assert_eq!(deterministic.details.get("retryable"), Some(&json!(false)));
+    }
+
+    #[test]
+    fn status_results_preserve_identity_and_refuse_mismatched_transactions() {
+        let response = publish_result_from_status(
+            publish_status("succeeded", "succeeded", false, 1, true),
+            &publish_request(),
+        );
+        assert!(response.ok);
+        assert_eq!(response.action, "publish");
+
+        let mut mismatch = publish_status("succeeded", "succeeded", false, 1, true);
+        mismatch
+            .details
+            .insert("transactionId".to_owned(), Value::String("f".repeat(32)));
+        let rejected = publish_result_from_status(mismatch, &publish_request());
+        assert!(!rejected.ok);
+        assert_eq!(rejected.code.as_deref(), Some("TRANSACTION_STATE_MISMATCH"));
     }
 
     #[test]
@@ -1445,10 +2493,12 @@ mod tests {
     }
 
     #[test]
-    fn uploaded_delivery_permissions_use_fixed_commands_and_uuid_derived_paths() {
+    fn uploaded_delivery_commands_use_fixed_partial_and_final_transaction_paths() {
         let job_id = "0123456789abcdef0123456789abcdef";
         let [directory, artifacts] =
-            remote_upload_chmod_specs(job_id).expect("accepts a lowercase UUID job id");
+            remote_upload_chmod_specs(job_id).expect("accepts a lowercase transaction id");
+        let remote_partial =
+            format!("/home/ubuntu/algae-content-workbench/incoming/.partial-{job_id}");
         let remote_delivery = format!("/home/ubuntu/algae-content-workbench/incoming/{job_id}");
 
         assert_eq!(directory.program, "ssh");
@@ -1457,17 +2507,35 @@ mod tests {
             OsString::from("/usr/bin/chmod"),
             OsString::from("0700"),
             OsString::from("--"),
-            OsString::from(&remote_delivery),
+            OsString::from(&remote_partial),
         ]));
         assert!(artifacts.args.ends_with(&[
             OsString::from("algae-server"),
             OsString::from("/usr/bin/chmod"),
             OsString::from("0600"),
             OsString::from("--"),
-            OsString::from(format!("{remote_delivery}/*")),
+            OsString::from(format!("{remote_partial}/*")),
         ]));
         assert!(!directory.args.iter().any(|argument| argument == "sudo"));
         assert!(!artifacts.args.iter().any(|argument| argument == "sudo"));
+
+        let finalize = remote_upload_finalize_spec(job_id).expect("finalize spec");
+        assert!(finalize.args.ends_with(&[
+            OsString::from("algae-server"),
+            OsString::from("/usr/bin/mv"),
+            OsString::from("-T"),
+            OsString::from("--"),
+            OsString::from(&remote_partial),
+            OsString::from(&remote_delivery),
+        ]));
+        let cleanup = remote_upload_cleanup_spec(job_id).expect("cleanup spec");
+        assert!(cleanup.args.ends_with(&[
+            OsString::from("algae-server"),
+            OsString::from("/usr/bin/rm"),
+            OsString::from("-rf"),
+            OsString::from("--"),
+            OsString::from(&remote_partial),
+        ]));
 
         for invalid in [
             "0123456789ABCDEF0123456789ABCDEF",

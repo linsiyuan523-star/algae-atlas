@@ -20,6 +20,7 @@ import {
 } from "../forms/team-news";
 import { batchOneFormAdapters } from "../forms/batch-one";
 import type { MediaApi, StagedImage } from "../media";
+import type { ServerPublishProgress } from "../server";
 
 function makeDraft(titleZh = "初始标题"): Draft {
   const prepared = createSharedRecordDraft(
@@ -55,6 +56,36 @@ function makeDraft(titleZh = "初始标题"): Draft {
 }
 
 const draft = makeDraft();
+const publishStorageKey = `algae-content-workbench:publish:${draft.draftId}`;
+
+function makePublishProgress(
+  overrides: Partial<ServerPublishProgress> = {},
+): ServerPublishProgress {
+  const now = new Date().toISOString();
+  return {
+    transactionId: "a".repeat(32),
+    status: "running",
+    stage: "building_site",
+    message: "正在构建网站",
+    startedAt: now,
+    clientStartedAt: now,
+    stageStartedAt: now,
+    updatedAt: now,
+    elapsedMs: 0,
+    stageElapsedMs: 0,
+    attempt: 1,
+    retryable: false,
+    isUploading: false,
+    serverStarted: true,
+    safeToCancel: false,
+    safeToRetry: false,
+    ...overrides,
+  };
+}
+
+function storePublishProgress(progress: ServerPublishProgress) {
+  localStorage.setItem(publishStorageKey, JSON.stringify(progress));
+}
 
 function makeDirectPublishableDraft(): Draft {
   const recordDraft = structuredClone(draft.recordDraft) as Record<string, unknown>;
@@ -480,6 +511,8 @@ test("uses the direct single-user action order without reviewer inputs", async (
     }),
     {
       operatorId: SINGLE_USER_DIRECT_OPERATOR_ID,
+      transactionId: expect.stringMatching(/^[0-9a-f]{32}$/),
+      resume: false,
       onProgress: expect.any(Function),
     },
   );
@@ -508,7 +541,9 @@ test("uses the direct single-user action order without reviewer inputs", async (
   expect(vi.mocked(onPublishToServer).mock.invocationCallOrder[0]).toBeLessThan(
     vi.mocked(api.saveDraft).mock.invocationCallOrder[1]!,
   );
-  expect(await screen.findByText("发布成功")).toBeVisible();
+  await waitFor(() =>
+    expect(document.querySelector(".publish-result")).toHaveTextContent("发布成功"),
+  );
   expect(
     document.querySelector('time[datetime="2026-07-26T09:00:00Z"]'),
   ).not.toBeNull();
@@ -548,6 +583,269 @@ test("keeps a draft unpublished when direct server publishing fails", async () =
   expect(ordinaryRecord.locales.zh.state).toBe("draft");
   await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_DELAY_MS + 50));
   expect(api.saveDraft).toHaveBeenCalledOnce();
+});
+
+test("shows server stages, retry count, and upload completion timing", () => {
+  const now = Date.now();
+  storePublishProgress(
+    makePublishProgress({
+      clientStartedAt: new Date(now - 16_700).toISOString(),
+      stageStartedAt: new Date(now - 8_400).toISOString(),
+      updatedAt: new Date(now).toISOString(),
+      elapsedMs: 16_700,
+      stageElapsedMs: 8_400,
+      attempt: 2,
+      retrying: true,
+      bundleUploadedAt: new Date(now - 10_000).toISOString(),
+      bundleUploadDurationMs: 3_200,
+      stageDurationsMs: {
+        uploading_bundle: 3_200,
+        verifying_bundle: 450,
+      },
+    }),
+  );
+
+  render(<DraftsPage api={createApi()} initialDraft={draft} />);
+
+  const panel = screen.getByRole("region", { name: "当前发布状态" });
+  expect(within(panel).getAllByText("构建网站").length).toBeGreaterThan(0);
+  expect(within(panel).getByText("正在重试")).toBeVisible();
+  expect(within(panel).getByText(/Bundle 已上传，用时 3\.2 秒/)).toBeVisible();
+  expect(within(panel).getByText("重试次数").closest("div")).toHaveTextContent("1");
+  expect(within(panel).getByText("文件上传").closest("div")).toHaveTextContent(
+    "未在上传",
+  );
+  expect(within(panel).getByText("服务器处理").closest("div")).toHaveTextContent(
+    "已开始",
+  );
+});
+
+test("reuses a retryable transaction without repeating the initial draft save", async () => {
+  const user = userEvent.setup();
+  const transactionId = "b".repeat(32);
+  const api = createApi();
+  const publishable = makeDirectPublishableDraft();
+  api.listDrafts = vi.fn(async () => [publishable]);
+  storePublishProgress(
+    makePublishProgress({
+      transactionId,
+      status: "failed",
+      stage: "preparing_site_source",
+      failedStage: "preparing_site_source",
+      message: "源码网络暂时不可用",
+      retryable: true,
+      safeToRetry: true,
+      serverStarted: true,
+    }),
+  );
+  const onPublishToServer = vi.fn(async () => ({ message: "发布成功" }));
+
+  render(
+    <DraftsPage
+      api={api}
+      initialDraft={publishable}
+      onPublishToServer={onPublishToServer}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "安全重试" }));
+  await waitFor(() => expect(onPublishToServer).toHaveBeenCalledOnce());
+  expect(onPublishToServer).toHaveBeenCalledWith(
+    expect.any(Object),
+    expect.objectContaining({ transactionId, resume: true }),
+  );
+  await waitFor(() => expect(api.saveDraft).toHaveBeenCalledOnce());
+});
+
+test("queries and restores a running transaction after the editor reopens", async () => {
+  const transactionId = "c".repeat(32);
+  storePublishProgress(makePublishProgress({ transactionId }));
+  const succeeded = makePublishProgress({
+    transactionId,
+    status: "succeeded",
+    stage: "succeeded",
+    message: "发布成功",
+    elapsedMs: 28_000,
+    releaseId: "20260729T120000Z-example",
+    contentCommit: "d".repeat(40),
+    siteCommit: "e".repeat(40),
+  });
+  const onQueryPublishStatus = vi.fn(async () => succeeded);
+  const onPublishToServer = vi.fn();
+
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      onPublishToServer={onPublishToServer}
+      onQueryPublishStatus={onQueryPublishStatus}
+    />,
+  );
+
+  await waitFor(() =>
+    expect(onQueryPublishStatus).toHaveBeenCalledWith(
+      transactionId,
+      expect.any(Function),
+    ),
+  );
+  await waitFor(() =>
+    expect(document.querySelector(".publish-result")).toHaveTextContent(
+      "20260729T120000Z-example",
+    ),
+  );
+  expect(onPublishToServer).not.toHaveBeenCalled();
+});
+
+test("turns a failed recovery query into a stopped retryable status", async () => {
+  const transactionId = "d".repeat(32);
+  storePublishProgress(
+    makePublishProgress({
+      transactionId,
+      stage: "saving",
+      message: "正在保存当前内容",
+      serverStarted: false,
+      safeToCancel: true,
+    }),
+  );
+  const onQueryPublishStatus = vi.fn(async () => {
+    throw new Error("status connection failed");
+  });
+
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      onQueryPublishStatus={onQueryPublishStatus}
+    />,
+  );
+
+  const panel = await screen.findByRole("region", { name: "当前发布状态" });
+  await waitFor(() =>
+    expect(within(panel).getAllByText("确认服务器实际状态").length).toBeGreaterThan(0),
+  );
+  expect(within(panel).getAllByText(/可安全重试/).length).toBeGreaterThan(0);
+  const stored = JSON.parse(localStorage.getItem(publishStorageKey) ?? "{}");
+  expect(stored).toMatchObject({
+    transactionId,
+    status: "failed",
+    stage: "confirming_server_status",
+    errorCode: "STATUS_QUERY_FAILED",
+    retryable: true,
+  });
+});
+
+test("allows an abandoned pre-server transaction to be ended locally", async () => {
+  const user = userEvent.setup();
+  storePublishProgress(
+    makePublishProgress({
+      stage: "saving",
+      message: "正在保存当前内容",
+      serverStarted: false,
+      safeToCancel: true,
+    }),
+  );
+
+  render(<DraftsPage api={createApi()} initialDraft={draft} />);
+
+  await user.click(screen.getByRole("button", { name: "结束本地事务" }));
+  expect(screen.queryByRole("region", { name: "当前发布状态" })).not.toBeInTheDocument();
+  expect(localStorage.getItem(publishStorageKey)).toBeNull();
+});
+
+test("never offers local termination after server processing has started", async () => {
+  const transactionId = "e".repeat(32);
+  storePublishProgress(
+    makePublishProgress({
+      transactionId,
+      stage: "building_site",
+      serverStarted: true,
+      safeToCancel: false,
+    }),
+  );
+  const onQueryPublishStatus = vi.fn(
+    async (
+      _transactionId: string,
+      onFailure?: (progress: ServerPublishProgress) => void,
+    ) => {
+      onFailure?.(
+        makePublishProgress({
+          transactionId,
+          status: "failed",
+          stage: "checking_server",
+          message: "控制器版本不兼容",
+          failedStage: "checking_server",
+          errorCode: "CONTROLLER_UPGRADE_REQUIRED",
+          retryable: false,
+          serverStarted: false,
+          safeToCancel: false,
+        }),
+      );
+      throw new Error("控制器版本不兼容");
+    },
+  );
+
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      onQueryPublishStatus={onQueryPublishStatus}
+    />,
+  );
+
+  await waitFor(() =>
+    expect(screen.getByRole("region", { name: "当前发布状态" })).toHaveTextContent(
+      "控制器版本不兼容",
+    ),
+  );
+  expect(screen.queryByRole("button", { name: "结束本地事务" })).not.toBeInTheDocument();
+  const stored = JSON.parse(localStorage.getItem(publishStorageKey) ?? "{}");
+  expect(stored.serverStarted).toBe(true);
+});
+
+test("blocks nonretryable transactions and duplicate publish clicks", async () => {
+  const nonretryable = makePublishProgress({
+    status: "failed",
+    stage: "validating_site",
+    failedStage: "validating_site",
+    message: "内容校验失败",
+    retryable: false,
+  });
+  storePublishProgress(nonretryable);
+  const blockedPublish = vi.fn();
+  const firstRender = render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={makeDirectPublishableDraft()}
+      onPublishToServer={blockedPublish}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "需要人工处理" })).toBeDisabled();
+  expect(blockedPublish).not.toHaveBeenCalled();
+  firstRender.unmount();
+  localStorage.clear();
+
+  let resolvePublish: ((value: DirectPublishResult) => void) | undefined;
+  const pendingPublish = new Promise<DirectPublishResult>((resolve) => {
+    resolvePublish = resolve;
+  });
+  const onPublishToServer = vi.fn(() => pendingPublish);
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={makeDirectPublishableDraft()}
+      onPublishToServer={onPublishToServer}
+    />,
+  );
+  const publishButton = screen.getByRole("button", { name: "发布到服务器" });
+  await act(async () => {
+    publishButton.click();
+    publishButton.click();
+  });
+  await waitFor(() => expect(onPublishToServer).toHaveBeenCalledOnce());
+  await act(async () => {
+    resolvePublish?.({ message: "发布成功" });
+    await pendingPublish;
+  });
 });
 
 test("shows update, online view, and server delete actions for a published ID", async () => {

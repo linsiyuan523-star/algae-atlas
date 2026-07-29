@@ -58,6 +58,7 @@ pub fn run() {
             server::test_server_connection,
             server::get_server_status,
             server::list_server_content,
+            server::get_publish_status,
             server::publish_content_to_server,
             server::delete_server_content,
             onboarding::onboarding_status,
