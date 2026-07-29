@@ -35,6 +35,7 @@ const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const LOCAL_VALIDATOR_TIMEOUT: Duration = Duration::from_secs(90);
 const PUBLISH_PROGRESS_EVENT: &str = "server-publish-progress";
 const MAX_NETWORK_ATTEMPTS: usize = 3;
+const REQUIRED_PUBLISH_PROTOCOL_VERSION: u64 = 1;
 
 const CONTENT_TYPES: [&str; 11] = [
     "team-news",
@@ -1180,6 +1181,9 @@ fn controller_json(action: &str, remote_args: &[&str], timeout: Duration) -> Ser
             response
         }
         Err(_) => {
+            if let Some(error) = legacy_controller_protocol_error(&output.stdout.bytes, action) {
+                return error;
+            }
             let ssh_unavailable = output.status.code() == Some(255);
             ServerCommandResult::error(
                 action,
@@ -1202,6 +1206,32 @@ fn controller_json(action: &str, remote_args: &[&str], timeout: Duration) -> Ser
             )
         }
     }
+}
+
+fn legacy_controller_protocol_error(
+    bytes: &[u8],
+    expected_action: &str,
+) -> Option<ServerCommandResult> {
+    if !matches!(expected_action, "publish" | "publish-status") {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    let object = value.as_object()?;
+    let is_legacy_rejection = object.get("ok") == Some(&Value::Bool(false))
+        && object.get("action").and_then(Value::as_str) == Some("unknown")
+        && object.get("code").and_then(Value::as_str) == Some("INVALID_ARGUMENTS")
+        && object.get("message").and_then(Value::as_str) == Some("Unknown argument");
+    is_legacy_rejection.then(|| {
+        ServerCommandResult::error(
+            expected_action,
+            "CONTROLLER_UPGRADE_REQUIRED",
+            "The server controller must be upgraded before reliable publish transactions can be used.",
+            None,
+            Some(json!({
+                "requiredPublishProtocolVersion": REQUIRED_PUBLISH_PROTOCOL_VERSION,
+            })),
+        )
+    })
 }
 
 fn parse_server_json(bytes: &[u8], expected_action: &str) -> Result<ServerCommandResult, ()> {
@@ -1307,7 +1337,13 @@ fn validate_status_response(response: ServerCommandResult) -> ServerCommandResul
                 Some(Value::Null) | None => true,
                 Some(_) => false,
             }
-        });
+        })
+        && match response.details.get("publishProtocolVersion") {
+            Some(value) => value
+                .as_u64()
+                .is_some_and(|version| (1..=100).contains(&version)),
+            None => true,
+        };
     if valid {
         response
     } else {
@@ -1968,11 +2004,11 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        bundle_matches_request, is_publish_transaction_id, parse_server_json,
-        publish_error_for_transaction, publish_result_from_status, remote_upload_chmod_specs,
-        remote_upload_cleanup_spec, remote_upload_finalize_spec, retryable_client_error,
-        scp_command_spec, ssh_command_spec, status_allows_publish_retry, upload_timeout,
-        valid_https_url, validate_content_identity, validate_list_response,
+        bundle_matches_request, is_publish_transaction_id, legacy_controller_protocol_error,
+        parse_server_json, publish_error_for_transaction, publish_result_from_status,
+        remote_upload_chmod_specs, remote_upload_cleanup_spec, remote_upload_finalize_spec,
+        retryable_client_error, scp_command_spec, ssh_command_spec, status_allows_publish_retry,
+        upload_timeout, valid_https_url, validate_content_identity, validate_list_response,
         validate_mutation_identity, validate_publish_request, validate_publish_status_response,
         validate_status_response, CapturedOutput, PublishContentRequest, ServerCommandResult,
     };
@@ -2155,6 +2191,17 @@ mod tests {
     }
 
     #[test]
+    fn identifies_the_legacy_controller_transaction_rejection() {
+        let bytes = br#"{"ok":false,"action":"unknown","code":"INVALID_ARGUMENTS","message":"Unknown argument"}"#;
+        let error = legacy_controller_protocol_error(bytes, "publish-status")
+            .expect("legacy transaction command is recognized");
+        assert!(!error.ok);
+        assert_eq!(error.action, "publish-status");
+        assert_eq!(error.code.as_deref(), Some("CONTROLLER_UPGRADE_REQUIRED"));
+        assert!(legacy_controller_protocol_error(bytes, "status").is_none());
+    }
+
+    #[test]
     fn validates_list_items_before_returning_them_to_the_frontend() {
         let response = ServerCommandResult::success(
             "list",
@@ -2189,6 +2236,7 @@ mod tests {
                 "contentRepositoryReady": true,
                 "serviceActive": true,
                 "healthy": false,
+                "publishProtocolVersion": 1,
                 "currentRelease": "/srv/algae-atlas/releases/example",
                 "previousRelease": null
             })),
@@ -2208,6 +2256,19 @@ mod tests {
             })),
         );
         assert!(!validate_status_response(incomplete).ok);
+
+        let invalid_protocol = ServerCommandResult::success(
+            "status",
+            "Checked",
+            Some(json!({
+                "ready": true,
+                "contentRepositoryReady": true,
+                "serviceActive": true,
+                "healthy": true,
+                "publishProtocolVersion": "1"
+            })),
+        );
+        assert!(!validate_status_response(invalid_protocol).ok);
     }
 
     #[test]

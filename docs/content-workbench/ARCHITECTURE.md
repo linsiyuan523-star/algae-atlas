@@ -134,6 +134,11 @@ shape, clean source, build, release, rollback, and production URL gates remain
 unchanged. The React layer combines Tauri progress events with bounded status
 polling, stores the latest transaction per draft locally, prevents a second
 in-flight publication, and exposes stage, retry, duration, and recovery state.
+Before creating the local publication commit, the desktop requires
+`status.publishProtocolVersion >= 1`; an older controller is reported as an
+explicit non-retryable compatibility error. A failed recovery query also moves
+the persisted client transaction out of `running`, and a transaction that has
+not uploaded or started server work can be ended locally.
 
 ## 3. Trust boundaries
 

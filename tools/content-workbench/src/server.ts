@@ -52,6 +52,7 @@ export type ServerStatusData = {
   contentRepositoryReady: boolean;
   serviceActive: boolean;
   healthy: boolean;
+  publishProtocolVersion?: number;
   currentRelease?: string | null;
   previousRelease?: string | null;
 };

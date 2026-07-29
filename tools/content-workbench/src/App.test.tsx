@@ -134,6 +134,7 @@ function createServerApi(): ServerApi {
       contentRepositoryReady: true,
       serviceActive: true,
       healthy: true,
+      publishProtocolVersion: 1,
     })),
     listContent: vi.fn(async () => ({
       ok: true,
@@ -751,6 +752,7 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
   );
 
   await waitFor(() => expect(serverApi.testConnection).toHaveBeenCalled());
+  await waitFor(() => expect(serverApi.getStatus).toHaveBeenCalled());
   await waitFor(() => expect(repositoryApi.dryRun).toHaveBeenCalledOnce());
   await waitFor(() => expect(repositoryApi.commit).toHaveBeenCalledOnce());
   await waitFor(() => expect(serverApi.publishContent).toHaveBeenCalledOnce());
@@ -789,6 +791,9 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
     `content/direct-${publishRequest?.transactionId}-fictional-draft`,
   );
   expect(vi.mocked(serverApi.testConnection).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(serverApi.getStatus).mock.invocationCallOrder[0]!,
+  );
+  expect(vi.mocked(serverApi.getStatus).mock.invocationCallOrder[0]).toBeLessThan(
     vi.mocked(repositoryApi.dryRun).mock.invocationCallOrder[0]!,
   );
   expect(vi.mocked(repositoryApi.dryRun).mock.invocationCallOrder[0]).toBeLessThan(
@@ -801,6 +806,53 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
     expect(document.querySelector(".publish-result")).toHaveTextContent("Published"),
   );
   expect(screen.getByRole("button", { name: "保存并更新服务器" })).toBeEnabled();
+});
+
+test("rejects an old controller before creating a local publish commit", async () => {
+  const user = userEvent.setup();
+  const publishable = makePublishableDraft();
+  const draftApi = createApi();
+  draftApi.listDrafts = vi.fn(async () => [publishable]);
+  draftApi.openDraft = vi.fn(async () => publishable);
+  const onboardingApi = createOnboardingApi();
+  onboardingApi.status = vi.fn(async () => onboardingStatus(true));
+  const repositoryApi = createRepositoryApi();
+  const serverApi = createServerApi();
+  serverApi.getStatus = vi.fn(async () => ({
+    ok: true,
+    action: "status",
+    message: "Legacy controller is healthy",
+    ready: true,
+    contentRepositoryReady: true,
+    serviceActive: true,
+    healthy: true,
+  }));
+
+  render(
+    <App
+      draftApi={draftApi}
+      onboardingApi={onboardingApi}
+      repositoryApi={repositoryApi}
+      serverApi={serverApi}
+    />,
+  );
+
+  const navigation = await screen.findByRole("navigation", {
+    name: "工作台导航",
+  });
+  await user.click(within(navigation).getByRole("button", { name: "草稿箱" }));
+  await user.click(await screen.findByRole("button", { name: "打开 可发布虚构标题" }));
+  await user.click(screen.getByRole("button", { name: "发布到服务器" }));
+
+  const panel = await screen.findByRole("region", { name: "当前发布状态" });
+  expect(within(panel).getAllByText(/服务器控制器版本过旧/).length).toBeGreaterThan(0);
+  expect(within(panel).getByText(/不会自动重试/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "结束本地事务" })).toBeEnabled();
+  expect(serverApi.testConnection).toHaveBeenCalledOnce();
+  expect(serverApi.getStatus).toHaveBeenCalledOnce();
+  expect(repositoryApi.dryRun).not.toHaveBeenCalled();
+  expect(repositoryApi.commit).not.toHaveBeenCalled();
+  expect(serverApi.publishContent).not.toHaveBeenCalled();
 });
 
 test("queries and resumes the same transaction without another local commit", async () => {

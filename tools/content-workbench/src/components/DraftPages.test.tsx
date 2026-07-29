@@ -683,7 +683,10 @@ test("queries and restores a running transaction after the editor reopens", asyn
   );
 
   await waitFor(() =>
-    expect(onQueryPublishStatus).toHaveBeenCalledWith(transactionId),
+    expect(onQueryPublishStatus).toHaveBeenCalledWith(
+      transactionId,
+      expect.any(Function),
+    ),
   );
   await waitFor(() =>
     expect(document.querySelector(".publish-result")).toHaveTextContent(
@@ -691,6 +694,112 @@ test("queries and restores a running transaction after the editor reopens", asyn
     ),
   );
   expect(onPublishToServer).not.toHaveBeenCalled();
+});
+
+test("turns a failed recovery query into a stopped retryable status", async () => {
+  const transactionId = "d".repeat(32);
+  storePublishProgress(
+    makePublishProgress({
+      transactionId,
+      stage: "saving",
+      message: "正在保存当前内容",
+      serverStarted: false,
+      safeToCancel: true,
+    }),
+  );
+  const onQueryPublishStatus = vi.fn(async () => {
+    throw new Error("status connection failed");
+  });
+
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      onQueryPublishStatus={onQueryPublishStatus}
+    />,
+  );
+
+  const panel = await screen.findByRole("region", { name: "当前发布状态" });
+  await waitFor(() =>
+    expect(within(panel).getAllByText("确认服务器实际状态").length).toBeGreaterThan(0),
+  );
+  expect(within(panel).getAllByText(/可安全重试/).length).toBeGreaterThan(0);
+  const stored = JSON.parse(localStorage.getItem(publishStorageKey) ?? "{}");
+  expect(stored).toMatchObject({
+    transactionId,
+    status: "failed",
+    stage: "confirming_server_status",
+    errorCode: "STATUS_QUERY_FAILED",
+    retryable: true,
+  });
+});
+
+test("allows an abandoned pre-server transaction to be ended locally", async () => {
+  const user = userEvent.setup();
+  storePublishProgress(
+    makePublishProgress({
+      stage: "saving",
+      message: "正在保存当前内容",
+      serverStarted: false,
+      safeToCancel: true,
+    }),
+  );
+
+  render(<DraftsPage api={createApi()} initialDraft={draft} />);
+
+  await user.click(screen.getByRole("button", { name: "结束本地事务" }));
+  expect(screen.queryByRole("region", { name: "当前发布状态" })).not.toBeInTheDocument();
+  expect(localStorage.getItem(publishStorageKey)).toBeNull();
+});
+
+test("never offers local termination after server processing has started", async () => {
+  const transactionId = "e".repeat(32);
+  storePublishProgress(
+    makePublishProgress({
+      transactionId,
+      stage: "building_site",
+      serverStarted: true,
+      safeToCancel: false,
+    }),
+  );
+  const onQueryPublishStatus = vi.fn(
+    async (
+      _transactionId: string,
+      onFailure?: (progress: ServerPublishProgress) => void,
+    ) => {
+      onFailure?.(
+        makePublishProgress({
+          transactionId,
+          status: "failed",
+          stage: "checking_server",
+          message: "控制器版本不兼容",
+          failedStage: "checking_server",
+          errorCode: "CONTROLLER_UPGRADE_REQUIRED",
+          retryable: false,
+          serverStarted: false,
+          safeToCancel: false,
+        }),
+      );
+      throw new Error("控制器版本不兼容");
+    },
+  );
+
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      onQueryPublishStatus={onQueryPublishStatus}
+    />,
+  );
+
+  await waitFor(() =>
+    expect(screen.getByRole("region", { name: "当前发布状态" })).toHaveTextContent(
+      "控制器版本不兼容",
+    ),
+  );
+  expect(screen.queryByRole("button", { name: "结束本地事务" })).not.toBeInTheDocument();
+  const stored = JSON.parse(localStorage.getItem(publishStorageKey) ?? "{}");
+  expect(stored.serverStarted).toBe(true);
 });
 
 test("blocks nonretryable transactions and duplicate publish clicks", async () => {

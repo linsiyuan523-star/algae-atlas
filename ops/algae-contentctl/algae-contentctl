@@ -35,6 +35,7 @@ readonly SITE_API_TOTAL_TIMEOUT_SECONDS=20
 readonly SITE_ARCHIVE_ATTEMPT_TIMEOUT_SECONDS=20
 readonly SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS=40
 readonly PUBLISH_STATE_RETENTION_DAYS=30
+readonly PUBLISH_PROTOCOL_VERSION=1
 
 JSON_MODE=false
 ACTION=""
@@ -2289,8 +2290,8 @@ status() {
   if $repository_ready && [[ -n "$current" ]] && $service_active && $healthy; then
     ready=true
   fi
-  printf '{"ok":true,"action":"status","ready":%s,"contentRepositoryReady":%s,"currentRelease":%s,"previousRelease":%s,"serviceActive":%s,"healthy":%s,"message":%s}\n' \
-    "$ready" "$repository_ready" "$(json_quote "$current")" "$(json_quote "$previous")" "$service_active" "$healthy" "$(json_quote "Server status checked")"
+  printf '{"ok":true,"action":"status","ready":%s,"contentRepositoryReady":%s,"currentRelease":%s,"previousRelease":%s,"serviceActive":%s,"healthy":%s,"publishProtocolVersion":%d,"message":%s}\n' \
+    "$ready" "$repository_ready" "$(json_quote "$current")" "$(json_quote "$previous")" "$service_active" "$healthy" "$PUBLISH_PROTOCOL_VERSION" "$(json_quote "Server status checked")"
 }
 
 list_content() {

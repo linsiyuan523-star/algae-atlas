@@ -63,6 +63,7 @@ import type {
   ServerPublishData,
   ServerPublishProgress,
   ServerPublishRequest,
+  ServerStatusData,
 } from "./server";
 import {
   tauriOnboardingApi,
@@ -71,8 +72,11 @@ import {
 import type { OnboardingApi, OnboardingStatus } from "./onboarding";
 
 const APP_VERSION = "0.1.0";
+const REQUIRED_PUBLISH_PROTOCOL_VERSION = 1;
 const DELETE_SERVER_CONTENT_CONFIRMATION =
   "删除后该网页将从线上移除，但服务器会保留历史版本。确认删除？";
+const CONTROLLER_UPGRADE_MESSAGE =
+  "服务器控制器版本过旧，尚不支持可靠发布事务。请先部署与当前工作台匹配的控制器。";
 
 const RETRYABLE_CLIENT_ERROR_CODES = new Set([
   "SSH_UNAVAILABLE",
@@ -135,6 +139,29 @@ function createClientPublishFailure(
       result.technicalSummary ??
       `${result.errorCode ?? result.code ?? "CLIENT_PUBLISH_FAILED"}: ${result.message}`,
     failedStage: result.failedStage ?? stage,
+  };
+}
+
+function supportsPublishTransactions(
+  status: ServerCommandResult<ServerStatusData>,
+) {
+  return (
+    status.ok &&
+    Number.isInteger(status.publishProtocolVersion) &&
+    (status.publishProtocolVersion ?? 0) >= REQUIRED_PUBLISH_PROTOCOL_VERSION
+  );
+}
+
+function controllerUpgradeRequired(): ServerCommandResult {
+  return {
+    ok: false,
+    action: "status",
+    code: "CONTROLLER_UPGRADE_REQUIRED",
+    message: CONTROLLER_UPGRADE_MESSAGE,
+    retryable: false,
+    userMessage: CONTROLLER_UPGRADE_MESSAGE,
+    technicalSummary: `publishProtocolVersion is missing or below ${REQUIRED_PUBLISH_PROTOCOL_VERSION}`,
+    failedStage: "checking_server",
   };
 }
 
@@ -456,6 +483,32 @@ export default function App({
     }
   }
 
+  async function requirePublishController(
+    transactionId: string,
+    stage: PublishStage,
+    onFailure?: (progress: ServerPublishProgress) => void,
+  ) {
+    const status = await activeServerApi.getStatus();
+    const failure = !status.ok
+      ? status
+      : supportsPublishTransactions(status)
+        ? null
+        : controllerUpgradeRequired();
+    if (!failure) {
+      return status;
+    }
+
+    const failureStage =
+      failure.code === "CONTROLLER_UPGRADE_REQUIRED" ? "checking_server" : stage;
+    onFailure?.(
+      createClientPublishFailure(failure, transactionId, failureStage),
+    );
+    const message = serverResultError(failure);
+    setServerConnectionState("unavailable");
+    setServerConnectionError(message);
+    throw new Error(message);
+  }
+
   async function handleTestServerConnection() {
     setServerConnectionState("checking");
     setServerConnectionError(null);
@@ -467,6 +520,9 @@ export default function App({
       const status = await activeServerApi.getStatus();
       if (!status.ok) {
         throw new Error(serverResultError(status));
+      }
+      if (!supportsPublishTransactions(status)) {
+        throw new Error(serverResultError(controllerUpgradeRequired()));
       }
       if (
         status.ready !== true ||
@@ -531,6 +587,12 @@ export default function App({
       }
       setServerConnectionState("available");
       setServerConnectionError(null);
+
+      await requirePublishController(
+        options.transactionId,
+        "checking_server",
+        options.onProgress,
+      );
 
       const plannedAt = new Date();
       const branchName = createDirectPublishBranchName(
@@ -631,6 +693,11 @@ export default function App({
     transactionId: string,
     onFailure?: (progress: ServerPublishProgress) => void,
   ): Promise<ServerPublishProgress> {
+    await requirePublishController(
+      transactionId,
+      "confirming_server_status",
+      onFailure,
+    );
     const result = await activeServerApi.getPublishStatus({ transactionId });
     if (!result.ok) {
       const message = serverResultError(result);

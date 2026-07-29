@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Save,
   Trash2,
+  X,
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -266,6 +267,7 @@ type DraftsPageProps = {
   onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
   onQueryPublishStatus?: (
     transactionId: string,
+    onFailure?: (progress: ServerPublishProgress) => void,
   ) => Promise<ServerPublishProgress | null>;
 };
 
@@ -483,6 +485,7 @@ type DraftEditorProps = {
   onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
   onQueryPublishStatus?: (
     transactionId: string,
+    onFailure?: (progress: ServerPublishProgress) => void,
   ) => Promise<ServerPublishProgress | null>;
 };
 
@@ -597,7 +600,10 @@ function DraftEditor({
       return;
     }
     let cancelled = false;
-    void queryPublishStatusRef.current(stored.transactionId).then((progress) => {
+    void queryPublishStatusRef.current(
+      stored.transactionId,
+      updatePublishProgress,
+    ).then((progress) => {
       if (!cancelled && progress) {
         updatePublishProgress(progress);
         if (progress.status === "succeeded") {
@@ -607,6 +613,7 @@ function DraftEditor({
     }).catch((caught: unknown) => {
       if (!cancelled) {
         setPublishError(describeError(caught));
+        failRunningPublishStatusQuery(caught, updatePublishProgress, publishProgressRef);
       }
     });
     return () => {
@@ -1512,6 +1519,7 @@ function DraftEditor({
     try {
       const refreshed = await queryPublishStatusRef.current(
         publishProgress.transactionId,
+        updatePublishProgress,
       );
       if (!refreshed) {
         throw new Error("暂时无法读取该发布事务状态。");
@@ -1522,10 +1530,27 @@ function DraftEditor({
       }
     } catch (caught) {
       setPublishError(describeError(caught));
+      failRunningPublishStatusQuery(caught, updatePublishProgress, publishProgressRef);
     } finally {
       publishInFlightRef.current = false;
       setPendingAction(null);
     }
+  }
+
+  function handleEndLocalPublishTransaction() {
+    const current = publishProgressRef.current;
+    if (
+      publishInFlightRef.current ||
+      !current ||
+      !canEndLocalPublishTransaction(current)
+    ) {
+      return;
+    }
+    clearPublishProgress(draft.draftId);
+    publishProgressRef.current = null;
+    setPublishProgress(null);
+    setPublishError(null);
+    setPublishResult(null);
   }
 
   async function handleDelete() {
@@ -1919,6 +1944,17 @@ function DraftEditor({
                 >
                   <RefreshCw aria-hidden="true" size={17} />
                   查看当前发布状态
+                </button>
+              ) : null}
+              {publishProgress && canEndLocalPublishTransaction(publishProgress) ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={isBusy}
+                  onClick={handleEndLocalPublishTransaction}
+                >
+                  <X aria-hidden="true" size={17} />
+                  结束本地事务
                 </button>
               ) : null}
               {serverContent?.urlZh && onViewServerContent ? (
@@ -2624,6 +2660,9 @@ function mergePublishProgress(
   progress: ServerPublishProgress,
 ) {
   const sameTransaction = current?.transactionId === progress.transactionId;
+  const serverStarted = sameTransaction
+    ? current.serverStarted === true || progress.serverStarted === true
+    : progress.serverStarted;
   return {
     ...progress,
     clientStartedAt:
@@ -2642,6 +2681,8 @@ function mergePublishProgress(
     bundleUploadedAt: progress.bundleUploadedAt ?? current?.bundleUploadedAt,
     bundleUploadDurationMs:
       progress.bundleUploadDurationMs ?? current?.bundleUploadDurationMs,
+    serverStarted,
+    safeToCancel: serverStarted ? false : progress.safeToCancel,
   };
 }
 
@@ -2655,6 +2696,53 @@ function savePublishProgress(draftId: string, progress: ServerPublishProgress) {
   } catch {
     // The visible in-memory status remains authoritative for this app session.
   }
+}
+
+function clearPublishProgress(draftId: string) {
+  try {
+    localStorage.removeItem(publishProgressStorageKey(draftId));
+  } catch {
+    // The in-memory state is still cleared for this app session.
+  }
+}
+
+function failRunningPublishStatusQuery(
+  error: unknown,
+  updateProgress: (progress: ServerPublishProgress) => void,
+  progressRef: { current: ServerPublishProgress | null },
+) {
+  const current = progressRef.current;
+  if (!current || current.status !== "running") {
+    return;
+  }
+  const now = new Date().toISOString();
+  const technicalSummary = describeError(error);
+  updateProgress({
+    ...current,
+    status: "failed",
+    stage: "confirming_server_status",
+    stageStartedAt: now,
+    updatedAt: now,
+    retryable: true,
+    safeToCancel: false,
+    safeToRetry: true,
+    errorCode: "STATUS_QUERY_FAILED",
+    failedStage: "confirming_server_status",
+    userMessage: "暂时无法确认服务器上的发布状态。请恢复连接后安全重试。",
+    technicalSummary,
+    message: "连接中断，尚未确认服务器实际状态",
+  });
+}
+
+function canEndLocalPublishTransaction(progress: ServerPublishProgress) {
+  return (
+    progress.status !== "succeeded" &&
+    progress.serverStarted !== true &&
+    !progress.bundleUploadedAt &&
+    ["saving", "checking_server", "generating_bundle", "verifying_sha256"].includes(
+      progress.stage,
+    )
+  );
 }
 
 function loadPublishProgress(draftId: string): ServerPublishProgress | null {

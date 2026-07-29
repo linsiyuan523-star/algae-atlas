@@ -140,6 +140,11 @@ incoming job directory.
 
 ## JSON contract
 
+`status --json` includes `publishProtocolVersion: 1`. The desktop checks this
+field before creating a local publication commit. Missing or older protocol
+versions are incompatible with transaction publication and must be upgraded;
+they are not treated as transient network failures.
+
 Every direct publish uses one 32-character lowercase hexadecimal transaction
 ID from local commit creation through upload, controller invocation, status
 queries, retries, and the final result. The incoming delivery is first uploaded

@@ -1012,6 +1012,7 @@ assert_json_field "$list_json" count 2
 status_json=$(env "${common_env[@]}" bash "$CONTROLLER" status --json)
 assert_json_field "$status_json" action status
 assert_json_field "$status_json" ready true
+assert_json_field "$status_json" publishProtocolVersion 1
 
 printf 'CONTENT_REPOSITORY_SOURCE=legacy\n' > "$site_source_cache/repository/.env.production.local"
 : > "$MOCK_GIT_LOG"
