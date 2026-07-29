@@ -111,7 +111,22 @@ export function ServerContentPage({
                   </td>
                   <td>{item.contentType}</td>
                   <td>
-                    <span className="server-content-url">{item.urlZh}</span>
+                    <a
+                      className="server-content-url"
+                      href={item.urlZh}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="查看线上页面"
+                      onClick={(event) => {
+                        if (!onView) {
+                          return;
+                        }
+                        event.preventDefault();
+                        onView(item);
+                      }}
+                    >
+                      {item.urlZh}
+                    </a>
                   </td>
                   <td>
                     <span className="server-status-badge" data-status={item.status}>

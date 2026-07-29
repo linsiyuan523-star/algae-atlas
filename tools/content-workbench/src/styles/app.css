@@ -356,9 +356,16 @@ button:disabled {
   display: block;
   min-width: 160px;
   max-width: 260px;
-  color: #587269;
+  color: #1f6653;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 11px;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.server-content-url:hover {
+  color: #164c3e;
 }
 
 .server-table-empty {
