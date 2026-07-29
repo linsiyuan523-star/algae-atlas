@@ -688,7 +688,7 @@ assert_json_field "$first_build_json" action publish
 assert_json_field "$first_build_json" code BUILD_FAILED
 assert_json_field "$first_build_json" retryable false
 assert_json_field "$first_build_json" failedStage validating_site
-[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev' ]] || { printf 'failed build did not install dependencies first\n' >&2; exit 1; }
+[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev --prefer-offline --no-audit --no-fund' ]] || { printf 'failed build did not install dependencies first\n' >&2; exit 1; }
 [[ $(sed -n '2p' "$MOCK_NPM_LOG") == 'run content:validate -- --json' ]] || { printf 'failed build did not reach targeted content validation\n' >&2; exit 1; }
 [[ $(wc -l < "$MOCK_NPM_LOG") -eq 2 ]] || { printf 'production build ran after content validation failed\n' >&2; exit 1; }
 [[ $("$GIT_BIN" -C "$FORMAL_REPOSITORY" rev-parse HEAD) == "$placeholder_head" ]] || { printf 'failed first build changed placeholder HEAD\n' >&2; exit 1; }
@@ -848,7 +848,7 @@ fi
 assert_json_field "$failed_next_build_json" ok false
 assert_json_field "$failed_next_build_json" action publish
 assert_json_field "$failed_next_build_json" code BUILD_FAILED
-[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev' && \
+[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev --prefer-offline --no-audit --no-fund' && \
    $(sed -n '2p' "$MOCK_NPM_LOG") == 'run content:validate -- --json' && \
    $(sed -n '3p' "$MOCK_NPM_LOG") == 'run build:next' ]] || { printf 'failed Next build did not run the expected build commands\n' >&2; exit 1; }
 [[ $(wc -l < "$MOCK_NPM_LOG") -eq 3 ]] || { printf 'failed Next build ran unexpected extra commands\n' >&2; exit 1; }
@@ -866,10 +866,10 @@ publish_json=$(run_publish "$INCOMING_JOB" MOCK_SITE_CLONE_FAIL=1 "${common_env[
 assert_json_field "$publish_json" ok true
 assert_json_field "$publish_json" action publish
 assert_json_field "$publish_json" stableId example-id
-grep -Fxq -- 'ci --include=dev' "$MOCK_NPM_LOG" || { printf 'release did not install exact dependencies\n' >&2; exit 1; }
+grep -Fxq -- 'ci --include=dev --prefer-offline --no-audit --no-fund' "$MOCK_NPM_LOG" || { printf 'release did not install exact dependencies\n' >&2; exit 1; }
 grep -Fxq -- 'run content:validate -- --json' "$MOCK_NPM_LOG" || { printf 'release did not run targeted content validation\n' >&2; exit 1; }
 grep -Fxq -- 'run build:next' "$MOCK_NPM_LOG" || { printf 'release did not run the production build\n' >&2; exit 1; }
-[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev' && \
+[[ $(sed -n '1p' "$MOCK_NPM_LOG") == 'ci --include=dev --prefer-offline --no-audit --no-fund' && \
    $(sed -n '2p' "$MOCK_NPM_LOG") == 'run content:validate -- --json' && \
    $(sed -n '3p' "$MOCK_NPM_LOG") == 'run build:next' && \
    $(wc -l < "$MOCK_NPM_LOG") -eq 3 ]] || { printf 'release build commands ran in the wrong order\n' >&2; exit 1; }

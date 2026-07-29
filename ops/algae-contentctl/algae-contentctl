@@ -2097,7 +2097,7 @@ build_release() {
   chmod -R a+rX -- "$build_directory/public/images/uploads"
   write_content_runtime_config "$build_directory"
   set_publish_stage "preparing_dependencies" "Preparing website dependencies"
-  if ! run_build_command "$build_directory" "$NPM_BIN" ci --include=dev; then
+  if ! run_build_command "$build_directory" "$NPM_BIN" ci --include=dev --prefer-offline --no-audit --no-fund; then
     fail "BUILD_FAILED" "Website dependency installation failed" true
   fi
   set_publish_stage "validating_site" "Running website content validation"

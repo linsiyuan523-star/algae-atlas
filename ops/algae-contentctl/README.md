@@ -82,12 +82,17 @@ is rechecked before use.
 
 The controller reuses that exact prepared tree for both the candidate bootstrap
 and website build. It overlays a candidate `content/` directory, runs
-`npm ci --include=dev`, `npm run content:validate -- --json`, and
-`npm run build:next` with `CONTENT_REPOSITORY_SOURCE=overlay`, synchronizes
+`npm ci --include=dev --prefer-offline --no-audit --no-fund`,
+`npm run content:validate -- --json`, and `npm run build:next` with
+`CONTENT_REPOSITORY_SOURCE=overlay`, synchronizes
 candidate uploads into the fresh build, and then creates a release. Full source
 type and lint checks remain pull-request gates; the production transaction
 validates the changing content repository and performs the production Next.js
-build. Overlay mode keeps legacy entries until a same-ID record has at least one
+build. The locked install verifies package integrity, uses the root-owned npm
+cache before the configured registry, and still downloads missing packages.
+Online audit and funding metadata are excluded from the time-critical publish
+transaction; dependency auditing remains a separate maintenance or CI gate.
+Overlay mode keeps legacy entries until a same-ID record has at least one
 publishable locale; a publishable record then owns that ID without silently
 mixing locale renderers. Only after the site restart, loopback health check,
 and exact published URL check succeed does it replace the formal content
