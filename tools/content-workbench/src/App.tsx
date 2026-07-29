@@ -36,6 +36,7 @@ import type { ServerConnectionState } from "./components/ServerSettingsPage";
 import { inspectDraft, tauriDraftApi, unavailableDraftApi } from "./drafts";
 import type { Draft, DraftApi } from "./drafts";
 import type { GitHubPublishApi } from "./github-publish";
+import { openPublicSiteUrl } from "./external-navigation";
 import { tauriMediaApi, unavailableMediaApi } from "./media";
 import type { MediaApi } from "./media";
 import {
@@ -312,13 +313,18 @@ export default function App({
     setActiveSection(features.showLegacyNavigation ? "repository-export" : "import-export");
   }
 
-  function handleViewServerContent(item: DirectServerContent) {
+  async function handleViewServerContent(item: DirectServerContent) {
     const url = normalizeServerUrl(item.urlZh);
     if (!url) {
       setServerContentError("服务器未返回该内容的中文 URL。");
       return;
     }
-    window.open(url, "_blank", "noopener,noreferrer");
+    setServerContentError(null);
+    try {
+      await openPublicSiteUrl(url);
+    } catch (caught) {
+      setServerContentError(`无法打开线上页面：${describeError(caught)}`);
+    }
   }
 
   async function handleEditServerContent(item: ServerContentSummary) {

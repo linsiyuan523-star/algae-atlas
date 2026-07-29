@@ -73,12 +73,15 @@ is rechecked before use.
 The controller reuses that exact prepared tree for both the candidate bootstrap
 and website build. It overlays a candidate `content/` directory, runs
 `npm ci --include=dev`, `npm run content:validate -- --json`, and
-`npm run build:next` with `CONTENT_REPOSITORY_SOURCE=records`, synchronizes
+`npm run build:next` with `CONTENT_REPOSITORY_SOURCE=overlay`, synchronizes
 candidate uploads into the fresh build, and then creates a release. Full source
 type and lint checks remain pull-request gates; the production transaction
 validates the changing content repository and performs the production Next.js
-build. Only after the site restart, loopback health check, and exact published
-URL check succeed does it replace the formal content repository. Any failure
+build. Overlay mode keeps legacy entries until a same-ID record has at least one
+publishable locale; a publishable record then owns that ID without silently
+mixing locale renderers. Only after the site restart, loopback health check,
+and exact published URL check succeed does it replace the formal content
+repository. Any failure
 rolls `current` and `previous` back and leaves the formal repository unchanged.
 If restoring the formal repository or release links itself fails, the root-only
 transaction workspace and new release are retained for manual recovery instead

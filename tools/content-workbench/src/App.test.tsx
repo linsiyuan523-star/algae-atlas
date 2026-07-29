@@ -8,10 +8,15 @@ import type { OnboardingApi, OnboardingStatus } from "./onboarding";
 import type { RepositoryApi } from "./repository";
 import { createSharedRecordDraft } from "./schema-drafts";
 import type { ServerApi } from "./server";
+import { openPublicSiteUrl } from "./external-navigation";
 import {
   emptyTeamNewsFormValues,
   validateTeamNewsRecordDraft,
 } from "./forms/team-news";
+
+vi.mock("./external-navigation", () => ({
+  openPublicSiteUrl: vi.fn(),
+}));
 
 function makeDraft(titleZh = "虚构标题"): Draft {
   const prepared = createSharedRecordDraft(
@@ -532,13 +537,14 @@ test("loads server aliases and opens or edits matching content", async () => {
         contentType: "team-news" as const,
         stableId: "fictional-draft",
         title: "服务器虚构标题",
-        urlZh: "https://example.invalid/zh/fictional-draft",
+        urlZh: "https://sycszy.icu/zh/news/fictional-draft",
         status: "online",
         updatedAt: "2026-07-25T08:00:00Z",
       },
     ],
   }));
-  const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  const open = vi.mocked(openPublicSiteUrl);
+  open.mockResolvedValue(undefined);
   render(<App draftApi={api} serverApi={serverApi} />);
 
   await user.click(
@@ -548,14 +554,18 @@ test("loads server aliases and opens or edits matching content", async () => {
   );
 
   expect(await screen.findByText("服务器虚构标题")).toBeVisible();
-  expect(screen.getByText("https://example.invalid/zh/fictional-draft")).toBeVisible();
+  expect(screen.getByRole("link", {
+    name: "https://sycszy.icu/zh/news/fictional-draft",
+  })).toBeVisible();
   expect(screen.getByText("已发布")).toBeVisible();
 
   await user.click(screen.getByRole("button", { name: "查看 服务器虚构标题" }));
-  expect(open).toHaveBeenCalledWith(
-    "https://example.invalid/zh/fictional-draft",
-    "_blank",
-    "noopener,noreferrer",
+  expect(open).toHaveBeenCalledWith("https://sycszy.icu/zh/news/fictional-draft");
+
+  open.mockRejectedValueOnce(new Error("Windows could not open the public website."));
+  await user.click(screen.getByRole("button", { name: "查看 服务器虚构标题" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "无法打开线上页面：Windows could not open the public website.",
   );
 
   await user.click(screen.getByRole("button", { name: "编辑 服务器虚构标题" }));

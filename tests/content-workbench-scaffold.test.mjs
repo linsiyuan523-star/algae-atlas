@@ -143,7 +143,7 @@ test("content workbench scaffold has the local-only desktop contract", () => {
     'image = { version = "=0.25.9", default-features = false, features = ["jpeg", "png", "webp"] }',
     'tempfile = "=3.27.0"',
     "[target.'cfg(windows)'.dependencies]",
-    'windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }',
+    'windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }',
   ].join("\n");
   assert.equal(normalizeToml(cargoToml), expectedCargoToml);
   assert.doesNotMatch(cargoToml, /\b(?:git|path)\s*=/);

@@ -11,6 +11,7 @@ import { websiteContentRepository } from "../../lib/content-repository/default-r
 import { createFileBackedContentRepository } from "../../lib/content-repository/file-repository";
 import {
   createCollectionSourceSelection,
+  createPublicContentRepository,
 } from "../../lib/content-repository/repository";
 import {
   contentLanguageSwitchHref,
@@ -25,6 +26,8 @@ import type {
   CollectionSourceSelection,
   PublicContentEntry,
   PublicContentRepository,
+  PublicLocaleContent,
+  PublicContentSource,
 } from "../../lib/content-repository/types";
 
 const fixtureRoot = fileURLToPath(
@@ -103,6 +106,148 @@ function directPublishRepository(): PublicContentRepository {
     },
   };
 }
+
+function source(
+  kind: PublicContentSource["kind"],
+  entries: readonly PublicContentEntry[],
+): PublicContentSource {
+  return {
+    kind,
+    entries(type) {
+      return entries.filter((entry) => entry.type === type);
+    },
+  };
+}
+
+function localeContent(
+  locale: PublicLocaleContent["locale"],
+  title: string,
+): PublicLocaleContent {
+  return {
+    locale,
+    title,
+    summary: title,
+    fields: {},
+    updatedAt: "2026-07-27",
+  };
+}
+
+function overlayRepository(): PublicContentRepository {
+  const legacyShared: Omit<PublicContentEntry, "id" | "source" | "locales"> = {
+    type: "science-article",
+    tags: [],
+    shared: {},
+    media: {},
+  };
+  const legacy = source("legacy", [
+    {
+      ...legacyShared,
+      id: "legacy-draft",
+      source: "legacy",
+      locales: {
+        zh: localeContent("zh", "Legacy draft zh"),
+        en: localeContent("en", "Legacy draft en"),
+      },
+    },
+    {
+      ...legacyShared,
+      id: "record-owned",
+      source: "legacy",
+      locales: {
+        zh: localeContent("zh", "Old zh"),
+        en: localeContent("en", "Old en"),
+      },
+    },
+  ]);
+  const records = source("records", [
+    { ...legacyShared, id: "legacy-draft", source: "records", locales: {} },
+    {
+      ...legacyShared,
+      id: "record-owned",
+      source: "records",
+      locales: {
+        zh: localeContent("zh", "New zh"),
+      },
+    },
+    { ...legacyShared, id: "record-draft", source: "records", locales: {} },
+    {
+      ...legacyShared,
+      id: "direct-record",
+      source: "records",
+      locales: {
+        zh: localeContent("zh", "Direct"),
+      },
+    },
+  ]);
+
+  return createPublicContentRepository({
+    mode: "overlay",
+    selection: createCollectionSourceSelection("records"),
+    legacySource: legacy,
+    recordSource: records,
+  });
+}
+
+test("overlay keeps legacy for draft records and gives a public record the whole ID", () => {
+  const repository = overlayRepository();
+
+  assert.deepEqual(
+    repository.entries("science-article").map((entry) => [entry.id, entry.source]),
+    [
+      ["legacy-draft", "legacy"],
+      ["record-owned", "records"],
+      ["direct-record", "records"],
+    ],
+  );
+  assert.equal(repository.sourceKind("science-article"), "overlay");
+  assert.equal(
+    repository.get("science-article", "legacy-draft", "en")?.content.title,
+    "Legacy draft en",
+  );
+  assert.equal(
+    repository.get("science-article", "record-owned", "zh")?.content.title,
+    "New zh",
+  );
+  assert.equal(repository.get("science-article", "record-owned", "en"), null);
+  assert.deepEqual(repository.availability("science-article", "record-owned"), {
+    zh: true,
+    en: false,
+    fallbackSection: { zh: "/zh/insights", en: "/en/insights" },
+  });
+});
+
+test("overlay exposes a direct record through lookup and route surfaces", () => {
+  const repository = overlayRepository();
+  const route = findContentRoute(repository, "insights", "direct-record");
+
+  assert.ok(route);
+  assert.equal(
+    repository.get("science-article", "direct-record", "zh")?.source,
+    "records",
+  );
+  assert.equal(
+    getContentRouteRecord(repository, "insights", "direct-record", "zh")?.source,
+    "records",
+  );
+  assert.ok(
+    contentRouteStaticParams(repository).some(
+      ({ locale, slug }) =>
+        locale === "zh" && slug.join("/") === "insights/direct-record",
+    ),
+  );
+  assert.ok(
+    !contentRouteStaticParams(repository).some(
+      ({ locale, slug }) =>
+        locale === "en" && slug.join("/") === "insights/direct-record",
+    ),
+  );
+  assert.deepEqual(
+    contentSitemapRoutes(repository)
+      .filter(({ path }) => path.endsWith("/direct-record"))
+      .map(({ locale }) => locale),
+    ["zh"],
+  );
+});
 
 test("默认网站 repository 明确让全部真实集合继续使用 legacy", () => {
   const routes = listContentRoutes(websiteContentRepository);

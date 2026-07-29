@@ -194,6 +194,7 @@ cat > "$TEST_ROOT/bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s\n' "$*" >> "${MOCK_NPM_LOG:?}"
+printf '%s\n' "${CONTENT_REPOSITORY_SOURCE:-<unset>}" >> "${MOCK_NPM_SOURCE_LOG:?}"
 if [[ "${MOCK_CONTENT_VALIDATE_FAIL:-0}" == "1" && "$1 ${2:-}" == "run content:validate" ]]; then
   exit 42
 fi
@@ -310,6 +311,7 @@ MOCK_CURL
 make_executable "$TEST_ROOT/bin/curl"
 
 export MOCK_NPM_LOG="$TEST_ROOT/npm.log"
+export MOCK_NPM_SOURCE_LOG="$TEST_ROOT/npm-source.log"
 export MOCK_CHMOD_LOG="$TEST_ROOT/chmod.log"
 export MOCK_GIT_LOG="$TEST_ROOT/git.log"
 export MOCK_CURL_LOG="$TEST_ROOT/curl.log"
@@ -666,6 +668,7 @@ assert_json_field "$failed_next_build_json" code BUILD_FAILED
 : > "$MOCK_CURL_LOG"
 : > "$MOCK_TIMEOUT_LOG"
 : > "$MOCK_NPM_LOG"
+: > "$MOCK_NPM_SOURCE_LOG"
 publish_json=$(env MOCK_SITE_CLONE_FAIL=1 "${common_env[@]}" bash "$CONTROLLER" publish --bundle "$INCOMING_JOB" --json)
 assert_json_field "$publish_json" ok true
 assert_json_field "$publish_json" action publish
@@ -677,6 +680,11 @@ grep -Fxq -- 'run build:next' "$MOCK_NPM_LOG" || { printf 'release did not run t
    $(sed -n '2p' "$MOCK_NPM_LOG") == 'run content:validate -- --json' && \
    $(sed -n '3p' "$MOCK_NPM_LOG") == 'run build:next' && \
    $(wc -l < "$MOCK_NPM_LOG") -eq 3 ]] || { printf 'release build commands ran in the wrong order\n' >&2; exit 1; }
+[[ $(wc -l < "$MOCK_NPM_SOURCE_LOG") -eq 3 && \
+   $(grep -Fxc -- 'overlay' "$MOCK_NPM_SOURCE_LOG") -eq 3 ]] || {
+  printf 'release build commands did not all select the overlay content source\n' >&2
+  exit 1
+}
 if grep -Fxq -- 'run check' "$MOCK_NPM_LOG"; then
   printf 'release repeated the full source check\n' >&2
   exit 1
@@ -698,8 +706,8 @@ assert_bootstrap_sentinels "$FORMAL_REPOSITORY"
 [[ -z "$("$GIT_BIN" -C "$FORMAL_REPOSITORY" remote)" ]] || { printf 'formal content repository unexpectedly has a Git remote\n' >&2; exit 1; }
 first_release=$(<"$TEST_ROOT/site/current")
 [[ -f "$first_release/public/images/uploads/2026/07/example-image.webp" ]] || { printf 'release image was not overlaid\n' >&2; exit 1; }
-[[ $(<"$first_release/.env.production.local") == 'CONTENT_REPOSITORY_SOURCE=records' ]] || {
-  printf 'release runtime did not select the records content source\n' >&2
+[[ $(<"$first_release/.env.production.local") == 'CONTENT_REPOSITORY_SOURCE=overlay' ]] || {
+  printf 'release runtime did not select the overlay content source\n' >&2
   exit 1
 }
 assert_bootstrap_sentinels "$first_release"

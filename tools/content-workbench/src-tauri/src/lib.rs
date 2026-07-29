@@ -1,4 +1,5 @@
 mod drafts;
+mod external_navigation;
 mod media;
 mod onboarding;
 mod repository;
@@ -53,6 +54,7 @@ pub fn run() {
             repository::repository_local_commit,
             repository::repository_bundle_preflight,
             repository::repository_export_bundle,
+            external_navigation::open_public_site_url,
             server::test_server_connection,
             server::get_server_status,
             server::list_server_content,

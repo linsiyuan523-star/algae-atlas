@@ -9,6 +9,7 @@ import type {
 } from "@algae-atlas/content-schema";
 
 export type ContentSourceKind = "legacy" | "records";
+export type ContentRepositoryMode = ContentSourceKind | "overlay";
 
 export type PublicLocaleContent = {
   locale: Locale;
@@ -68,7 +69,7 @@ export type PublicContentRepository = {
   ): readonly PublicRecord[];
   get(type: ContentType, id: string, locale: Locale): PublicRecord | null;
   availability(type: ContentType, id: string): ContentAvailability | null;
-  sourceKind(type: ContentType): ContentSourceKind;
+  sourceKind(type: ContentType): ContentRepositoryMode;
 };
 
 export type LoadedContentRepository = {
