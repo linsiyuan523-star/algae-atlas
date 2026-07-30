@@ -142,12 +142,12 @@ not uploaded or started server work can be ended locally.
 
 ### 2.8 Pending synchronization queue
 
-Phase B1 adds a server-side queue without changing the current desktop publish
-workflow. The current desktop and restricted sudoers contract still call the
-synchronous controller commands. The new `queue-init`, `queue-upload`, and
-`pending-status` commands are administrator-only foundations until phase B3.
-No systemd service or timer is installed in B1, `next_scheduled_sync_at` is
-`null`, and an upload does not trigger a website build or production switch.
+Phases B1 and B2 add a server-side queue and synchronization runner without
+changing the current desktop publish workflow. Installing the controller and
+inactive unit candidates does not create queue refs or change legacy behavior.
+Production queue initialization and timer activation remain blocked until B3
+adds the desktop upload/status/manual-sync workflow and passes installer
+acceptance.
 
 The independent server content repository has three canonical snapshots:
 
@@ -155,7 +155,7 @@ The independent server content repository has three canonical snapshots:
   production release;
 - `refs/algae/pending` is the newest accepted canonical content commit waiting
   for synchronization;
-- `refs/algae/syncing` is the immutable snapshot selected when a future sync
+- `refs/algae/syncing` is the immutable snapshot selected when a sync
   transaction starts and may legitimately lag behind pending.
 
 Uploaded workbench commits and canonical server commits are different Git
@@ -165,6 +165,10 @@ keep accepted commits reachable. Queue metadata and upload transaction JSON use
 strict schema-versioned Git blobs referenced from the same controlled
 namespace. One `git update-ref --stdin` transaction advances queue metadata,
 source pending, canonical pending, and all accepted transaction refs together.
+Queue schema 1 records the exact website `siteCommit`. New initialization and
+legacy-state migration derive it only from the validated identity markers of
+the current release; absence is a deterministic safe failure, never a request
+for current GitHub `main`.
 
 The first upload must have a base whose managed `content/` and
 `public/images/uploads/` trees exactly match canonical published content. Later
@@ -176,18 +180,62 @@ their identity and final inclusion path rather than marking them failed. Equal
 pending content is idempotent and does not move refs backward.
 
 An upload transaction represents receipt, fast validation, and queue inclusion.
-A sync transaction, introduced in B2, will select `syncing`, build and verify a
-release, and only then advance `published`; these are deliberately separate
-transaction kinds. Upload state already reserves
-`includedInSyncTransactionId` and `publishedReleaseId` for that later linkage.
+A schema-version-1 sync transaction is a distinct transaction kind stored at
+`refs/algae/sync-transactions/<sync-id>`, with controlled active, last, blocked,
+and immutable upload-member refs. It records trigger, stage, exact site/content
+and source commits, published/pending baselines, release and rollback paths,
+attempt ceiling, failure classification, recovery, switch, and health state.
+All JSON blobs and ref names are strictly validated before use.
+
+Scheduled and manual calls enter the same `sync-pending` state machine and hold
+one process-scoped root `flock` for the complete operation. Contenders return
+the existing transaction and stage rather than starting another build. The
+ordinary content mutation lock is held only for snapshot and final commit, so
+queue uploads can progress during dependency preparation and build.
+
+The snapshot ref transaction verifies published, pending, source pending,
+queue and blocked state, freezes canonical/source syncing, creates the sync and
+active refs, captures current/previous rollback pointers, attaches the latest
+upload as `SYNCING`, and retains every included upload through immutable member
+refs. The build reads only syncing and the queued site commit. New pending is
+therefore left for the next run. Legacy and queued publication share exact
+source preparation, locked dependency install, validation, Next.js build,
+release construction, atomic link switch, service restart, live health gate,
+and rollback functions.
+
+After health succeeds, one final ref transaction advances canonical and source
+published, removes syncing and active, records last/PUBLISHED, and associates
+only frozen upload members with the sync ID, release ID, and publish time. The
+latest member becomes `PUBLISHED`; earlier members remain or become
+`COALESCED`. A pending commit accepted during the build is never rolled back.
+
+Transient source/dependency failures become `FAILED_RETRYABLE` until the third
+automatic attempt and are retried by a later fixed cycle, not a loop inside one
+service run. Deterministic validation, build, switch, health, permission, and
+integrity errors become `FAILED_BLOCKED`. The same blocked content does not
+build again unless pending advances or an administrator explicitly requests
+manual `--retry-blocked`.
+
+Recovery always examines an active transaction before selecting pending. It
+rebuilds the same snapshot after a pre-switch crash, reuses a completed
+unswitched release, atomically finalizes a switched release with a valid health
+marker, or performs a fresh service/live-health check when no marker exists.
+State/ref/release disagreement fails closed and retains evidence. Health failure
+restores both release links and restarts the restored service before leaving
+published unchanged; incomplete rollback retains the active transaction for
+manual inspection.
 
 All repository mutations share one controller lock. Explicit `queue-init`
 activates queue mode; after that, legacy synchronous `publish` and `delete`
 mutations fail with `QUEUE_MODE_ACTIVE` because their whole-repository swap
 cannot preserve pending refs. Before initialization, the existing synchronous
-desktop path remains unchanged. B2 will add the synchronization executor and
-fixed systemd schedule at every hour `:00` and `:30`. B3 will add the desktop
-asynchronous upload status UI and the explicit immediate-sync command.
+desktop path remains unchanged. The B2 timer candidate uses the explicit UTC
+calendar `*-*-* *:00,30:00 UTC`, `Persistent=true`, one-second accuracy, and no
+random delay. `pending-status` always computes the next UTC boundary but reports
+timer activity only when systemd says the unit is both enabled and active. The
+installer copies and reloads these units without enabling or starting them.
+B3 will add the desktop asynchronous upload status UI and explicit immediate
+sync command before any production activation.
 
 ## 3. Trust boundaries
 

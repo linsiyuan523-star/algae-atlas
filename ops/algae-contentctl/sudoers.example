@@ -5,8 +5,13 @@
 Cmnd_Alias ALGAE_CONTENTCTL = \
   /usr/local/sbin/algae-contentctl status --json, \
   /usr/local/sbin/algae-contentctl list --json, \
+  /usr/local/sbin/algae-contentctl pending-status --json, \
   /usr/local/sbin/algae-contentctl publish-status --transaction * --json, \
+  /usr/local/sbin/algae-contentctl sync-status --json, \
+  /usr/local/sbin/algae-contentctl sync-status * --json, \
   /usr/local/sbin/algae-contentctl publish --transaction * --bundle /home/ubuntu/algae-content-workbench/incoming/* --bundle-sha256 * --json, \
-  /usr/local/sbin/algae-contentctl delete --type * --id * --json
+  /usr/local/sbin/algae-contentctl delete --type * --id * --json, \
+  /usr/local/sbin/algae-contentctl queue-upload --transaction * --bundle /home/ubuntu/algae-content-workbench/incoming/* --bundle-sha256 * --json, \
+  /usr/local/sbin/algae-contentctl sync-pending --trigger manual --json
 
 ubuntu ALL=(root) NOSETENV: NOPASSWD: ALGAE_CONTENTCTL

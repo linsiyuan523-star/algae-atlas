@@ -37,6 +37,8 @@ readonly SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS=40
 readonly PUBLISH_STATE_RETENTION_DAYS=30
 readonly PUBLISH_PROTOCOL_VERSION=1
 readonly QUEUE_PROTOCOL_VERSION=1
+readonly SYNC_PROTOCOL_VERSION=1
+readonly SYNC_MAX_ATTEMPTS=3
 
 JSON_MODE=false
 ACTION=""
@@ -48,6 +50,8 @@ TX_ROOT=""
 OP_LOG=""
 LOCK_DIR=""
 LOCK_FD_OPEN=false
+SYNC_LOCK_DIR=""
+SYNC_LOCK_FD_OPEN=false
 RELEASE_ACTIVATED=false
 RELEASE_ROLLBACK_FAILED=false
 BUILD_STAGING_DIRECTORY=""
@@ -68,6 +72,7 @@ SITE_SOURCE_REPOSITORY=""
 SITE_SOURCE_SHA=""
 SITE_SOURCE_TREE_SHA=""
 SITE_SOURCE_METHOD=""
+SITE_SOURCE_REQUESTED_SHA=""
 PUBLISH_TRANSACTION_ID=""
 PUBLISH_EXPECTED_BUNDLE_SHA256=""
 PUBLISH_STATE_FILE=""
@@ -103,6 +108,7 @@ UPLOAD_CONTENT_COMMIT=""
 UPLOAD_COALESCED_INTO_COMMIT=""
 UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=""
 UPLOAD_PUBLISHED_RELEASE_ID=""
+UPLOAD_PUBLISHED_AT=""
 UPLOAD_CONTENT_TYPE=""
 UPLOAD_STABLE_ID=""
 UPLOAD_RETRYABLE=false
@@ -118,6 +124,44 @@ QUEUE_SYNCING_CONTENT_COMMIT=""
 QUEUE_PUBLISHED_SOURCE_COMMIT=""
 QUEUE_PENDING_SOURCE_COMMIT=""
 QUEUE_SYNCING_SOURCE_COMMIT=""
+QUEUE_SITE_COMMIT=""
+SYNC_STATE_ACTIVE=false
+SYNC_STATE_BLOB=""
+SYNC_TRANSACTION_ID=""
+SYNC_TRIGGER=""
+SYNC_STATUS=""
+SYNC_STAGE=""
+SYNC_CREATED_AT=""
+SYNC_STARTED_AT=""
+SYNC_UPDATED_AT=""
+SYNC_COMPLETED_AT=""
+SYNC_SITE_COMMIT=""
+SYNC_CONTENT_COMMIT=""
+SYNC_SOURCE_CONTENT_COMMIT=""
+SYNC_PUBLISHED_BEFORE=""
+SYNC_PENDING_AT_START=""
+SYNC_SYNCING_CONTENT_COMMIT=""
+SYNC_SOURCE_SYNCING_COMMIT=""
+SYNC_RELEASE_ID=""
+SYNC_RELEASE_PATH=""
+SYNC_PREVIOUS_RELEASE_PATH=""
+SYNC_PREVIOUS_PREVIOUS_RELEASE_PATH=""
+SYNC_RETRYABLE=false
+SYNC_BLOCKED=false
+SYNC_ERROR_CODE=""
+SYNC_MESSAGE=""
+SYNC_ATTEMPT=1
+SYNC_RECOVERED=false
+SYNC_SWITCH_COMPLETED=false
+SYNC_HEALTH_VERIFIED=false
+SYNC_STAGE_STARTED_AT=""
+SYNC_STARTED_MS=0
+SYNC_ELAPSED_MS=0
+SYNC_REQUESTED_TRANSACTION_ID=""
+SYNC_RETRY_BLOCKED=false
+SYNC_REQUIRED_SITE_COMMIT=""
+SYNC_TIMER_ACTIVE=false
+SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID=""
 PARSED_BUNDLE=""
 PARSED_CONTENT_TYPE=""
 PARSED_STABLE_ID=""
@@ -165,6 +209,11 @@ readonly UPLOAD_TRANSACTION_REF_ROOT="refs/algae/upload-transactions"
 readonly UPLOAD_SOURCE_REF_ROOT="refs/algae/upload-sources"
 readonly UPLOAD_CONTENT_REF_ROOT="refs/algae/upload-content"
 readonly QUEUE_STAGING_REF_ROOT="refs/algae/staging"
+readonly SYNC_TRANSACTION_REF_ROOT="refs/algae/sync-transactions"
+readonly SYNC_MEMBER_REF_ROOT="refs/algae/sync-members"
+readonly SYNC_ACTIVE_REF="refs/algae/sync-active"
+readonly SYNC_LAST_REF="refs/algae/sync-last"
+readonly SYNC_BLOCKED_REF="refs/algae/sync-blocked"
 TRANSACTION_ROOT="$CONTENT_ROOT/transactions"
 PUBLISH_STATE_ROOT="$CONTENT_ROOT/publish-state"
 SITE_SOURCE_CACHE_ROOT="$CONTENT_ROOT/site-source-cache"
@@ -177,6 +226,7 @@ SITE_REPOSITORY_URL="$(configuration_value ALGAE_SITE_REPOSITORY_URL "$DEFAULT_S
 SITE_REPOSITORY_API_URL="$(configuration_value ALGAE_SITE_REPOSITORY_API_URL "$DEFAULT_SITE_REPOSITORY_API_URL")"
 SITE_BRANCH="$(configuration_value ALGAE_SITE_BRANCH "$DEFAULT_SITE_BRANCH")"
 SERVICE_NAME="$(configuration_value ALGAE_SERVICE_NAME "$DEFAULT_SERVICE_NAME")"
+SYNC_TIMER_NAME="$(configuration_value ALGAE_SYNC_TIMER_NAME "algae-content-sync.timer")"
 HEALTH_URL="$(configuration_value ALGAE_HEALTH_URL "$DEFAULT_HEALTH_URL")"
 LOCAL_BASE_URL="$(configuration_value ALGAE_LOCAL_BASE_URL "$DEFAULT_LOCAL_BASE_URL")"
 PUBLIC_BASE_URL="$(configuration_value ALGAE_PUBLIC_BASE_URL "$DEFAULT_PUBLIC_BASE_URL")"
@@ -189,6 +239,7 @@ CURL_BIN="$(configuration_value ALGAE_CURL_BIN "$(command -v curl 2>/dev/null ||
 CHMOD_BIN="$(configuration_value ALGAE_CHMOD_BIN "$(command -v chmod 2>/dev/null || true)")"
 TAR_BIN="$(configuration_value ALGAE_TAR_BIN "$(command -v tar 2>/dev/null || true)")"
 TIMEOUT_BIN="$(configuration_value ALGAE_TIMEOUT_BIN "$(command -v timeout 2>/dev/null || true)")"
+FLOCK_BIN="$(configuration_value ALGAE_FLOCK_BIN "$(command -v flock 2>/dev/null || true)")"
 
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL=/dev/null
@@ -200,6 +251,9 @@ Usage:
   algae-contentctl status --json
   algae-contentctl list --json
   algae-contentctl pending-status --json
+  algae-contentctl sync-status [<sync-transaction-id>] --json
+  algae-contentctl sync-pending --trigger scheduled --json
+  algae-contentctl sync-pending --trigger manual [--retry-blocked] --json
   algae-contentctl publish-status --transaction <transaction-id> --json
   algae-contentctl queue-init --published <content-commit> --json
   algae-contentctl queue-upload --transaction <transaction-id> \
@@ -231,7 +285,7 @@ emit_error() {
   local log_tail=${3:-}
   local error_action="unknown"
   case "$ACTION" in
-    status|list|pending-status|publish-status|queue-init|queue-upload|publish|delete) error_action=$ACTION ;;
+    status|list|pending-status|publish-status|sync-status|sync-pending|queue-init|queue-upload|publish|delete) error_action=$ACTION ;;
   esac
   ERROR_EMITTED=true
   if $JSON_MODE; then
@@ -249,6 +303,11 @@ emit_error() {
       if $UPLOAD_STATE_PERSISTED; then
         printf ',"status":%s' "$(json_quote "FAILED")"
       fi
+    fi
+    if [[ "$error_action" == "sync-pending" || "$error_action" == "sync-status" ]]; then
+      printf ',"sync_transaction_id":%s,"status":%s,"stage":%s,"retryable":%s,"blocked":%s' \
+        "$(json_quote "$SYNC_TRANSACTION_ID")" "$(json_quote "$SYNC_STATUS")" \
+        "$(json_quote "$SYNC_STAGE")" "$SYNC_RETRYABLE" "$SYNC_BLOCKED"
     fi
     if [[ -n "$log_tail" ]]; then
       printf ',"logTail":%s' "$(json_quote "$log_tail")"
@@ -296,6 +355,19 @@ fail() {
   if [[ "$ACTION" == "queue-upload" && -n "$PUBLISH_TRANSACTION_ID" ]] && $UPLOAD_STATE_ACTIVE; then
     fail_upload_state "$code" "$message" || true
   fi
+  if [[ "$ACTION" == "sync-pending" && -n "$SYNC_TRANSACTION_ID" ]] && $SYNC_STATE_ACTIVE; then
+    case "$code" in
+      QUEUE_STATE_CORRUPT|SYNC_STATE_CORRUPT|SYNC_RELEASE_INVALID|SYNC_RECOVERY_REQUIRED|SYNC_RECOVERY_FAILED)
+        # Preserve the active evidence when controlled state or release identity disagrees.
+        ;;
+      CONTROLLER_BUSY)
+        if ! $SYNC_SWITCH_COMPLETED; then
+          finish_sync_failure "$code" "$message" || true
+        fi
+        ;;
+      *) finish_sync_failure "$code" "$message" || true ;;
+    esac
+  fi
   emit_error "$code" "$message" "$details"
   exit 1
 }
@@ -315,6 +387,9 @@ on_unexpected_error() {
     fi
     if [[ "$ACTION" == "queue-upload" && -n "$PUBLISH_TRANSACTION_ID" ]] && $UPLOAD_STATE_ACTIVE; then
       fail_upload_state "$code" "$message" || true
+    fi
+    if [[ "$ACTION" == "sync-pending" && -n "$SYNC_TRANSACTION_ID" ]] && $SYNC_STATE_ACTIVE; then
+      finish_sync_failure "$code" "$message" || true
     fi
     emit_error "$code" "$message" "$(log_tail || true)"
   fi
@@ -495,6 +570,10 @@ prepare_queue_runtime() {
   if [[ "$ACTION" == "queue-upload" ]]; then
     ensure_safe_directory "$INCOMING_ROOT"
   fi
+  if [[ "$ACTION" == "queue-init" ]]; then
+    ensure_safe_directory "$SITE_ROOT"
+    ensure_safe_directory "$RELEASES_ROOT"
+  fi
   [[ -d "$CONTENT_REPOSITORY" && ! -L "$CONTENT_REPOSITORY" && -d "$CONTENT_REPOSITORY/.git" ]] || \
     fail "CONTENT_REPOSITORY_MISSING" "Content repository is not installed"
   "$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
@@ -516,6 +595,7 @@ prepare_queue_runtime() {
 
 acquire_lock() {
   local lock_file="$CONTENT_ROOT/.algae-contentctl.lock"
+  [[ ! -L "$lock_file" ]] || fail "UNSAFE_PATH" "Content operation lock is unsafe"
   if command -v flock >/dev/null 2>&1; then
     # shellcheck disable=SC3045
     exec 9>"$lock_file"
@@ -536,10 +616,30 @@ acquire_lock() {
       fail "CONTROLLER_BUSY" "Another content operation is in progress"
     fi
     LOCK_FD_OPEN=true
+    chmod 0600 -- "$lock_file" || fail "UNSAFE_PATH" "Content operation lock permissions cannot be controlled"
   else
     local lock_directory="$CONTENT_ROOT/.algae-contentctl.lockdir"
     if ! mkdir "$lock_directory" 2>/dev/null; then
-      fail "CONTROLLER_BUSY" "Another content operation is in progress"
+      if $TEST_MODE; then
+        local owner_file="$lock_directory/owner"
+        local owner_pid=""
+        if [[ -f "$owner_file" && ! -L "$owner_file" ]]; then
+          IFS= read -r owner_pid < "$owner_file" || owner_pid=""
+        fi
+        if [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+          rm -f -- "$owner_file"
+          rmdir -- "$lock_directory" 2>/dev/null || true
+        fi
+      fi
+      if mkdir "$lock_directory" 2>/dev/null; then
+        :
+      else
+        fail "CONTROLLER_BUSY" "Another content operation is in progress"
+      fi
+    fi
+    if $TEST_MODE; then
+      printf '%s\n' "$$" > "$lock_directory/owner"
+      chmod 0600 -- "$lock_directory/owner" || fail "UNSAFE_PATH" "Test content lock permissions cannot be controlled"
     fi
     LOCK_DIR=$lock_directory
   fi
@@ -547,10 +647,76 @@ acquire_lock() {
 
 release_lock() {
   if [[ -n "$LOCK_DIR" ]]; then
+    rm -f -- "$LOCK_DIR/owner" 2>/dev/null || true
     rmdir -- "$LOCK_DIR" 2>/dev/null || true
+    LOCK_DIR=""
   fi
   if $LOCK_FD_OPEN; then
     flock -u 9 2>/dev/null || true
+    LOCK_FD_OPEN=false
+  fi
+}
+
+acquire_sync_lock() {
+  local lock_file="$CONTENT_ROOT/.algae-content-sync.lock"
+  [[ ! -L "$lock_file" ]] || fail "UNSAFE_PATH" "Synchronization lock is unsafe"
+  if [[ -z "$FLOCK_BIN" || ! -x "$FLOCK_BIN" ]]; then
+    $TEST_MODE || fail "DEPENDENCY_MISSING" "Required command is unavailable: flock"
+    local lock_directory="$CONTENT_ROOT/.algae-content-sync.test-lockdir"
+    local owner_file="$lock_directory/owner"
+    if ! mkdir "$lock_directory" 2>/dev/null; then
+      local owner_pid=""
+      if [[ -f "$owner_file" && ! -L "$owner_file" ]]; then
+        IFS= read -r owner_pid < "$owner_file" || owner_pid=""
+      fi
+      if [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+        rm -f -- "$owner_file"
+        rmdir -- "$lock_directory" 2>/dev/null || true
+      fi
+      if ! mkdir "$lock_directory" 2>/dev/null; then
+        if queue_ref_exists "$SYNC_ACTIVE_REF"; then
+          load_active_sync_state || fail "SYNC_STATE_CORRUPT" "Active synchronization state is invalid"
+          emit_sync_state_json "sync-pending"
+          SUCCESS=true
+          exit 0
+        fi
+        fail "SYNC_BUSY" "Another synchronization is holding the global synchronization lock"
+      fi
+    fi
+    printf '%s\n' "$$" > "$owner_file"
+    chmod 0600 -- "$owner_file" || fail "UNSAFE_PATH" "Test synchronization lock permissions cannot be controlled"
+    SYNC_LOCK_DIR=$lock_directory
+    return
+  fi
+  assert_regular_command "flock" "$FLOCK_BIN"
+  # shellcheck disable=SC3045
+  exec 8>"$lock_file"
+  if ! "$FLOCK_BIN" -n 8; then
+    local state_wait
+    for state_wait in {1..10}; do
+      if queue_ref_exists "$SYNC_ACTIVE_REF"; then
+        load_active_sync_state || fail "SYNC_STATE_CORRUPT" "Active synchronization state is invalid"
+        emit_sync_state_json "sync-pending"
+        SUCCESS=true
+        exit 0
+      fi
+      sleep 0.1
+    done
+    fail "SYNC_BUSY" "Another synchronization is holding the global synchronization lock"
+  fi
+  SYNC_LOCK_FD_OPEN=true
+  chmod 0600 -- "$lock_file" || fail "UNSAFE_PATH" "Synchronization lock permissions cannot be controlled"
+}
+
+release_sync_lock() {
+  if [[ -n "$SYNC_LOCK_DIR" ]]; then
+    rm -f -- "$SYNC_LOCK_DIR/owner" 2>/dev/null || true
+    rmdir -- "$SYNC_LOCK_DIR" 2>/dev/null || true
+    SYNC_LOCK_DIR=""
+  fi
+  if $SYNC_LOCK_FD_OPEN; then
+    "$FLOCK_BIN" -u 8 2>/dev/null || true
+    SYNC_LOCK_FD_OPEN=false
   fi
 }
 
@@ -961,23 +1127,28 @@ try {
 } catch {
   process.exit(2);
 }
-const exactKeys = ["schemaVersion", "initializedAt", "updatedAt", "latestUploadTransactionId"];
+const legacyKeys = ["schemaVersion", "initializedAt", "updatedAt", "latestUploadTransactionId"];
+const exactKeys = [...legacyKeys, "siteCommit"];
 const keys = Object.keys(state || {}).sort();
-if (!state || Array.isArray(state) || keys.join("\n") !== [...exactKeys].sort().join("\n")) process.exit(3);
+if (!state || Array.isArray(state) ||
+    (keys.join("\n") !== exactKeys.sort().join("\n") && keys.join("\n") !== legacyKeys.sort().join("\n"))) process.exit(3);
 const timestamp = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value));
 if (state.schemaVersion !== 1 || !timestamp(state.initializedAt) || !timestamp(state.updatedAt)) process.exit(4);
 if (typeof state.latestUploadTransactionId !== "string" || (state.latestUploadTransactionId !== "" && !/^[0-9a-f]{32}$/.test(state.latestUploadTransactionId))) process.exit(5);
-process.stdout.write(`${state.schemaVersion}\n${state.initializedAt}\n${state.updatedAt}\n${state.latestUploadTransactionId}\n`);
+const siteCommit = state.siteCommit ?? "";
+if (typeof siteCommit !== "string" || (siteCommit !== "" && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(siteCommit))) process.exit(6);
+process.stdout.write(`${state.schemaVersion}\n${state.initializedAt}\n${state.updatedAt}\n${state.latestUploadTransactionId}\n${siteCommit}\n`);
 NODE
 )
   local -a fields=()
   mapfile -t fields < <("$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file blob "$object" 2>>"$OP_LOG" | \
     "$NODE_BIN" -e "$validator")
-  [[ ${#fields[@]} -eq 4 ]] || return 1
+  [[ ${#fields[@]} -eq 5 ]] || return 1
   QUEUE_SCHEMA_VERSION=${fields[0]}
   QUEUE_INITIALIZED_AT=${fields[1]}
   QUEUE_UPDATED_AT=${fields[2]}
   QUEUE_LATEST_UPLOAD_TRANSACTION_ID=${fields[3]}
+  QUEUE_SITE_COMMIT=${fields[4]}
 
   resolve_queue_commit_ref "$PUBLISHED_CONTENT_REF" true || return 1
   QUEUE_PUBLISHED_CONTENT_COMMIT=$RESOLVED_QUEUE_REF
@@ -1036,7 +1207,11 @@ NODE
   fi
   local repository_head
   repository_head=$(git_head_or_empty "$CONTENT_REPOSITORY")
-  [[ "$repository_head" == "$QUEUE_PUBLISHED_CONTENT_COMMIT" ]] || return 1
+  if [[ "$repository_head" != "$QUEUE_PUBLISHED_CONTENT_COMMIT" ]]; then
+    [[ "$ACTION" == "sync-pending" && "$SYNC_STATE_ACTIVE" == "true" && \
+       -n "$QUEUE_SYNCING_CONTENT_COMMIT" && "$repository_head" == "$QUEUE_SYNCING_CONTENT_COMMIT" && \
+       "$repository_head" == "$SYNC_SYNCING_CONTENT_COMMIT" ]] || return 1
+  fi
   if [[ -n "$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" ]]; then
     queue_ref_exists "$UPLOAD_TRANSACTION_REF_ROOT/$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" || return 1
   fi
@@ -1049,9 +1224,10 @@ write_queue_state_blob() {
   now=$(iso_timestamp)
   [[ -n "$QUEUE_INITIALIZED_AT" ]] || QUEUE_INITIALIZED_AT=$now
   {
-    printf '{"schemaVersion":%d,"initializedAt":%s,"updatedAt":%s,"latestUploadTransactionId":%s}\n' \
+    printf '{"schemaVersion":%d,"initializedAt":%s,"updatedAt":%s,"latestUploadTransactionId":%s,"siteCommit":%s}\n' \
       "$QUEUE_PROTOCOL_VERSION" "$(json_quote "$QUEUE_INITIALIZED_AT")" \
-      "$(json_quote "$now")" "$(json_quote "$latest_transaction_id")"
+      "$(json_quote "$now")" "$(json_quote "$latest_transaction_id")" \
+      "$(json_quote "$QUEUE_SITE_COMMIT")"
   } >"$output"
   chmod 0600 -- "$output"
   QUEUE_STATE_BLOB=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" hash-object -w -- "$output" 2>>"$OP_LOG") || return 1
@@ -1080,17 +1256,21 @@ const text = (value, limit = 4096) => typeof value === "string" && value.length 
 const oid = (value) => text(value, 40) && (value === "" || /^[0-9a-f]{40}$/.test(value));
 const transaction = (value) => text(value, 32) && (value === "" || /^[0-9a-f]{32}$/.test(value));
 const timestamp = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value));
-const exactKeys = ["schemaVersion", "transactionId", "bundleSha256", "sourceCommit", "contentCommit",
+const legacyKeys = ["schemaVersion", "transactionId", "bundleSha256", "sourceCommit", "contentCommit",
   "status", "queuedAt", "coalescedIntoCommit", "includedInSyncTransactionId", "publishedReleaseId",
   "retryable", "errorCode", "message", "contentType", "stableId"];
+const exactKeys = [...legacyKeys, "publishedAt"];
 if (!state || Array.isArray(state) || state.schemaVersion !== 1) process.exit(3);
-if (Object.keys(state).sort().join("\n") !== exactKeys.sort().join("\n")) process.exit(3);
+const keys = Object.keys(state).sort().join("\n");
+if (keys !== exactKeys.sort().join("\n") && keys !== legacyKeys.sort().join("\n")) process.exit(3);
 if (!/^[0-9a-f]{32}$/.test(state.transactionId) || (expectedId && state.transactionId !== expectedId)) process.exit(4);
 if (!/^[0-9A-F]{64}$/.test(state.bundleSha256)) process.exit(5);
 if (!oid(state.sourceCommit) || !oid(state.contentCommit) || !oid(state.coalescedIntoCommit)) process.exit(6);
 if (!["FAILED", "QUEUED", "COALESCED", "SYNCING", "PUBLISHED"].includes(state.status)) process.exit(7);
 if (!text(state.queuedAt, 64) || !transaction(state.includedInSyncTransactionId)) process.exit(8);
-if (!text(state.publishedReleaseId, 200) || typeof state.retryable !== "boolean") process.exit(9);
+const publishedAt = state.publishedAt ?? "";
+if (!text(state.publishedReleaseId, 200) || typeof state.retryable !== "boolean" ||
+    (publishedAt !== "" && !timestamp(publishedAt))) process.exit(9);
 for (const key of ["errorCode", "message", "contentType", "stableId"]) if (!text(state[key] ?? "", key === "message" ? 16384 : 4096)) process.exit(10);
 if (state.status === "FAILED") {
   if (state.sourceCommit || state.contentCommit || state.queuedAt || state.coalescedIntoCommit || state.retryable || !state.errorCode) process.exit(11);
@@ -1099,16 +1279,17 @@ if (state.status === "FAILED") {
 }
 if (state.status === "QUEUED" && state.coalescedIntoCommit) process.exit(12);
 if (state.status === "COALESCED" && !state.coalescedIntoCommit) process.exit(12);
+if (state.status === "PUBLISHED" && (!state.includedInSyncTransactionId || !state.publishedReleaseId || !publishedAt)) process.exit(13);
 const values = [state.transactionId, state.bundleSha256, state.sourceCommit, state.contentCommit, state.status,
   state.queuedAt, state.coalescedIntoCommit, state.includedInSyncTransactionId, state.publishedReleaseId,
-  String(state.retryable), state.errorCode, state.message, state.contentType, state.stableId];
+  publishedAt, String(state.retryable), state.errorCode, state.message, state.contentType, state.stableId];
 for (const value of values) process.stdout.write(`${value}\n`);
 NODE
 )
   local -a fields=()
   mapfile -t fields < <("$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file blob "$object" 2>>"$OP_LOG" | \
     "$NODE_BIN" -e "$validator" "$expected_transaction_id")
-  [[ ${#fields[@]} -eq 14 ]] || return 1
+  [[ ${#fields[@]} -eq 15 ]] || return 1
   PUBLISH_TRANSACTION_ID=${fields[0]}
   PUBLISH_EXPECTED_BUNDLE_SHA256=${fields[1]}
   UPLOAD_SOURCE_COMMIT=${fields[2]}
@@ -1118,11 +1299,12 @@ NODE
   UPLOAD_COALESCED_INTO_COMMIT=${fields[6]}
   UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=${fields[7]}
   UPLOAD_PUBLISHED_RELEASE_ID=${fields[8]}
-  UPLOAD_RETRYABLE=${fields[9]}
-  UPLOAD_ERROR_CODE=${fields[10]}
-  UPLOAD_MESSAGE=${fields[11]}
-  UPLOAD_CONTENT_TYPE=${fields[12]}
-  UPLOAD_STABLE_ID=${fields[13]}
+  UPLOAD_PUBLISHED_AT=${fields[9]}
+  UPLOAD_RETRYABLE=${fields[10]}
+  UPLOAD_ERROR_CODE=${fields[11]}
+  UPLOAD_MESSAGE=${fields[12]}
+  UPLOAD_CONTENT_TYPE=${fields[13]}
+  UPLOAD_STABLE_ID=${fields[14]}
   if [[ "$UPLOAD_STATUS" != "FAILED" ]]; then
     resolve_queue_commit_ref "$UPLOAD_SOURCE_REF_ROOT/$PUBLISH_TRANSACTION_ID" true || return 1
     [[ "$RESOLVED_QUEUE_REF" == "$UPLOAD_SOURCE_COMMIT" ]] || return 1
@@ -1163,10 +1345,10 @@ write_upload_state_blob() {
     printf ',"sourceCommit":%s,"contentCommit":%s,"status":%s,"queuedAt":%s' \
       "$(json_quote "$UPLOAD_SOURCE_COMMIT")" "$(json_quote "$UPLOAD_CONTENT_COMMIT")" \
       "$(json_quote "$UPLOAD_STATUS")" "$(json_quote "$UPLOAD_QUEUED_AT")"
-    printf ',"coalescedIntoCommit":%s,"includedInSyncTransactionId":%s,"publishedReleaseId":%s' \
+    printf ',"coalescedIntoCommit":%s,"includedInSyncTransactionId":%s,"publishedReleaseId":%s,"publishedAt":%s' \
       "$(json_quote "$UPLOAD_COALESCED_INTO_COMMIT")" \
       "$(json_quote "$UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID")" \
-      "$(json_quote "$UPLOAD_PUBLISHED_RELEASE_ID")"
+      "$(json_quote "$UPLOAD_PUBLISHED_RELEASE_ID")" "$(json_quote "$UPLOAD_PUBLISHED_AT")"
     printf ',"retryable":%s,"errorCode":%s,"message":%s,"contentType":%s,"stableId":%s}\n' \
       "$UPLOAD_RETRYABLE" "$(json_quote "$UPLOAD_ERROR_CODE")" "$(json_quote "$UPLOAD_MESSAGE")" \
       "$(json_quote "$UPLOAD_CONTENT_TYPE")" "$(json_quote "$UPLOAD_STABLE_ID")"
@@ -1209,6 +1391,7 @@ fail_upload_state() {
   UPLOAD_COALESCED_INTO_COMMIT=""
   UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=""
   UPLOAD_PUBLISHED_RELEASE_ID=""
+  UPLOAD_PUBLISHED_AT=""
   UPLOAD_RETRYABLE=false
   UPLOAD_ERROR_CODE=$code
   UPLOAD_MESSAGE=$message
@@ -1221,6 +1404,324 @@ fail_upload_state() {
     return 0
   fi
   return 1
+}
+
+is_sync_transaction_id() {
+  [[ "$1" =~ ^[0-9a-f]{32}$ ]]
+}
+
+is_sync_trigger() {
+  case "$1" in
+    scheduled|manual|recovery) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+sync_transaction_ref() {
+  local transaction_id=${1:-$SYNC_TRANSACTION_ID}
+  is_sync_transaction_id "$transaction_id" || return 1
+  printf '%s/%s' "$SYNC_TRANSACTION_REF_ROOT" "$transaction_id"
+}
+
+sync_member_ref() {
+  local sync_transaction_id=$1
+  local upload_transaction_id=$2
+  is_sync_transaction_id "$sync_transaction_id" || return 1
+  is_publish_transaction_id "$upload_transaction_id" || return 1
+  printf '%s/%s/%s' "$SYNC_MEMBER_REF_ROOT" "$sync_transaction_id" "$upload_transaction_id"
+}
+
+sync_ref_object() {
+  local ref=$1
+  SYNC_RESOLVED_OBJECT=""
+  queue_ref_exists "$ref" || return 2
+  local raw object
+  raw=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$ref" 2>>"$OP_LOG") || return 1
+  object=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$ref^{blob}" 2>>"$OP_LOG") || return 1
+  [[ "$raw" == "$object" && "$object" =~ ^[0-9a-f]{40}$ ]] || return 1
+  SYNC_RESOLVED_OBJECT=$object
+}
+
+sync_transaction_id_from_ref() {
+  local ref=$1
+  SYNC_RESOLVED_TRANSACTION_ID=""
+  sync_ref_object "$ref" || return $?
+  local parser
+  parser=$(cat <<'NODE'
+const fs = require("fs");
+let state;
+try { state = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(2); }
+if (!state || Array.isArray(state) || !/^[0-9a-f]{32}$/.test(state.sync_transaction_id)) process.exit(3);
+process.stdout.write(state.sync_transaction_id);
+NODE
+)
+  SYNC_RESOLVED_TRANSACTION_ID=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file blob "$SYNC_RESOLVED_OBJECT" 2>>"$OP_LOG" | \
+    "$NODE_BIN" -e "$parser") || return 1
+  is_sync_transaction_id "$SYNC_RESOLVED_TRANSACTION_ID"
+}
+
+load_sync_state_ref() {
+  local ref=$1
+  local expected_transaction_id=${2:-}
+  sync_ref_object "$ref" || return $?
+  local object=$SYNC_RESOLVED_OBJECT
+  local validator
+  validator=$(cat <<'NODE'
+const fs = require("fs");
+const expectedId = process.argv[1];
+let state;
+try { state = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(2); }
+const text = (value, limit = 16384) => typeof value === "string" && value.length <= limit && !/[\u0000-\u001f\u007f]/.test(value);
+const oid = (value) => text(value, 64) && (value === "" || /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value));
+const timestamp = (value) => text(value, 64) && (value === "" || (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value))));
+const path = (value) => text(value, 4096) && (value === "" || (/^\/[A-Za-z0-9._/-]+$/.test(value) && !value.includes("..")));
+const exactKeys = ["schema_version", "sync_transaction_id", "trigger", "status", "stage", "created_at",
+  "started_at", "updated_at", "completed_at", "stage_started_at", "elapsed_ms", "site_commit",
+  "content_commit", "source_content_commit", "published_before", "pending_at_start", "syncing_content_commit",
+  "source_syncing_commit", "release_id", "release_path", "previous_release_path",
+  "previous_previous_release_path", "retryable", "blocked", "error_code", "message", "attempt",
+  "max_attempts", "recovered", "switch_completed", "health_verified", "snapshot_latest_upload_transaction_id"];
+if (!state || Array.isArray(state) || Object.keys(state).sort().join("\n") !== [...exactKeys].sort().join("\n")) process.exit(3);
+if (state.schema_version !== 1 || !/^[0-9a-f]{32}$/.test(state.sync_transaction_id) ||
+    (expectedId && state.sync_transaction_id !== expectedId)) process.exit(4);
+if (!["scheduled", "manual", "recovery"].includes(state.trigger)) process.exit(5);
+const statuses = ["CREATED", "SNAPSHOTTING", "PREPARING_SOURCE", "PREPARING_DEPENDENCIES", "CHECKING",
+  "BUILDING", "SWITCHING", "VERIFYING", "PUBLISHED", "FAILED_RETRYABLE", "FAILED_BLOCKED",
+  "RECOVERING", "SKIPPED_NO_PENDING"];
+if (!statuses.includes(state.status) || !statuses.includes(state.stage)) process.exit(6);
+for (const key of ["created_at", "started_at", "updated_at", "completed_at", "stage_started_at"]) {
+  if (!timestamp(state[key])) process.exit(7);
+}
+if (!state.created_at || !state.started_at || !state.updated_at || !state.stage_started_at) process.exit(7);
+for (const key of ["site_commit", "content_commit", "source_content_commit", "published_before", "pending_at_start",
+  "syncing_content_commit", "source_syncing_commit"]) if (!oid(state[key])) process.exit(8);
+if (!text(state.release_id, 200) || !path(state.release_path) || !path(state.previous_release_path) ||
+    !path(state.previous_previous_release_path)) process.exit(9);
+if (typeof state.retryable !== "boolean" || typeof state.blocked !== "boolean" || typeof state.recovered !== "boolean" ||
+    typeof state.switch_completed !== "boolean" || typeof state.health_verified !== "boolean") process.exit(10);
+if (!text(state.error_code, 200) || !text(state.message) ||
+    (state.snapshot_latest_upload_transaction_id !== "" && !/^[0-9a-f]{32}$/.test(state.snapshot_latest_upload_transaction_id))) process.exit(11);
+for (const key of ["elapsed_ms", "attempt", "max_attempts"]) if (!Number.isSafeInteger(state[key]) || state[key] < 0) process.exit(12);
+if (state.attempt < 1 || state.max_attempts < 1 || state.attempt > 100 || state.max_attempts > 100) process.exit(12);
+if (state.status === "FAILED_RETRYABLE" && (!state.retryable || state.blocked || !state.completed_at)) process.exit(13);
+if (state.status === "FAILED_BLOCKED" && (state.retryable || !state.blocked || !state.completed_at)) process.exit(13);
+if (!["FAILED_RETRYABLE", "FAILED_BLOCKED"].includes(state.status) && (state.retryable || state.blocked)) process.exit(13);
+if (["PUBLISHED", "SKIPPED_NO_PENDING"].includes(state.status) && !state.completed_at) process.exit(14);
+if (state.status === "PUBLISHED" && (!state.release_id || !state.release_path || !state.switch_completed || !state.health_verified)) process.exit(15);
+const values = exactKeys.map((key) => typeof state[key] === "boolean" || typeof state[key] === "number" ? String(state[key]) : state[key]);
+for (const value of values) process.stdout.write(`${value}\n`);
+NODE
+)
+  local -a fields=()
+  mapfile -t fields < <("$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file blob "$object" 2>>"$OP_LOG" | \
+    "$NODE_BIN" -e "$validator" "$expected_transaction_id")
+  [[ ${#fields[@]} -eq 32 ]] || return 1
+  SYNC_STATE_BLOB=$object
+  SYNC_TRANSACTION_ID=${fields[1]}
+  SYNC_TRIGGER=${fields[2]}
+  SYNC_STATUS=${fields[3]}
+  SYNC_STAGE=${fields[4]}
+  SYNC_CREATED_AT=${fields[5]}
+  SYNC_STARTED_AT=${fields[6]}
+  SYNC_UPDATED_AT=${fields[7]}
+  SYNC_COMPLETED_AT=${fields[8]}
+  SYNC_STAGE_STARTED_AT=${fields[9]}
+  SYNC_ELAPSED_MS=${fields[10]}
+  SYNC_SITE_COMMIT=${fields[11]}
+  SYNC_CONTENT_COMMIT=${fields[12]}
+  SYNC_SOURCE_CONTENT_COMMIT=${fields[13]}
+  SYNC_PUBLISHED_BEFORE=${fields[14]}
+  SYNC_PENDING_AT_START=${fields[15]}
+  SYNC_SYNCING_CONTENT_COMMIT=${fields[16]}
+  SYNC_SOURCE_SYNCING_COMMIT=${fields[17]}
+  SYNC_RELEASE_ID=${fields[18]}
+  SYNC_RELEASE_PATH=${fields[19]}
+  SYNC_PREVIOUS_RELEASE_PATH=${fields[20]}
+  SYNC_PREVIOUS_PREVIOUS_RELEASE_PATH=${fields[21]}
+  SYNC_RETRYABLE=${fields[22]}
+  SYNC_BLOCKED=${fields[23]}
+  SYNC_ERROR_CODE=${fields[24]}
+  SYNC_MESSAGE=${fields[25]}
+  SYNC_ATTEMPT=${fields[26]}
+  [[ ${fields[27]} == "$SYNC_MAX_ATTEMPTS" ]] || return 1
+  SYNC_RECOVERED=${fields[28]}
+  SYNC_SWITCH_COMPLETED=${fields[29]}
+  SYNC_HEALTH_VERIFIED=${fields[30]}
+  SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID=${fields[31]}
+  SYNC_STARTED_MS=$("$NODE_BIN" -e 'process.stdout.write(String(Date.parse(process.argv[1])))' "$SYNC_STARTED_AT") || return 1
+}
+
+write_sync_state_blob() {
+  [[ -n "$TX_ROOT" && -d "$TX_ROOT" ]] || return 1
+  local now_ms
+  now_ms=$(epoch_milliseconds)
+  SYNC_UPDATED_AT=$(iso_timestamp)
+  if [[ $SYNC_STARTED_MS -gt 0 ]]; then
+    SYNC_ELAPSED_MS=$((now_ms - SYNC_STARTED_MS))
+    (( SYNC_ELAPSED_MS >= 0 )) || SYNC_ELAPSED_MS=0
+  fi
+  local output="$TX_ROOT/sync-state.json"
+  {
+    printf '{"schema_version":%d,"sync_transaction_id":%s,"trigger":%s,"status":%s,"stage":%s' \
+      "$SYNC_PROTOCOL_VERSION" "$(json_quote "$SYNC_TRANSACTION_ID")" "$(json_quote "$SYNC_TRIGGER")" \
+      "$(json_quote "$SYNC_STATUS")" "$(json_quote "$SYNC_STAGE")"
+    printf ',"created_at":%s,"started_at":%s,"updated_at":%s,"completed_at":%s,"stage_started_at":%s,"elapsed_ms":%d' \
+      "$(json_quote "$SYNC_CREATED_AT")" "$(json_quote "$SYNC_STARTED_AT")" "$(json_quote "$SYNC_UPDATED_AT")" \
+      "$(json_quote "$SYNC_COMPLETED_AT")" "$(json_quote "$SYNC_STAGE_STARTED_AT")" "$SYNC_ELAPSED_MS"
+    printf ',"site_commit":%s,"content_commit":%s,"source_content_commit":%s,"published_before":%s' \
+      "$(json_quote "$SYNC_SITE_COMMIT")" "$(json_quote "$SYNC_CONTENT_COMMIT")" \
+      "$(json_quote "$SYNC_SOURCE_CONTENT_COMMIT")" "$(json_quote "$SYNC_PUBLISHED_BEFORE")"
+    printf ',"pending_at_start":%s,"syncing_content_commit":%s,"source_syncing_commit":%s' \
+      "$(json_quote "$SYNC_PENDING_AT_START")" "$(json_quote "$SYNC_SYNCING_CONTENT_COMMIT")" \
+      "$(json_quote "$SYNC_SOURCE_SYNCING_COMMIT")"
+    printf ',"release_id":%s,"release_path":%s,"previous_release_path":%s,"previous_previous_release_path":%s' \
+      "$(json_quote "$SYNC_RELEASE_ID")" "$(json_quote "$SYNC_RELEASE_PATH")" \
+      "$(json_quote "$SYNC_PREVIOUS_RELEASE_PATH")" "$(json_quote "$SYNC_PREVIOUS_PREVIOUS_RELEASE_PATH")"
+    printf ',"retryable":%s,"blocked":%s,"error_code":%s,"message":%s,"attempt":%d,"max_attempts":%d' \
+      "$SYNC_RETRYABLE" "$SYNC_BLOCKED" "$(json_quote "$SYNC_ERROR_CODE")" "$(json_quote "$SYNC_MESSAGE")" \
+      "$SYNC_ATTEMPT" "$SYNC_MAX_ATTEMPTS"
+    printf ',"recovered":%s,"switch_completed":%s,"health_verified":%s,"snapshot_latest_upload_transaction_id":%s}\n' \
+      "$SYNC_RECOVERED" "$SYNC_SWITCH_COMPLETED" "$SYNC_HEALTH_VERIFIED" \
+      "$(json_quote "$SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID")"
+  } > "$output"
+  chmod 0600 -- "$output"
+  SYNC_NEW_STATE_BLOB=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" hash-object -w -- "$output" 2>>"$OP_LOG") || return 1
+  [[ "$SYNC_NEW_STATE_BLOB" =~ ^[0-9a-f]{40}$ ]]
+}
+
+persist_active_sync_state() {
+  local transaction_ref
+  transaction_ref=$(sync_transaction_ref) || return 1
+  local old_blob=$SYNC_STATE_BLOB
+  write_sync_state_blob || return 1
+  local update_file="$TX_ROOT/sync-state-ref-update"
+  {
+    printf 'start\n'
+    printf 'update %s %s %s\n' "$transaction_ref" "$SYNC_NEW_STATE_BLOB" "$old_blob"
+    printf 'update %s %s %s\n' "$SYNC_ACTIVE_REF" "$SYNC_NEW_STATE_BLOB" "$old_blob"
+    printf 'prepare\ncommit\n'
+  } > "$update_file"
+  chmod 0600 -- "$update_file"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref --stdin < "$update_file" >>"$OP_LOG" 2>&1 || return 1
+  SYNC_STATE_BLOB=$SYNC_NEW_STATE_BLOB
+}
+
+set_sync_stage() {
+  local status=$1
+  local message=$2
+  SYNC_STATUS=$status
+  SYNC_STAGE=$status
+  SYNC_STAGE_STARTED_AT=$(iso_timestamp)
+  SYNC_RETRYABLE=false
+  SYNC_BLOCKED=false
+  SYNC_ERROR_CODE=""
+  SYNC_MESSAGE=$message
+  persist_active_sync_state || fail "SYNC_STATE_UPDATE_FAILED" "Cannot atomically update synchronization progress"
+}
+
+sync_ids_for_status() {
+  SYNC_ACTIVE_TRANSACTION_ID=""
+  SYNC_LAST_TRANSACTION_ID=""
+  local status=0
+  sync_transaction_id_from_ref "$SYNC_ACTIVE_REF" || status=$?
+  if [[ $status -eq 0 ]]; then
+    SYNC_ACTIVE_TRANSACTION_ID=$SYNC_RESOLVED_TRANSACTION_ID
+  elif [[ $status -ne 2 ]]; then
+    return 1
+  fi
+  status=0
+  sync_transaction_id_from_ref "$SYNC_LAST_REF" || status=$?
+  if [[ $status -eq 0 ]]; then
+    SYNC_LAST_TRANSACTION_ID=$SYNC_RESOLVED_TRANSACTION_ID
+  elif [[ $status -ne 2 ]]; then
+    return 1
+  fi
+}
+
+emit_sync_state_json() {
+  local response_action=$1
+  sync_ids_for_status || fail "SYNC_STATE_CORRUPT" "Synchronization index refs are invalid"
+  local ok=true
+  if [[ "$response_action" == "sync-pending" && ( "$SYNC_STATUS" == "FAILED_RETRYABLE" || "$SYNC_STATUS" == "FAILED_BLOCKED" ) ]]; then
+    ok=false
+  fi
+  printf '{"ok":%s,"action":%s,"schema_version":%d,"sync_transaction_id":%s' \
+    "$ok" "$(json_quote "$response_action")" "$SYNC_PROTOCOL_VERSION" "$(json_quote "$SYNC_TRANSACTION_ID")"
+  printf ',"active_sync_transaction_id":%s,"last_sync_transaction_id":%s,"status":%s,"stage":%s,"trigger":%s' \
+    "$(json_quote "$SYNC_ACTIVE_TRANSACTION_ID")" "$(json_quote "$SYNC_LAST_TRANSACTION_ID")" \
+    "$(json_quote "$SYNC_STATUS")" "$(json_quote "$SYNC_STAGE")" "$(json_quote "$SYNC_TRIGGER")"
+  printf ',"content_commit":%s,"source_content_commit":%s,"site_commit":%s,"release_id":%s,"release_path":%s' \
+    "$(json_quote "$SYNC_CONTENT_COMMIT")" "$(json_quote "$SYNC_SOURCE_CONTENT_COMMIT")" \
+    "$(json_quote "$SYNC_SITE_COMMIT")" "$(json_quote "$SYNC_RELEASE_ID")" "$(json_quote "$SYNC_RELEASE_PATH")"
+  printf ',"started_at":%s,"updated_at":%s,"completed_at":%s,"elapsed_ms":%d' \
+    "$(json_quote "$SYNC_STARTED_AT")" "$(json_quote "$SYNC_UPDATED_AT")" \
+    "$(json_quote "$SYNC_COMPLETED_AT")" "$SYNC_ELAPSED_MS"
+  printf ',"retryable":%s,"blocked":%s,"error_code":%s,"message":%s,"attempt":%d,"max_attempts":%d' \
+    "$SYNC_RETRYABLE" "$SYNC_BLOCKED" "$(json_quote "$SYNC_ERROR_CODE")" "$(json_quote "$SYNC_MESSAGE")" \
+    "$SYNC_ATTEMPT" "$SYNC_MAX_ATTEMPTS"
+  printf ',"recovered":%s,"switch_completed":%s,"health_verified":%s}\n' \
+    "$SYNC_RECOVERED" "$SYNC_SWITCH_COMPLETED" "$SYNC_HEALTH_VERIFIED"
+}
+
+load_active_sync_state() {
+  local status=0
+  sync_transaction_id_from_ref "$SYNC_ACTIVE_REF" || status=$?
+  [[ $status -ne 2 ]] || return 2
+  [[ $status -eq 0 ]] || return 1
+  local active_id=$SYNC_RESOLVED_TRANSACTION_ID
+  local active_blob=$SYNC_RESOLVED_OBJECT
+  local transaction_ref
+  transaction_ref=$(sync_transaction_ref "$active_id") || return 1
+  load_sync_state_ref "$transaction_ref" "$active_id" || return 1
+  [[ "$SYNC_STATE_BLOB" == "$active_blob" ]] || return 1
+}
+
+sync_status() {
+  local ref=""
+  if [[ -n "$SYNC_REQUESTED_TRANSACTION_ID" ]]; then
+    ref=$(sync_transaction_ref "$SYNC_REQUESTED_TRANSACTION_ID") || \
+      fail "INVALID_SYNC_TRANSACTION_ID" "Synchronization transaction id is invalid"
+  elif queue_ref_exists "$SYNC_ACTIVE_REF"; then
+    ref=$SYNC_ACTIVE_REF
+  elif queue_ref_exists "$SYNC_LAST_REF"; then
+    ref=$SYNC_LAST_REF
+  else
+    fail "SYNC_TRANSACTION_NOT_FOUND" "No synchronization transaction was found"
+  fi
+  local expected=$SYNC_REQUESTED_TRANSACTION_ID
+  load_sync_state_ref "$ref" "$expected" || fail "SYNC_STATE_CORRUPT" "Synchronization transaction state is invalid"
+  if [[ "$ref" == "$SYNC_ACTIVE_REF" || "$ref" == "$SYNC_LAST_REF" ]]; then
+    local transaction_ref
+    transaction_ref=$(sync_transaction_ref) || fail "SYNC_STATE_CORRUPT" "Synchronization transaction id is invalid"
+    local active_blob=$SYNC_STATE_BLOB
+    load_sync_state_ref "$transaction_ref" "$SYNC_TRANSACTION_ID" || \
+      fail "SYNC_STATE_CORRUPT" "Active synchronization transaction is missing"
+    [[ "$SYNC_STATE_BLOB" == "$active_blob" ]] || \
+      fail "SYNC_STATE_CORRUPT" "Synchronization index and transaction refs disagree"
+  fi
+  emit_sync_state_json "sync-status"
+}
+
+set_operation_stage() {
+  local sync_status=$1
+  local publish_stage=$2
+  local message=$3
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    set_sync_stage "$sync_status" "$message"
+  else
+    set_publish_stage "$publish_stage" "$message"
+  fi
+}
+
+write_operation_state() {
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    SYNC_RELEASE_ID=$PUBLISH_RELEASE_ID
+    SYNC_RELEASE_PATH=${RELEASE_DIRECTORY:-$SYNC_RELEASE_PATH}
+    SYNC_SWITCH_COMPLETED=$PUBLISH_SWITCH_COMPLETED
+    persist_active_sync_state || fail "SYNC_STATE_UPDATE_FAILED" "Cannot persist synchronization release state"
+  else
+    write_publish_state
+  fi
 }
 
 regular_source_tree_is_safe() {
@@ -1353,6 +1854,36 @@ clone_site_source_shallow() {
   return 1
 }
 
+clone_site_source_exact() {
+  [[ -n "$SITE_SOURCE_REQUESTED_SHA" ]] || return 1
+  local attempt
+  for ((attempt = 1; attempt <= SITE_CLONE_ATTEMPTS; attempt += 1)); do
+    rm -rf -- "$SITE_SOURCE_REPOSITORY"
+    printf 'Website source exact fetch attempt %d of %d for %s\n' \
+      "$attempt" "$SITE_CLONE_ATTEMPTS" "$SITE_SOURCE_REQUESTED_SHA" >> "$OP_LOG"
+    if ! (umask 022; "$GIT_BIN" init --quiet "--initial-branch=$SITE_BRANCH" "$SITE_SOURCE_REPOSITORY" && \
+      "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" remote add origin "$SITE_REPOSITORY_URL" && \
+      "$TIMEOUT_BIN" --signal=TERM --kill-after=10s "${SITE_CLONE_TIMEOUT_SECONDS}s" \
+        "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 \
+        fetch --quiet --depth 1 --no-tags origin "$SITE_SOURCE_REQUESTED_SHA" && \
+      "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" checkout --quiet -B "$SITE_BRANCH" FETCH_HEAD && \
+      "$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" remote remove origin) >>"$OP_LOG" 2>&1; then
+      continue
+    fi
+    return 0
+  done
+  rm -rf -- "$SITE_SOURCE_REPOSITORY"
+  return 1
+}
+
+clone_requested_site_source() {
+  if [[ -n "$SITE_SOURCE_REQUESTED_SHA" ]]; then
+    clone_site_source_exact
+  else
+    clone_site_source_shallow
+  fi
+}
+
 download_site_source_file() {
   local url=$1
   local output=$2
@@ -1401,10 +1932,12 @@ NODE
 fetch_site_source_metadata() {
   assert_regular_command "curl" "$CURL_BIN"
   local metadata_file="$TX_ROOT/site-source-commit.json"
+  local requested=${SITE_SOURCE_REQUESTED_SHA:-$SITE_BRANCH}
   download_site_source_file \
-    "${SITE_REPOSITORY_API_URL%/}/commits/$SITE_BRANCH" "$metadata_file" "$MAX_SITE_API_BYTES" \
+    "${SITE_REPOSITORY_API_URL%/}/commits/$requested" "$metadata_file" "$MAX_SITE_API_BYTES" \
     'application/vnd.github+json' "$SITE_API_ATTEMPT_TIMEOUT_SECONDS" "$SITE_API_TOTAL_TIMEOUT_SECONDS" && \
-    read_site_source_metadata "$metadata_file"
+    read_site_source_metadata "$metadata_file" && \
+    { [[ -z "$SITE_SOURCE_REQUESTED_SHA" || "$SITE_SOURCE_SHA" == "$SITE_SOURCE_REQUESTED_SHA" ]]; }
 }
 
 validate_site_source_archive() {
@@ -1539,7 +2072,7 @@ prepare_site_source_uncached() {
       rm -rf -- "$SITE_SOURCE_REPOSITORY"
       printf 'Exact GitHub API archive download failed; trying one bounded shallow clone\n' >> "$OP_LOG"
       method_started_ms=$(epoch_milliseconds)
-      if ! clone_site_source_shallow; then
+      if ! clone_requested_site_source; then
         method_duration_ms=$(( $(epoch_milliseconds) - method_started_ms ))
         log_publish_event "site_source_clone" "failed" "$method_duration_ms" "SITE_SOURCE_NETWORK_FAILED"
         fail "SITE_SOURCE_NETWORK_FAILED" "GitHub archive and bounded shallow clone are temporarily unavailable" true
@@ -1553,7 +2086,7 @@ prepare_site_source_uncached() {
   else
     printf 'GitHub commit metadata is unavailable; trying one bounded shallow clone\n' >> "$OP_LOG"
     method_started_ms=$(epoch_milliseconds)
-    if ! clone_site_source_shallow; then
+    if ! clone_requested_site_source; then
       method_duration_ms=$(( $(epoch_milliseconds) - method_started_ms ))
       log_publish_event "site_source_clone" "failed" "$method_duration_ms" "SITE_SOURCE_API_UNAVAILABLE"
       fail "SITE_SOURCE_API_UNAVAILABLE" "GitHub metadata and bounded shallow clone are temporarily unavailable" true
@@ -1583,8 +2116,13 @@ prepare_site_source_uncached() {
     SITE_SOURCE_SHA=$cloned_sha
     SITE_SOURCE_TREE_SHA=$cloned_tree
   fi
-  [[ -z "$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || \
+  local prepared_source_status
+  prepared_source_status=$("$GIT_BIN" -C "$SITE_SOURCE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG") || \
+    fail "SITE_SOURCE_FAILED" "Website source checkout status cannot be read" true
+  if [[ -n "$prepared_source_status" ]]; then
+    printf 'Prepared website source status:\n%s\n' "$prepared_source_status" >>"$OP_LOG"
     fail "SITE_SOURCE_FAILED" "Website source checkout is not clean" true
+  fi
   is_git_object_id "$SITE_SOURCE_SHA" || fail "SITE_SOURCE_FAILED" "Website source commit is invalid" true
   is_git_object_id "$SITE_SOURCE_TREE_SHA" || fail "SITE_SOURCE_FAILED" "Website source tree is invalid" true
   assert_regular_source_tree "$SITE_SOURCE_REPOSITORY/content"
@@ -1605,7 +2143,7 @@ prepare_site_source() {
   SITE_SOURCE_SHA=""
   SITE_SOURCE_TREE_SHA=""
   SITE_SOURCE_METHOD=""
-  set_publish_stage "checking_site_source_cache" "Checking the exact website source cache"
+  set_operation_stage "PREPARING_SOURCE" "checking_site_source_cache" "Checking the exact website source cache"
   if fetch_site_source_metadata; then
     expected_sha=$SITE_SOURCE_SHA
     expected_tree=$SITE_SOURCE_TREE_SHA
@@ -1615,8 +2153,13 @@ prepare_site_source() {
     fi
   fi
 
+  if [[ -n "$SITE_SOURCE_REQUESTED_SHA" && -z "$expected_sha" ]]; then
+    SITE_SOURCE_SHA=$SITE_SOURCE_REQUESTED_SHA
+    SITE_SOURCE_TREE_SHA=""
+  fi
+
   if ! $cache_hit; then
-    set_publish_stage "preparing_site_source" "Preparing the exact website source"
+    set_operation_stage "PREPARING_SOURCE" "preparing_site_source" "Preparing the exact website source"
     prepare_site_source_uncached
     if [[ -n "$expected_sha" && \
           ( "$SITE_SOURCE_SHA" != "$expected_sha" || "$SITE_SOURCE_TREE_SHA" != "$expected_tree" ) ]]; then
@@ -1635,6 +2178,17 @@ prepare_site_source() {
   if ! $cache_hit && ! populate_site_source_cache; then
     printf 'Website source cache could not be populated; continuing with the verified transaction source\n' >>"$OP_LOG"
   fi
+  if [[ -n "$SITE_SOURCE_REQUESTED_SHA" && "$SITE_SOURCE_SHA" != "$SITE_SOURCE_REQUESTED_SHA" ]]; then
+    fail "SITE_SOURCE_IDENTITY_MISMATCH" "Prepared website source does not match the queued site commit" true
+  fi
+}
+
+prepare_site_source_commit() {
+  local requested_commit=$1
+  is_git_object_id "$requested_commit" || \
+    fail "SITE_COMMIT_UNAVAILABLE" "Queued website source commit is missing or invalid"
+  SITE_SOURCE_REQUESTED_SHA=$requested_commit
+  prepare_site_source
 }
 
 run_logged() {
@@ -1663,6 +2217,37 @@ read_release_target() {
   releases=$(canonical_directory "$RELEASES_ROOT") || fail "RELEASE_STATE_INVALID" "Release root is unavailable"
   [[ "$target" == "$releases"/* && -d "$target" ]] || fail "RELEASE_STATE_INVALID" "Release link points outside the release root"
   RESOLVED_RELEASE_TARGET="$target"
+}
+
+read_release_identity() {
+  local release=$1
+  local expected_content=${2:-}
+  RELEASE_IDENTITY_SITE_COMMIT=""
+  RELEASE_IDENTITY_CONTENT_COMMIT=""
+  RELEASE_IDENTITY_RELEASE_ID=""
+  [[ -n "$release" && -d "$release" && ! -L "$release" ]] || return 1
+  local site_file="$release/.release-sha"
+  local content_file="$release/.content-sha"
+  local id_file="$release/.release-id"
+  [[ -f "$site_file" && ! -L "$site_file" && -f "$content_file" && ! -L "$content_file" && \
+     -f "$id_file" && ! -L "$id_file" ]] || return 1
+  IFS= read -r RELEASE_IDENTITY_SITE_COMMIT < "$site_file" || return 1
+  IFS= read -r RELEASE_IDENTITY_CONTENT_COMMIT < "$content_file" || return 1
+  IFS= read -r RELEASE_IDENTITY_RELEASE_ID < "$id_file" || return 1
+  is_git_object_id "$RELEASE_IDENTITY_SITE_COMMIT" || return 1
+  is_git_object_id "$RELEASE_IDENTITY_CONTENT_COMMIT" || return 1
+  [[ "$RELEASE_IDENTITY_RELEASE_ID" == "$(basename -- "$release")" ]] || return 1
+  [[ -z "$expected_content" || "$RELEASE_IDENTITY_CONTENT_COMMIT" == "$expected_content" ]]
+}
+
+load_current_release_site_commit() {
+  local expected_content=$1
+  read_release_target "$CURRENT_LINK"
+  [[ -n "$RESOLVED_RELEASE_TARGET" ]] || \
+    fail "SITE_COMMIT_UNAVAILABLE" "Current release is unavailable; queue initialization cannot infer website source"
+  read_release_identity "$RESOLVED_RELEASE_TARGET" "$expected_content" || \
+    fail "SITE_COMMIT_UNAVAILABLE" "Current release identity does not match the published content commit"
+  QUEUE_SITE_COMMIT=$RELEASE_IDENTITY_SITE_COMMIT
 }
 
 make_link_atomically() {
@@ -1787,6 +2372,7 @@ cleanup() {
   fi
   cleanup_queue_staging_refs || true
   release_lock || true
+  release_sync_lock || true
   exit "$status"
 }
 
@@ -2658,6 +3244,7 @@ persist_queued_upload() {
   UPLOAD_COALESCED_INTO_COMMIT=""
   UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=""
   UPLOAD_PUBLISHED_RELEASE_ID=""
+  UPLOAD_PUBLISHED_AT=""
   UPLOAD_RETRYABLE=false
   UPLOAD_ERROR_CODE=""
   UPLOAD_MESSAGE="Content validated and queued for synchronization"
@@ -2707,6 +3294,20 @@ persist_queued_upload() {
   fi
 }
 
+next_scheduled_sync_at() {
+  "$NODE_BIN" -e '
+const interval = 30 * 60 * 1000;
+const next = (Math.floor(Date.now() / interval) + 1) * interval;
+process.stdout.write(new Date(next).toISOString());
+'
+}
+
+sync_timer_is_active() {
+  [[ -n "$SYSTEMCTL_BIN" && -x "$SYSTEMCTL_BIN" ]] || return 1
+  "$SYSTEMCTL_BIN" is-enabled --quiet "$SYNC_TIMER_NAME" >/dev/null 2>&1 && \
+    "$SYSTEMCTL_BIN" is-active --quiet "$SYNC_TIMER_NAME" >/dev/null 2>&1
+}
+
 pending_status() {
   local response_action=${1:-pending-status}
   local load_status=0
@@ -2737,14 +3338,38 @@ pending_status() {
   [[ "$QUEUE_PENDING_CONTENT_COMMIT" == "$QUEUE_PUBLISHED_CONTENT_COMMIT" ]] || has_pending=true
   [[ -z "$QUEUE_SYNCING_CONTENT_COMMIT" ]] || syncing_json=$(json_quote "$QUEUE_SYNCING_CONTENT_COMMIT")
   [[ -z "$latest" ]] || latest_json=$(json_quote "$latest")
+  sync_ids_for_status || fail "SYNC_STATE_CORRUPT" "Synchronization index refs are invalid"
+  local active_json=null last_json=null last_status_json=null blocked_json=null
+  [[ -z "$SYNC_ACTIVE_TRANSACTION_ID" ]] || active_json=$(json_quote "$SYNC_ACTIVE_TRANSACTION_ID")
+  [[ -z "$SYNC_LAST_TRANSACTION_ID" ]] || last_json=$(json_quote "$SYNC_LAST_TRANSACTION_ID")
+  if [[ -n "$SYNC_LAST_TRANSACTION_ID" ]]; then
+    load_indexed_sync_state "$SYNC_LAST_REF" "" || \
+      fail "SYNC_STATE_CORRUPT" "Last synchronization transaction is invalid"
+    last_status_json=$(json_quote "$SYNC_STATUS")
+  fi
+  if queue_ref_exists "$SYNC_BLOCKED_REF"; then
+    load_indexed_sync_state "$SYNC_BLOCKED_REF" "FAILED_BLOCKED" || \
+      fail "SYNC_STATE_CORRUPT" "Blocked synchronization state is invalid"
+    blocked_json=$(json_quote "$SYNC_SYNCING_CONTENT_COMMIT")
+  fi
+  local timer_active=false
+  sync_timer_is_active && timer_active=true
+  local next_sync server_time
+  next_sync=$(next_scheduled_sync_at) || fail "INTERNAL_ERROR" "Cannot calculate the next fixed synchronization time"
+  server_time=$(iso_timestamp)
   printf '{"ok":true,"action":%s,"schema_version":%d' \
     "$(json_quote "$response_action")" "$QUEUE_SCHEMA_VERSION"
   printf ',"published_content_commit":%s,"pending_content_commit":%s,"syncing_content_commit":%s' \
     "$(json_quote "$QUEUE_PUBLISHED_CONTENT_COMMIT")" "$(json_quote "$QUEUE_PENDING_CONTENT_COMMIT")" "$syncing_json"
   printf ',"has_pending_changes":%s,"pending_upload_count":%d,"latest_upload_transaction_id":%s' \
     "$has_pending" "$pending_count" "$latest_json"
-  printf ',"next_scheduled_sync_at":null,"server_time":%s,"queue_protocol_version":%d,"message":%s}\n' \
-    "$(json_quote "$(iso_timestamp)")" "$QUEUE_PROTOCOL_VERSION" "$(json_quote "Pending content status checked")"
+  printf ',"active_sync_transaction_id":%s,"last_sync_transaction_id":%s,"last_sync_status":%s,"blocked_content_commit":%s' \
+    "$active_json" "$last_json" "$last_status_json" "$blocked_json"
+  printf ',"next_scheduled_sync_at":%s,"sync_timer_active":%s,"server_time":%s' \
+    "$(json_quote "$next_sync")" "$timer_active" "$(json_quote "$server_time")"
+  printf ',"site_commit":%s,"queue_protocol_version":%d,"sync_protocol_version":%d,"message":%s}\n' \
+    "$(json_quote "$QUEUE_SITE_COMMIT")" "$QUEUE_PROTOCOL_VERSION" "$SYNC_PROTOCOL_VERSION" \
+    "$(json_quote "Pending content status checked")"
 }
 
 queue_init() {
@@ -2755,6 +3380,16 @@ queue_init() {
   if [[ $existing_status -eq 0 ]]; then
     [[ "$QUEUE_PUBLISHED_CONTENT_COMMIT" == "$published_commit" ]] || \
       fail "QUEUE_ALREADY_INITIALIZED" "Content queue is already initialized with different state"
+    if [[ -z "$QUEUE_SITE_COMMIT" ]]; then
+      load_current_release_site_commit "$published_commit"
+      local old_queue_state
+      old_queue_state=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$QUEUE_STATE_REF^{blob}" 2>>"$OP_LOG") || \
+        fail "QUEUE_STATE_CORRUPT" "Queue state cannot be migrated"
+      write_queue_state_blob "$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" || \
+        fail "QUEUE_STATE_UPDATE_FAILED" "Cannot add the trusted website source commit to queue state"
+      "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref "$QUEUE_STATE_REF" "$QUEUE_STATE_BLOB" "$old_queue_state" \
+        >>"$OP_LOG" 2>&1 || fail "QUEUE_STATE_UPDATE_FAILED" "Cannot atomically migrate queue state" true
+    fi
     SUCCESS=true
     pending_status "queue-init"
     return
@@ -2773,6 +3408,7 @@ queue_init() {
   repository_head=$(git_head_or_empty "$CONTENT_REPOSITORY")
   [[ "$repository_head" == "$published_commit" ]] || \
     fail "PUBLISHED_COMMIT_MISMATCH" "Published content must be initialized from the repository HEAD"
+  load_current_release_site_commit "$published_commit"
   QUEUE_INITIALIZED_AT=""
   write_queue_state_blob "" || fail "QUEUE_STATE_UPDATE_FAILED" "Cannot create initial queue state"
   local update_file="$TX_ROOT/queue-init-ref-update"
@@ -2867,6 +3503,7 @@ queue_upload() {
   UPLOAD_COALESCED_INTO_COMMIT=""
   UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=""
   UPLOAD_PUBLISHED_RELEASE_ID=""
+  UPLOAD_PUBLISHED_AT=""
   UPLOAD_RETRYABLE=false
   UPLOAD_ERROR_CODE=""
   UPLOAD_MESSAGE="Content validated and queued for synchronization"
@@ -2880,6 +3517,756 @@ queue_upload() {
   SUCCESS=true
   emit_upload_state_json "$transaction_ref" "queue-upload" || \
     fail "QUEUE_STATE_CORRUPT" "Queued upload transaction cannot be rendered"
+}
+
+generate_sync_transaction_id() {
+  local attempt candidate full
+  for attempt in {1..10}; do
+    full=$(printf '%s\n' "$(iso_timestamp)-$$-$RANDOM-$attempt" | \
+      "$GIT_BIN" -C "$CONTENT_REPOSITORY" hash-object --stdin 2>>"$OP_LOG") || return 1
+    candidate=${full:0:32}
+    is_sync_transaction_id "$candidate" || continue
+    if ! queue_ref_exists "$SYNC_TRANSACTION_REF_ROOT/$candidate"; then
+      SYNC_TRANSACTION_ID=$candidate
+      return 0
+    fi
+  done
+  return 1
+}
+
+initialize_sync_state() {
+  local trigger=$1
+  local attempt=${2:-1}
+  is_sync_trigger "$trigger" || fail "INVALID_SYNC_TRIGGER" "Synchronization trigger is invalid"
+  [[ "$attempt" =~ ^[1-9][0-9]*$ && "$attempt" -le 100 ]] || \
+    fail "SYNC_STATE_CORRUPT" "Synchronization attempt is invalid"
+  SYNC_TRIGGER=$trigger
+  SYNC_STATUS="SNAPSHOTTING"
+  SYNC_STAGE="SNAPSHOTTING"
+  SYNC_CREATED_AT=$(iso_timestamp)
+  SYNC_STARTED_AT=$SYNC_CREATED_AT
+  SYNC_UPDATED_AT=$SYNC_CREATED_AT
+  SYNC_COMPLETED_AT=""
+  SYNC_STAGE_STARTED_AT=$SYNC_CREATED_AT
+  SYNC_STARTED_MS=$(epoch_milliseconds)
+  SYNC_ELAPSED_MS=0
+  SYNC_SITE_COMMIT=$QUEUE_SITE_COMMIT
+  SYNC_CONTENT_COMMIT=$QUEUE_PENDING_CONTENT_COMMIT
+  SYNC_SOURCE_CONTENT_COMMIT=$QUEUE_PENDING_SOURCE_COMMIT
+  SYNC_PUBLISHED_BEFORE=$QUEUE_PUBLISHED_CONTENT_COMMIT
+  SYNC_PENDING_AT_START=$QUEUE_PENDING_CONTENT_COMMIT
+  SYNC_SYNCING_CONTENT_COMMIT=$QUEUE_PENDING_CONTENT_COMMIT
+  SYNC_SOURCE_SYNCING_COMMIT=$QUEUE_PENDING_SOURCE_COMMIT
+  SYNC_RELEASE_ID=""
+  SYNC_RELEASE_PATH=""
+  SYNC_PREVIOUS_RELEASE_PATH=""
+  SYNC_PREVIOUS_PREVIOUS_RELEASE_PATH=""
+  SYNC_RETRYABLE=false
+  SYNC_BLOCKED=false
+  SYNC_ERROR_CODE=""
+  SYNC_MESSAGE="Fixed pending content snapshot for synchronization"
+  SYNC_ATTEMPT=$attempt
+  SYNC_RECOVERED=false
+  SYNC_SWITCH_COMPLETED=false
+  SYNC_HEALTH_VERIFIED=false
+  SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID=$QUEUE_LATEST_UPLOAD_TRANSACTION_ID
+  SYNC_STATE_BLOB=""
+}
+
+sync_commit_is_in_snapshot() {
+  local upload_content=$1
+  local upload_source=$2
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+    "$upload_content" "$SYNC_SYNCING_CONTENT_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+    "$upload_source" "$SYNC_SOURCE_SYNCING_COMMIT" >>"$OP_LOG" 2>&1
+}
+
+create_skipped_sync_transaction() {
+  initialize_sync_state "$SYNC_TRIGGER" "$SYNC_ATTEMPT"
+  SYNC_STATUS="SKIPPED_NO_PENDING"
+  SYNC_STAGE="SKIPPED_NO_PENDING"
+  SYNC_COMPLETED_AT=$(iso_timestamp)
+  SYNC_MESSAGE="No pending content changes"
+  SYNC_SYNCING_CONTENT_COMMIT=""
+  SYNC_SOURCE_SYNCING_COMMIT=""
+  write_sync_state_blob || fail "SYNC_STATE_UPDATE_FAILED" "Cannot create skipped synchronization state"
+  local transaction_ref last_old=""
+  transaction_ref=$(sync_transaction_ref) || fail "SYNC_STATE_UPDATE_FAILED" "Synchronization ref is invalid"
+  if queue_ref_exists "$SYNC_LAST_REF"; then
+    sync_ref_object "$SYNC_LAST_REF" || fail "SYNC_STATE_CORRUPT" "Last synchronization ref is invalid"
+    last_old=$SYNC_RESOLVED_OBJECT
+  fi
+  local update_file="$TX_ROOT/skipped-sync-ref-update"
+  {
+    printf 'start\n'
+    printf 'verify %s %s\n' "$PUBLISHED_CONTENT_REF" "$QUEUE_PUBLISHED_CONTENT_COMMIT"
+    printf 'verify %s %s\n' "$PENDING_CONTENT_REF" "$QUEUE_PENDING_CONTENT_COMMIT"
+    printf 'verify %s %040d\n' "$SYNC_ACTIVE_REF" 0
+    printf 'create %s %s\n' "$transaction_ref" "$SYNC_NEW_STATE_BLOB"
+    if [[ -n "$last_old" ]]; then
+      printf 'update %s %s %s\n' "$SYNC_LAST_REF" "$SYNC_NEW_STATE_BLOB" "$last_old"
+    else
+      printf 'create %s %s\n' "$SYNC_LAST_REF" "$SYNC_NEW_STATE_BLOB"
+    fi
+    printf 'prepare\ncommit\n'
+  } > "$update_file"
+  chmod 0600 -- "$update_file"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref --stdin < "$update_file" >>"$OP_LOG" 2>&1 || \
+    fail "SYNC_STATE_UPDATE_FAILED" "Cannot atomically record skipped synchronization" true
+  SYNC_STATE_BLOB=$SYNC_NEW_STATE_BLOB
+}
+
+create_sync_snapshot() {
+  if [[ -n "$QUEUE_SITE_COMMIT" ]]; then
+    is_git_object_id "$QUEUE_SITE_COMMIT" || fail "QUEUE_STATE_CORRUPT" "Queue website source commit is invalid"
+  fi
+  [[ -n "$QUEUE_PENDING_SOURCE_COMMIT" ]] || \
+    fail "QUEUE_STATE_CORRUPT" "Pending source snapshot is unavailable"
+  initialize_sync_state "$SYNC_TRIGGER" "$SYNC_ATTEMPT"
+  read_release_target "$CURRENT_LINK"
+  SYNC_PREVIOUS_RELEASE_PATH=$RESOLVED_RELEASE_TARGET
+  read_release_target "$PREVIOUS_LINK"
+  SYNC_PREVIOUS_PREVIOUS_RELEASE_PATH=$RESOLVED_RELEASE_TARGET
+
+  local queue_state_old
+  queue_state_old=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$QUEUE_STATE_REF^{blob}" 2>>"$OP_LOG") || \
+    fail "QUEUE_STATE_CORRUPT" "Queue state cannot be updated"
+  write_queue_state_blob "$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" || \
+    fail "QUEUE_STATE_UPDATE_FAILED" "Cannot refresh queue state during synchronization snapshot"
+  write_sync_state_blob || fail "SYNC_STATE_UPDATE_FAILED" "Cannot create synchronization state"
+
+  local upload_refs_output ref upload_transaction_id upload_old_blob
+  upload_refs_output=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" for-each-ref --format='%(refname)' \
+    "$UPLOAD_TRANSACTION_REF_ROOT/" 2>>"$OP_LOG") || \
+    fail "QUEUE_STATE_CORRUPT" "Upload transaction refs cannot be enumerated"
+  local -a member_refs=()
+  local -a member_objects=()
+  local latest_upload_ref="" latest_upload_old="" latest_upload_new=""
+  local saved_publish_transaction=$PUBLISH_TRANSACTION_ID
+  local saved_bundle_sha=$PUBLISH_EXPECTED_BUNDLE_SHA256
+  while IFS= read -r ref; do
+    [[ -n "$ref" ]] || continue
+    upload_transaction_id=${ref##*/}
+    is_publish_transaction_id "$upload_transaction_id" || \
+      fail "QUEUE_STATE_CORRUPT" "Upload transaction ref name is invalid"
+    upload_old_blob=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$ref^{blob}" 2>>"$OP_LOG") || \
+      fail "QUEUE_STATE_CORRUPT" "Upload transaction state cannot be read"
+    load_upload_state_ref "$ref" "$upload_transaction_id" || \
+      fail "QUEUE_STATE_CORRUPT" "Upload transaction state is invalid"
+    case "$UPLOAD_STATUS" in
+      QUEUED|COALESCED)
+        if sync_commit_is_in_snapshot "$UPLOAD_CONTENT_COMMIT" "$UPLOAD_SOURCE_COMMIT"; then
+          member_refs+=("$(sync_member_ref "$SYNC_TRANSACTION_ID" "$upload_transaction_id")")
+          member_objects+=("$upload_old_blob")
+          if [[ "$upload_transaction_id" == "$SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID" ]]; then
+            [[ "$UPLOAD_STATUS" == "QUEUED" ]] || \
+              fail "QUEUE_STATE_CORRUPT" "Latest upload transaction is not queued"
+            UPLOAD_STATUS="SYNCING"
+            UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=$SYNC_TRANSACTION_ID
+            UPLOAD_MESSAGE="Included in active synchronization"
+            write_upload_state_blob "$TX_ROOT/syncing-upload-$upload_transaction_id.json" || \
+              fail "SYNC_STATE_UPDATE_FAILED" "Cannot create syncing upload state"
+            latest_upload_ref=$ref
+            latest_upload_old=$upload_old_blob
+            latest_upload_new=$UPLOAD_STATE_BLOB
+          fi
+        fi
+        ;;
+      FAILED|SYNCING|PUBLISHED) ;;
+      *) fail "QUEUE_STATE_CORRUPT" "Upload transaction has an invalid status" ;;
+    esac
+  done <<< "$upload_refs_output"
+  PUBLISH_TRANSACTION_ID=$saved_publish_transaction
+  PUBLISH_EXPECTED_BUNDLE_SHA256=$saved_bundle_sha
+  [[ -n "$latest_upload_ref" ]] || \
+    fail "QUEUE_STATE_CORRUPT" "Latest pending upload is not part of the fixed synchronization snapshot"
+
+  local old_syncing_content="" old_syncing_source="" old_blocked=""
+  if queue_ref_exists "$SYNCING_CONTENT_REF"; then
+    resolve_queue_commit_ref "$SYNCING_CONTENT_REF" true || fail "QUEUE_STATE_CORRUPT" "Syncing content ref is invalid"
+    old_syncing_content=$RESOLVED_QUEUE_REF
+  fi
+  if queue_ref_exists "$SYNCING_SOURCE_REF"; then
+    resolve_queue_commit_ref "$SYNCING_SOURCE_REF" true || fail "QUEUE_STATE_CORRUPT" "Syncing source ref is invalid"
+    old_syncing_source=$RESOLVED_QUEUE_REF
+  fi
+  if queue_ref_exists "$SYNC_BLOCKED_REF"; then
+    sync_ref_object "$SYNC_BLOCKED_REF" || fail "SYNC_STATE_CORRUPT" "Blocked synchronization ref is invalid"
+    old_blocked=$SYNC_RESOLVED_OBJECT
+  fi
+
+  local transaction_ref update_file="$TX_ROOT/sync-snapshot-ref-update"
+  transaction_ref=$(sync_transaction_ref) || fail "SYNC_STATE_UPDATE_FAILED" "Synchronization ref is invalid"
+  {
+    printf 'start\n'
+    printf 'update %s %s %s\n' "$QUEUE_STATE_REF" "$QUEUE_STATE_BLOB" "$queue_state_old"
+    printf 'verify %s %s\n' "$PUBLISHED_CONTENT_REF" "$SYNC_PUBLISHED_BEFORE"
+    printf 'verify %s %s\n' "$PENDING_CONTENT_REF" "$SYNC_PENDING_AT_START"
+    printf 'verify %s %s\n' "$PENDING_SOURCE_REF" "$SYNC_SOURCE_SYNCING_COMMIT"
+    if [[ -n "$old_syncing_content" ]]; then
+      printf 'update %s %s %s\n' "$SYNCING_CONTENT_REF" "$SYNC_SYNCING_CONTENT_COMMIT" "$old_syncing_content"
+    else
+      printf 'create %s %s\n' "$SYNCING_CONTENT_REF" "$SYNC_SYNCING_CONTENT_COMMIT"
+    fi
+    if [[ -n "$old_syncing_source" ]]; then
+      printf 'update %s %s %s\n' "$SYNCING_SOURCE_REF" "$SYNC_SOURCE_SYNCING_COMMIT" "$old_syncing_source"
+    else
+      printf 'create %s %s\n' "$SYNCING_SOURCE_REF" "$SYNC_SOURCE_SYNCING_COMMIT"
+    fi
+    printf 'create %s %s\n' "$transaction_ref" "$SYNC_NEW_STATE_BLOB"
+    printf 'create %s %s\n' "$SYNC_ACTIVE_REF" "$SYNC_NEW_STATE_BLOB"
+    local index
+    for index in "${!member_refs[@]}"; do
+      printf 'create %s %s\n' "${member_refs[$index]}" "${member_objects[$index]}"
+    done
+    printf 'update %s %s %s\n' "$latest_upload_ref" "$latest_upload_new" "$latest_upload_old"
+    if [[ -n "$old_blocked" ]]; then
+      printf 'delete %s %s\n' "$SYNC_BLOCKED_REF" "$old_blocked"
+    fi
+    printf 'prepare\ncommit\n'
+  } > "$update_file"
+  chmod 0600 -- "$update_file"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref --stdin < "$update_file" >>"$OP_LOG" 2>&1 || \
+    fail "SYNC_STATE_UPDATE_FAILED" "Cannot atomically fix the pending synchronization snapshot" true
+  SYNC_STATE_BLOB=$SYNC_NEW_STATE_BLOB
+  SYNC_STATE_ACTIVE=true
+}
+
+clone_sync_candidate_repository() {
+  CANDIDATE_REPOSITORY="$TX_ROOT/candidate-content"
+  if ! "$GIT_BIN" clone --quiet --no-hardlinks --no-checkout \
+    "$CONTENT_REPOSITORY" "$CANDIDATE_REPOSITORY" >>"$OP_LOG" 2>&1; then
+    fail "CONTENT_REPOSITORY_INVALID" "Cannot clone the fixed syncing content repository" true
+  fi
+  if ! "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" fetch --quiet --no-tags "$CONTENT_REPOSITORY" \
+    "$SYNCING_CONTENT_REF:refs/algae/sync-build" >>"$OP_LOG" 2>&1; then
+    fail "SYNC_STATE_CORRUPT" "Cannot load the fixed syncing content snapshot" true
+  fi
+  "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" checkout --quiet --detach refs/algae/sync-build >>"$OP_LOG" 2>&1 || \
+    fail "SYNC_STATE_CORRUPT" "Cannot check out the fixed syncing content snapshot" true
+  CANDIDATE_CONTENT_SHA=$(git_head_or_empty "$CANDIDATE_REPOSITORY")
+  [[ "$CANDIDATE_CONTENT_SHA" == "$SYNC_SYNCING_CONTENT_COMMIT" ]] || \
+    fail "SYNC_STATE_CORRUPT" "Syncing content snapshot changed identity"
+  assert_no_symlinks_in_tree "$CANDIDATE_REPOSITORY"
+  local candidate_status
+  candidate_status=$("$GIT_BIN" -C "$CANDIDATE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG") || \
+    fail "CONTENT_REPOSITORY_INVALID" "Syncing content snapshot status cannot be read" true
+  [[ -z "$candidate_status" ]] || fail "CONTENT_REPOSITORY_INVALID" "Syncing content snapshot is dirty"
+}
+
+sync_log_indicates_transient_error() {
+  [[ -n "$OP_LOG" && -f "$OP_LOG" ]] || return 1
+  LC_ALL=C grep -Eiq \
+    'EAI_AGAIN|ETIMEDOUT|ECONNRESET|ENETUNREACH|temporary failure|temporarily unavailable|Could not resolve|GnuTLS|HTTP[^0-9]*(429|502|503|504)|response status (429|502|503|504)' \
+    "$OP_LOG"
+}
+
+sync_error_is_retryable() {
+  case "$1" in
+    CONTROLLER_BUSY|SYNC_BUSY|SITE_SOURCE_NETWORK_FAILED|SITE_SOURCE_API_UNAVAILABLE)
+      return 0
+      ;;
+    DEPENDENCY_PREPARATION_FAILED)
+      sync_log_indicates_transient_error
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+finish_sync_failure() {
+  local code=$1
+  local message=$2
+  $SYNC_STATE_ACTIVE || return 0
+  [[ -n "$SYNC_STATE_BLOB" && -n "$SYNC_TRANSACTION_ID" ]] || return 1
+
+  local retryable=false
+  if sync_error_is_retryable "$code" && (( SYNC_ATTEMPT < SYNC_MAX_ATTEMPTS )); then
+    retryable=true
+  fi
+  SYNC_COMPLETED_AT=$(iso_timestamp)
+  SYNC_STAGE_STARTED_AT=$SYNC_COMPLETED_AT
+  SYNC_ERROR_CODE=$code
+  SYNC_MESSAGE=$message
+  SYNC_RETRYABLE=$retryable
+  if $retryable; then
+    SYNC_STATUS="FAILED_RETRYABLE"
+    SYNC_STAGE="FAILED_RETRYABLE"
+    SYNC_BLOCKED=false
+  else
+    SYNC_STATUS="FAILED_BLOCKED"
+    SYNC_STAGE="FAILED_BLOCKED"
+    SYNC_BLOCKED=true
+    if sync_error_is_retryable "$code" && (( SYNC_ATTEMPT >= SYNC_MAX_ATTEMPTS )); then
+      SYNC_ERROR_CODE="SYNC_RETRY_LIMIT_REACHED"
+      SYNC_MESSAGE="$message; automatic retry limit reached"
+    fi
+  fi
+  write_sync_state_blob || return 1
+
+  local transaction_ref last_old="" blocked_old=""
+  transaction_ref=$(sync_transaction_ref) || return 1
+  if queue_ref_exists "$SYNC_LAST_REF"; then
+    sync_ref_object "$SYNC_LAST_REF" || return 1
+    last_old=$SYNC_RESOLVED_OBJECT
+  fi
+  if queue_ref_exists "$SYNC_BLOCKED_REF"; then
+    sync_ref_object "$SYNC_BLOCKED_REF" || return 1
+    blocked_old=$SYNC_RESOLVED_OBJECT
+  fi
+
+  local latest_ref="" latest_current="" latest_original=""
+  if [[ -n "$SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID" ]]; then
+    latest_ref="$UPLOAD_TRANSACTION_REF_ROOT/$SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID"
+    local member_ref
+    member_ref=$(sync_member_ref "$SYNC_TRANSACTION_ID" "$SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID") || return 1
+    sync_ref_object "$member_ref" || return 1
+    latest_original=$SYNC_RESOLVED_OBJECT
+    sync_ref_object "$latest_ref" || return 1
+    latest_current=$SYNC_RESOLVED_OBJECT
+  fi
+
+  local keep_active=false
+  if [[ "$code" == "RELEASE_ROLLBACK_FAILED" || "$code" == "CONTENT_REPOSITORY_RECOVERY_FAILED" ]]; then
+    keep_active=true
+  fi
+  local update_file="$TX_ROOT/failed-sync-ref-update"
+  {
+    printf 'start\n'
+    printf 'update %s %s %s\n' "$transaction_ref" "$SYNC_NEW_STATE_BLOB" "$SYNC_STATE_BLOB"
+    if $keep_active; then
+      printf 'update %s %s %s\n' "$SYNC_ACTIVE_REF" "$SYNC_NEW_STATE_BLOB" "$SYNC_STATE_BLOB"
+    else
+      printf 'delete %s %s\n' "$SYNC_ACTIVE_REF" "$SYNC_STATE_BLOB"
+    fi
+    if [[ -n "$last_old" ]]; then
+      printf 'update %s %s %s\n' "$SYNC_LAST_REF" "$SYNC_NEW_STATE_BLOB" "$last_old"
+    else
+      printf 'create %s %s\n' "$SYNC_LAST_REF" "$SYNC_NEW_STATE_BLOB"
+    fi
+    if $SYNC_BLOCKED; then
+      if [[ -n "$blocked_old" ]]; then
+        printf 'update %s %s %s\n' "$SYNC_BLOCKED_REF" "$SYNC_NEW_STATE_BLOB" "$blocked_old"
+      else
+        printf 'create %s %s\n' "$SYNC_BLOCKED_REF" "$SYNC_NEW_STATE_BLOB"
+      fi
+    elif [[ -n "$blocked_old" ]]; then
+      printf 'delete %s %s\n' "$SYNC_BLOCKED_REF" "$blocked_old"
+    fi
+    if [[ -n "$latest_ref" && "$latest_current" != "$latest_original" ]]; then
+      printf 'update %s %s %s\n' "$latest_ref" "$latest_original" "$latest_current"
+    fi
+    printf 'prepare\ncommit\n'
+  } > "$update_file"
+  chmod 0600 -- "$update_file"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref --stdin < "$update_file" >>"$OP_LOG" 2>&1 || return 1
+  SYNC_STATE_BLOB=$SYNC_NEW_STATE_BLOB
+  if ! $keep_active; then
+    SYNC_STATE_ACTIVE=false
+  fi
+}
+
+sync_release_is_valid() {
+  local require_health=${1:-false}
+  [[ -n "$SYNC_RELEASE_PATH" ]] || return 1
+  local resolved
+  resolved=$(realpath -e -- "$SYNC_RELEASE_PATH" 2>>"$OP_LOG") || return 1
+  [[ "$resolved" == "$SYNC_RELEASE_PATH" ]] || return 1
+  read_release_identity "$resolved" "$SYNC_SYNCING_CONTENT_COMMIT" || return 1
+  [[ "$RELEASE_IDENTITY_SITE_COMMIT" == "$SYNC_SITE_COMMIT" && \
+     "$RELEASE_IDENTITY_RELEASE_ID" == "$SYNC_RELEASE_ID" ]] || return 1
+  local source_file="$resolved/.source-content-sha"
+  local transaction_file="$resolved/.algae-sync-transaction-id"
+  [[ -f "$source_file" && ! -L "$source_file" && -f "$transaction_file" && ! -L "$transaction_file" ]] || return 1
+  [[ $(<"$source_file") == "$SYNC_SOURCE_SYNCING_COMMIT" && \
+     $(<"$transaction_file") == "$SYNC_TRANSACTION_ID" ]] || return 1
+  if [[ "$require_health" == "true" ]]; then
+    local health_file="$resolved/.algae-sync-health-ok"
+    [[ -f "$health_file" && ! -L "$health_file" && $(<"$health_file") == "$SYNC_TRANSACTION_ID" ]] || return 1
+  fi
+}
+
+reset_formal_repository_to_commit() {
+  local commit=$1
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" reset --hard --quiet "$commit" >>"$OP_LOG" 2>&1 || return 1
+  [[ $(git_head_or_empty "$CONTENT_REPOSITORY") == "$commit" ]] || return 1
+  local status
+  status=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG") || return 1
+  [[ -z "$status" ]] || return 1
+  assert_no_symlinks_in_tree "$CONTENT_REPOSITORY"
+}
+
+complete_sync_success() {
+  load_queue_state || fail "QUEUE_STATE_CORRUPT" "Queue state changed incompatibly before synchronization commit"
+  [[ "$QUEUE_PUBLISHED_CONTENT_COMMIT" == "$SYNC_PUBLISHED_BEFORE" && \
+     "$QUEUE_SYNCING_CONTENT_COMMIT" == "$SYNC_SYNCING_CONTENT_COMMIT" && \
+     "$QUEUE_SYNCING_SOURCE_COMMIT" == "$SYNC_SOURCE_SYNCING_COMMIT" && \
+     "$QUEUE_SITE_COMMIT" == "$SYNC_SITE_COMMIT" ]] || \
+    fail "SYNC_STATE_CORRUPT" "Synchronization refs no longer match the fixed snapshot"
+  read_release_target "$CURRENT_LINK"
+  [[ "$RESOLVED_RELEASE_TARGET" == "$SYNC_RELEASE_PATH" ]] || \
+    fail "SYNC_RECOVERY_REQUIRED" "Current release does not match the synchronization transaction"
+  sync_release_is_valid true || fail "SYNC_RELEASE_INVALID" "Synchronized release markers are invalid"
+
+  reset_formal_repository_to_commit "$SYNC_SYNCING_CONTENT_COMMIT" || \
+    fail "CONTENT_REPOSITORY_UPDATE_FAILED" "Cannot advance the formal content repository to the synchronized commit" true
+
+  local queue_state_old
+  queue_state_old=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$QUEUE_STATE_REF^{blob}" 2>>"$OP_LOG") || \
+    fail "QUEUE_STATE_CORRUPT" "Queue state cannot be finalized"
+  write_queue_state_blob "$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" || \
+    fail "QUEUE_STATE_UPDATE_FAILED" "Cannot create final queue state"
+
+  local member_refs_output member_ref upload_transaction_id upload_ref upload_old_blob
+  member_refs_output=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" for-each-ref --format='%(refname)' \
+    "$SYNC_MEMBER_REF_ROOT/$SYNC_TRANSACTION_ID/" 2>>"$OP_LOG") || \
+    fail "SYNC_STATE_CORRUPT" "Synchronization upload members cannot be enumerated"
+  local -a upload_refs=()
+  local -a upload_old_blobs=()
+  local -a upload_new_blobs=()
+  local saved_publish_transaction=$PUBLISH_TRANSACTION_ID
+  local saved_bundle_sha=$PUBLISH_EXPECTED_BUNDLE_SHA256
+  local published_at
+  published_at=$(iso_timestamp)
+  while IFS= read -r member_ref; do
+    [[ -n "$member_ref" ]] || continue
+    upload_transaction_id=${member_ref##*/}
+    is_publish_transaction_id "$upload_transaction_id" || \
+      fail "SYNC_STATE_CORRUPT" "Synchronization upload member name is invalid"
+    sync_ref_object "$member_ref" || fail "SYNC_STATE_CORRUPT" "Synchronization upload member is invalid"
+    upload_ref="$UPLOAD_TRANSACTION_REF_ROOT/$upload_transaction_id"
+    upload_old_blob=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$upload_ref^{blob}" 2>>"$OP_LOG") || \
+      fail "QUEUE_STATE_CORRUPT" "Included upload transaction is missing"
+    load_upload_state_ref "$upload_ref" "$upload_transaction_id" || \
+      fail "QUEUE_STATE_CORRUPT" "Included upload transaction is invalid"
+    sync_commit_is_in_snapshot "$UPLOAD_CONTENT_COMMIT" "$UPLOAD_SOURCE_COMMIT" || \
+      fail "SYNC_STATE_CORRUPT" "Included upload is outside the fixed snapshot"
+    if [[ "$upload_transaction_id" == "$SYNC_SNAPSHOT_LATEST_UPLOAD_TRANSACTION_ID" ]]; then
+      [[ "$UPLOAD_STATUS" == "SYNCING" && "$UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID" == "$SYNC_TRANSACTION_ID" ]] || \
+        fail "SYNC_STATE_CORRUPT" "Latest included upload is not attached to the active synchronization"
+      UPLOAD_STATUS="PUBLISHED"
+      UPLOAD_COALESCED_INTO_COMMIT=""
+      UPLOAD_MESSAGE="Published by queued content synchronization"
+    else
+      case "$UPLOAD_STATUS" in
+        COALESCED) ;;
+        QUEUED)
+          UPLOAD_STATUS="COALESCED"
+          UPLOAD_COALESCED_INTO_COMMIT=$SYNC_SYNCING_CONTENT_COMMIT
+          ;;
+        *) fail "SYNC_STATE_CORRUPT" "Earlier included upload has an invalid status" ;;
+      esac
+      UPLOAD_MESSAGE="Included in a published queued content snapshot"
+    fi
+    UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=$SYNC_TRANSACTION_ID
+    UPLOAD_PUBLISHED_RELEASE_ID=$SYNC_RELEASE_ID
+    UPLOAD_PUBLISHED_AT=$published_at
+    UPLOAD_RETRYABLE=false
+    UPLOAD_ERROR_CODE=""
+    write_upload_state_blob "$TX_ROOT/published-upload-$upload_transaction_id.json" || \
+      fail "SYNC_STATE_UPDATE_FAILED" "Cannot create published upload association"
+    upload_refs+=("$upload_ref")
+    upload_old_blobs+=("$upload_old_blob")
+    upload_new_blobs+=("$UPLOAD_STATE_BLOB")
+  done <<< "$member_refs_output"
+  PUBLISH_TRANSACTION_ID=$saved_publish_transaction
+  PUBLISH_EXPECTED_BUNDLE_SHA256=$saved_bundle_sha
+  [[ ${#upload_refs[@]} -gt 0 ]] || fail "SYNC_STATE_CORRUPT" "Synchronization has no retained upload members"
+
+  SYNC_STATUS="PUBLISHED"
+  SYNC_STAGE="PUBLISHED"
+  SYNC_COMPLETED_AT=$published_at
+  SYNC_STAGE_STARTED_AT=$published_at
+  SYNC_RETRYABLE=false
+  SYNC_BLOCKED=false
+  SYNC_ERROR_CODE=""
+  SYNC_MESSAGE="Pending content synchronized and published"
+  SYNC_SWITCH_COMPLETED=true
+  SYNC_HEALTH_VERIFIED=true
+  write_sync_state_blob || fail "SYNC_STATE_UPDATE_FAILED" "Cannot create published synchronization state"
+
+  local transaction_ref last_old=""
+  transaction_ref=$(sync_transaction_ref) || fail "SYNC_STATE_CORRUPT" "Synchronization transaction ref is invalid"
+  if queue_ref_exists "$SYNC_LAST_REF"; then
+    sync_ref_object "$SYNC_LAST_REF" || fail "SYNC_STATE_CORRUPT" "Last synchronization ref is invalid"
+    last_old=$SYNC_RESOLVED_OBJECT
+  fi
+  queue_ref_exists "$SYNC_BLOCKED_REF" && fail "SYNC_STATE_CORRUPT" "Blocked synchronization ref was not cleared before execution"
+
+  local update_file="$TX_ROOT/published-sync-ref-update"
+  {
+    printf 'start\n'
+    printf 'update %s %s %s\n' "$QUEUE_STATE_REF" "$QUEUE_STATE_BLOB" "$queue_state_old"
+    printf 'update %s %s %s\n' "$PUBLISHED_CONTENT_REF" "$SYNC_SYNCING_CONTENT_COMMIT" "$SYNC_PUBLISHED_BEFORE"
+    printf 'update %s %s %s\n' "$PUBLISHED_SOURCE_REF" "$SYNC_SOURCE_SYNCING_COMMIT" "$QUEUE_PUBLISHED_SOURCE_COMMIT"
+    printf 'delete %s %s\n' "$SYNCING_CONTENT_REF" "$SYNC_SYNCING_CONTENT_COMMIT"
+    printf 'delete %s %s\n' "$SYNCING_SOURCE_REF" "$SYNC_SOURCE_SYNCING_COMMIT"
+    printf 'update %s %s %s\n' "$transaction_ref" "$SYNC_NEW_STATE_BLOB" "$SYNC_STATE_BLOB"
+    printf 'delete %s %s\n' "$SYNC_ACTIVE_REF" "$SYNC_STATE_BLOB"
+    if [[ -n "$last_old" ]]; then
+      printf 'update %s %s %s\n' "$SYNC_LAST_REF" "$SYNC_NEW_STATE_BLOB" "$last_old"
+    else
+      printf 'create %s %s\n' "$SYNC_LAST_REF" "$SYNC_NEW_STATE_BLOB"
+    fi
+    local index
+    for index in "${!upload_refs[@]}"; do
+      printf 'update %s %s %s\n' "${upload_refs[$index]}" "${upload_new_blobs[$index]}" "${upload_old_blobs[$index]}"
+    done
+    printf 'prepare\ncommit\n'
+  } > "$update_file"
+  chmod 0600 -- "$update_file"
+  if ! "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref --stdin < "$update_file" >>"$OP_LOG" 2>&1; then
+    if ! reset_formal_repository_to_commit "$SYNC_PUBLISHED_BEFORE"; then
+      fail "CONTENT_REPOSITORY_RECOVERY_FAILED" "Cannot restore the formal content repository after synchronization commit failure" true
+    fi
+    fail "SYNC_STATE_UPDATE_FAILED" "Cannot atomically commit synchronized content refs" true
+  fi
+  SYNC_STATE_BLOB=$SYNC_NEW_STATE_BLOB
+  SYNC_STATE_ACTIVE=false
+  RELEASE_ACTIVATED=false
+  NEW_RELEASE_DIRECTORY=""
+}
+
+load_indexed_sync_state() {
+  local index_ref=$1
+  local required_status=${2:-}
+  sync_transaction_id_from_ref "$index_ref" || return $?
+  local indexed_id=$SYNC_RESOLVED_TRANSACTION_ID
+  local indexed_blob=$SYNC_RESOLVED_OBJECT
+  local transaction_ref
+  transaction_ref=$(sync_transaction_ref "$indexed_id") || return 1
+  load_sync_state_ref "$transaction_ref" "$indexed_id" || return 1
+  [[ "$SYNC_STATE_BLOB" == "$indexed_blob" ]] || return 1
+  [[ -z "$required_status" || "$SYNC_STATUS" == "$required_status" ]]
+}
+
+begin_new_sync_transaction() {
+  local requested_trigger=$SYNC_TRIGGER
+  local requested_retry=$SYNC_RETRY_BLOCKED
+  local queue_status=0
+  load_queue_state || queue_status=$?
+  [[ $queue_status -ne 2 ]] || fail "QUEUE_NOT_INITIALIZED" "Content queue has not been initialized"
+  [[ $queue_status -eq 0 ]] || fail "QUEUE_STATE_CORRUPT" "Content queue state is invalid"
+  queue_ref_exists "$SYNC_ACTIVE_REF" && fail "SYNC_STATE_CORRUPT" "Active synchronization exists without the synchronization lock"
+
+  local attempt=1
+  local pending_commit=$QUEUE_PENDING_CONTENT_COMMIT
+  if queue_ref_exists "$SYNC_BLOCKED_REF"; then
+    load_indexed_sync_state "$SYNC_BLOCKED_REF" "FAILED_BLOCKED" || \
+      fail "SYNC_STATE_CORRUPT" "Blocked synchronization state is invalid"
+    local blocked_commit=$SYNC_SYNCING_CONTENT_COMMIT
+    local blocked_attempt=$SYNC_ATTEMPT
+    if [[ "$blocked_commit" == "$pending_commit" ]]; then
+      if ! $requested_retry; then
+        release_lock
+        emit_sync_state_json "sync-pending"
+        ERROR_EMITTED=true
+        exit 1
+      fi
+      attempt=$((blocked_attempt + 1))
+    fi
+    load_queue_state || fail "QUEUE_STATE_CORRUPT" "Content queue state changed while checking blocked synchronization"
+  elif queue_ref_exists "$SYNC_LAST_REF"; then
+    sync_transaction_id_from_ref "$SYNC_LAST_REF" || fail "SYNC_STATE_CORRUPT" "Last synchronization ref is invalid"
+    local last_id=$SYNC_RESOLVED_TRANSACTION_ID
+    local last_blob=$SYNC_RESOLVED_OBJECT
+    local last_transaction_ref
+    last_transaction_ref=$(sync_transaction_ref "$last_id") || fail "SYNC_STATE_CORRUPT" "Last synchronization id is invalid"
+    load_sync_state_ref "$last_transaction_ref" "$last_id" || fail "SYNC_STATE_CORRUPT" "Last synchronization state is invalid"
+    [[ "$SYNC_STATE_BLOB" == "$last_blob" ]] || fail "SYNC_STATE_CORRUPT" "Last synchronization refs disagree"
+    if [[ "$SYNC_STATUS" == "FAILED_RETRYABLE" && "$SYNC_SYNCING_CONTENT_COMMIT" == "$pending_commit" ]]; then
+      attempt=$((SYNC_ATTEMPT + 1))
+    fi
+    load_queue_state || fail "QUEUE_STATE_CORRUPT" "Content queue state changed while checking retry history"
+  fi
+
+  SYNC_TRIGGER=$requested_trigger
+  SYNC_RETRY_BLOCKED=$requested_retry
+  SYNC_ATTEMPT=$attempt
+  create_transaction "sync"
+  generate_sync_transaction_id || fail "SYNC_STATE_UPDATE_FAILED" "Cannot allocate a synchronization transaction id"
+  if [[ "$QUEUE_PENDING_CONTENT_COMMIT" == "$QUEUE_PUBLISHED_CONTENT_COMMIT" ]]; then
+    create_skipped_sync_transaction
+    release_lock
+    SUCCESS=true
+    emit_sync_state_json "sync-pending"
+    return 1
+  fi
+  create_sync_snapshot
+  release_lock
+  return 0
+}
+
+validate_active_sync_snapshot() {
+  load_queue_state || fail "QUEUE_STATE_CORRUPT" "Content queue state is invalid during synchronization"
+  [[ "$QUEUE_PUBLISHED_CONTENT_COMMIT" == "$SYNC_PUBLISHED_BEFORE" && \
+     "$QUEUE_SYNCING_CONTENT_COMMIT" == "$SYNC_SYNCING_CONTENT_COMMIT" && \
+     "$QUEUE_SYNCING_SOURCE_COMMIT" == "$SYNC_SOURCE_SYNCING_COMMIT" && \
+     "$QUEUE_SITE_COMMIT" == "$SYNC_SITE_COMMIT" ]] || \
+    fail "SYNC_STATE_CORRUPT" "Active synchronization no longer matches queue refs"
+}
+
+execute_sync_transaction() {
+  prepare_site_source_commit "$SYNC_SITE_COMMIT"
+  clone_sync_candidate_repository
+  build_release "" ""
+  if $TEST_MODE && [[ "${ALGAE_SYNC_TEST_CRASH_AFTER_BUILD:-0}" == "1" ]]; then
+    kill -KILL "$$"
+  fi
+
+  acquire_lock
+  validate_active_sync_snapshot
+  activate_release
+  if $TEST_MODE && [[ "${ALGAE_SYNC_TEST_CRASH_AFTER_HEALTH:-0}" == "1" ]]; then
+    kill -KILL "$$"
+  fi
+  SYNC_RELEASE_ID=$PUBLISH_RELEASE_ID
+  SYNC_RELEASE_PATH=$RELEASE_DIRECTORY
+  complete_sync_success
+  release_lock
+  SUCCESS=true
+  emit_sync_state_json "sync-pending"
+}
+
+cleanup_incomplete_sync_candidates() {
+  local release_root
+  release_root=$(canonical_directory "$RELEASES_ROOT") || \
+    fail "SYNC_RECOVERY_FAILED" "Release root is unavailable during synchronization recovery"
+  local candidate marker resolved
+  shopt -s nullglob
+  local -a candidates=("$RELEASES_ROOT"/.candidate-sync-pending-*)
+  shopt -u nullglob
+  for candidate in "${candidates[@]}"; do
+    [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+    marker="$candidate/.algae-sync-transaction-id"
+    [[ -f "$marker" && ! -L "$marker" ]] || continue
+    [[ $(<"$marker") == "$SYNC_TRANSACTION_ID" ]] || continue
+    resolved=$(realpath -e -- "$candidate" 2>>"$OP_LOG") || \
+      fail "SYNC_RECOVERY_FAILED" "Incomplete synchronization candidate cannot be resolved"
+    [[ "$resolved" == "$release_root"/* ]] || \
+      fail "SYNC_RECOVERY_FAILED" "Incomplete synchronization candidate is outside the release root"
+    rm -rf -- "$resolved" || fail "SYNC_RECOVERY_FAILED" "Cannot remove incomplete synchronization candidate"
+  done
+}
+
+adopt_recovered_release() {
+  RELEASE_DIRECTORY=$SYNC_RELEASE_PATH
+  RELEASE_NAME=$SYNC_RELEASE_ID
+  PUBLISH_RELEASE_ID=$SYNC_RELEASE_ID
+  PUBLISH_SWITCH_COMPLETED=$SYNC_SWITCH_COMPLETED
+  OLD_CURRENT_RELEASE=$SYNC_PREVIOUS_RELEASE_PATH
+  OLD_PREVIOUS_RELEASE=$SYNC_PREVIOUS_PREVIOUS_RELEASE_PATH
+}
+
+mark_recovered_release_healthy() {
+  printf '%s\n' "$SYNC_TRANSACTION_ID" > "$SYNC_RELEASE_PATH/.algae-sync-health-ok" || \
+    fail "HEALTH_MARKER_FAILED" "Cannot persist recovered synchronization health verification" true
+  chmod 0600 -- "$SYNC_RELEASE_PATH/.algae-sync-health-ok" || \
+    fail "HEALTH_MARKER_FAILED" "Cannot protect recovered synchronization health verification" true
+  SYNC_HEALTH_VERIFIED=true
+  persist_active_sync_state || fail "SYNC_STATE_UPDATE_FAILED" "Cannot persist recovered health verification"
+}
+
+recover_active_sync_transaction() {
+  case "$SYNC_STATUS" in
+    CREATED|SNAPSHOTTING|PREPARING_SOURCE|PREPARING_DEPENDENCIES|CHECKING|BUILDING|SWITCHING|VERIFYING|RECOVERING) ;;
+    *) fail "SYNC_STATE_CORRUPT" "Terminal synchronization transaction still has an active ref" ;;
+  esac
+  create_transaction "sync-recovery"
+  (( SYNC_ATTEMPT < SYNC_MAX_ATTEMPTS )) || \
+    fail "SYNC_RECOVERY_LIMIT_REACHED" "Synchronization recovery attempt limit has been reached"
+  SYNC_STATE_ACTIVE=true
+  SYNC_TRIGGER="recovery"
+  SYNC_RECOVERED=true
+  ((SYNC_ATTEMPT += 1))
+  set_sync_stage "RECOVERING" "Recovering the fixed synchronization snapshot"
+
+  resolve_queue_commit_ref "$SYNCING_CONTENT_REF" true || \
+    fail "SYNC_STATE_CORRUPT" "Active synchronization content ref is missing or invalid"
+  [[ "$RESOLVED_QUEUE_REF" == "$SYNC_SYNCING_CONTENT_COMMIT" ]] || \
+    fail "SYNC_STATE_CORRUPT" "Active synchronization content ref disagrees with its transaction"
+  resolve_queue_commit_ref "$SYNCING_SOURCE_REF" true || \
+    fail "SYNC_STATE_CORRUPT" "Active synchronization source ref is missing or invalid"
+  [[ "$RESOLVED_QUEUE_REF" == "$SYNC_SOURCE_SYNCING_COMMIT" ]] || \
+    fail "SYNC_STATE_CORRUPT" "Active synchronization source ref disagrees with its transaction"
+  validate_active_sync_snapshot
+
+  read_release_target "$CURRENT_LINK"
+  local current_release=$RESOLVED_RELEASE_TARGET
+  local release_exists=false
+  [[ -n "$SYNC_RELEASE_PATH" && -d "$SYNC_RELEASE_PATH" && ! -L "$SYNC_RELEASE_PATH" ]] && release_exists=true
+
+  if $release_exists && [[ "$current_release" == "$SYNC_RELEASE_PATH" ]]; then
+    acquire_lock
+    validate_active_sync_snapshot
+    sync_release_is_valid false || fail "SYNC_STATE_CORRUPT" "Active synchronized release markers are invalid"
+    adopt_recovered_release
+    PUBLISH_SWITCH_COMPLETED=true
+    SYNC_SWITCH_COMPLETED=true
+    RELEASE_ACTIVATED=true
+    if sync_release_is_valid true; then
+      SYNC_HEALTH_VERIFIED=true
+    elif service_is_active && health_is_ready; then
+      mark_recovered_release_healthy
+    else
+      fail "HEALTH_CHECK_FAILED" "Recovered active release did not pass live service health checks" true
+    fi
+    complete_sync_success
+    release_lock
+    SUCCESS=true
+    emit_sync_state_json "sync-pending"
+    return
+  fi
+
+  if $release_exists; then
+    [[ "$SYNC_SWITCH_COMPLETED" != "true" && "$SYNC_HEALTH_VERIFIED" != "true" ]] || \
+      fail "SYNC_STATE_CORRUPT" "Synchronization release was switched but current no longer points to it"
+    [[ -z "$SYNC_PREVIOUS_RELEASE_PATH" || "$current_release" == "$SYNC_PREVIOUS_RELEASE_PATH" ]] || \
+      fail "SYNC_STATE_CORRUPT" "Current release changed during pre-switch synchronization recovery"
+    sync_release_is_valid false || fail "SYNC_STATE_CORRUPT" "Built synchronization release markers are invalid"
+    acquire_lock
+    validate_active_sync_snapshot
+    adopt_recovered_release
+    NEW_RELEASE_DIRECTORY=$SYNC_RELEASE_PATH
+    activate_release
+    complete_sync_success
+    release_lock
+    SUCCESS=true
+    emit_sync_state_json "sync-pending"
+    return
+  fi
+
+  [[ "$SYNC_SWITCH_COMPLETED" != "true" && "$SYNC_HEALTH_VERIFIED" != "true" ]] || \
+    fail "SYNC_STATE_CORRUPT" "Switched synchronization release is missing"
+  [[ -z "$SYNC_PREVIOUS_RELEASE_PATH" || "$current_release" == "$SYNC_PREVIOUS_RELEASE_PATH" ]] || \
+    fail "SYNC_STATE_CORRUPT" "Current release changed before synchronization recovery"
+  cleanup_incomplete_sync_candidates
+  SYNC_RELEASE_ID=""
+  SYNC_RELEASE_PATH=""
+  SYNC_SWITCH_COMPLETED=false
+  SYNC_HEALTH_VERIFIED=false
+  persist_active_sync_state || fail "SYNC_STATE_UPDATE_FAILED" "Cannot reset synchronization recovery state"
+  execute_sync_transaction
+}
+
+sync_pending() {
+  local active_status=0
+  load_active_sync_state || active_status=$?
+  if [[ $active_status -eq 0 ]]; then
+    SYNC_STATE_ACTIVE=true
+    recover_active_sync_transaction
+    return
+  fi
+  [[ $active_status -eq 2 ]] || fail "SYNC_STATE_CORRUPT" "Active synchronization state is invalid"
+  acquire_lock
+  if begin_new_sync_transaction; then
+    if $TEST_MODE && [[ "${ALGAE_SYNC_TEST_CRASH_AFTER_SNAPSHOT:-0}" == "1" ]]; then
+      kill -KILL "$$"
+    fi
+    execute_sync_transaction
+  fi
 }
 
 run_build_command() {
@@ -2920,6 +4307,12 @@ build_release() {
   build_source_tree_sha=$("$GIT_BIN" -C "$build_directory" rev-parse --verify 'HEAD^{tree}' 2>>"$OP_LOG") || fail "SITE_SOURCE_FAILED" "Prepared website source tree cannot be read" true
   [[ "$build_source_tree_sha" == "$SITE_SOURCE_TREE_SHA" ]] || fail "SITE_SOURCE_FAILED" "Prepared website source tree changed during the transaction" true
   [[ -z "$("$GIT_BIN" -C "$build_directory" status --porcelain --untracked-files=all 2>>"$OP_LOG")" ]] || fail "SITE_SOURCE_FAILED" "Prepared website source changed during the transaction" true
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    printf '%s\n' "$SYNC_TRANSACTION_ID" > "$build_directory/.algae-sync-transaction-id" || \
+      fail "BUILD_FAILED" "Cannot identify synchronization build staging" true
+    "$CHMOD_BIN" 0600 -- "$build_directory/.algae-sync-transaction-id" || \
+      fail "BUILD_FAILED" "Cannot protect synchronization build identity" true
+  fi
   [[ ! -L "$build_directory/content" ]] || fail "BUILD_FAILED" "Website source content directory is unsafe"
   rm -rf -- "$build_directory/content"
   cp -a -- "$CANDIDATE_REPOSITORY/content" "$build_directory/content"
@@ -2930,42 +4323,62 @@ build_release() {
   cp -a -- "$CANDIDATE_REPOSITORY/public/images/uploads" "$build_directory/public/images/uploads"
   chmod -R a+rX -- "$build_directory/public/images/uploads"
   write_content_runtime_config "$build_directory"
-  set_publish_stage "preparing_dependencies" "Preparing website dependencies"
+  set_operation_stage "PREPARING_DEPENDENCIES" "preparing_dependencies" "Preparing website dependencies"
   if ! run_build_command "$build_directory" "$NPM_BIN" ci --include=dev --prefer-offline --no-audit --no-fund; then
+    if [[ "$ACTION" == "sync-pending" ]]; then
+      fail "DEPENDENCY_PREPARATION_FAILED" "Website dependency installation failed" true
+    fi
     fail "BUILD_FAILED" "Website dependency installation failed" true
   fi
-  set_publish_stage "validating_site" "Running website content validation"
+  set_operation_stage "CHECKING" "validating_site" "Running website content validation"
   if ! run_build_command "$build_directory" "$NPM_BIN" run content:validate -- --json; then
     fail "BUILD_FAILED" "Website content validation failed" true
   fi
-  set_publish_stage "building_site" "Building the website"
+  set_operation_stage "BUILDING" "building_site" "Building the website"
   if ! run_build_command "$build_directory" "$NPM_BIN" run build:next; then
     fail "BUILD_FAILED" "Website build failed" true
   fi
 
-  set_publish_stage "creating_release" "Creating the release"
+  set_operation_stage "BUILDING" "creating_release" "Creating the release"
   RELEASE_NAME="$(date -u +%Y%m%dT%H%M%SZ)-${SITE_SOURCE_SHA:0:12}-${CANDIDATE_CONTENT_SHA:0:12}"
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    RELEASE_NAME="${RELEASE_NAME}-${SYNC_TRANSACTION_ID:0:8}"
+  fi
   RELEASE_DIRECTORY="$RELEASES_ROOT/$RELEASE_NAME"
   [[ ! -e "$RELEASE_DIRECTORY" ]] || fail "BUILD_FAILED" "Release identifier already exists"
   printf '%s\n' "$SITE_SOURCE_SHA" > "$build_directory/.release-sha"
   printf '%s\n' "$CANDIDATE_CONTENT_SHA" > "$build_directory/.content-sha"
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    printf '%s\n' "$SYNC_SOURCE_SYNCING_COMMIT" > "$build_directory/.source-content-sha"
+  fi
   printf '%s\n' "$RELEASE_NAME" > "$build_directory/.release-id"
   mv -- "$build_directory" "$RELEASE_DIRECTORY"
   BUILD_STAGING_DIRECTORY=""
   NEW_RELEASE_DIRECTORY="$RELEASE_DIRECTORY"
   PUBLISH_RELEASE_ID=$RELEASE_NAME
-  write_publish_state
+  write_operation_state
 }
 
 activate_release() {
   assert_regular_command "systemctl" "$SYSTEMCTL_BIN"
   assert_regular_command "curl" "$CURL_BIN"
   read_release_target "$CURRENT_LINK"
-  OLD_CURRENT_RELEASE=$RESOLVED_RELEASE_TARGET
+  local observed_current_release=$RESOLVED_RELEASE_TARGET
   read_release_target "$PREVIOUS_LINK"
-  OLD_PREVIOUS_RELEASE=$RESOLVED_RELEASE_TARGET
+  local observed_previous_release=$RESOLVED_RELEASE_TARGET
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    [[ "$observed_current_release" == "$SYNC_PREVIOUS_RELEASE_PATH" && \
+       "$observed_previous_release" == "$SYNC_PREVIOUS_PREVIOUS_RELEASE_PATH" ]] || \
+      fail "SYNC_STATE_CORRUPT" "Production release links changed after the synchronization snapshot"
+  fi
+  OLD_CURRENT_RELEASE=$observed_current_release
+  OLD_PREVIOUS_RELEASE=$observed_previous_release
   RELEASE_ACTIVATED=true
-  set_publish_stage "switching_release" "Switching the active release"
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    SYNC_PREVIOUS_RELEASE_PATH=$OLD_CURRENT_RELEASE
+    SYNC_PREVIOUS_PREVIOUS_RELEASE_PATH=$OLD_PREVIOUS_RELEASE
+  fi
+  set_operation_stage "SWITCHING" "switching_release" "Switching the active release"
   if [[ -n "$OLD_CURRENT_RELEASE" ]]; then
     make_link_atomically "$OLD_CURRENT_RELEASE" "$PREVIOUS_LINK" || fail "RELEASE_SWITCH_FAILED" "Cannot update the previous release link" true
   else
@@ -2973,12 +4386,15 @@ activate_release() {
   fi
   make_link_atomically "$RELEASE_DIRECTORY" "$CURRENT_LINK" || fail "RELEASE_SWITCH_FAILED" "Cannot switch the current release link" true
   PUBLISH_SWITCH_COMPLETED=true
-  write_publish_state
-  set_publish_stage "restarting_service" "Restarting the website service"
+  write_operation_state
+  if $TEST_MODE && [[ "${ALGAE_SYNC_TEST_CRASH_AFTER_SWITCH:-0}" == "1" && "$ACTION" == "sync-pending" ]]; then
+    kill -KILL "$$"
+  fi
+  set_operation_stage "SWITCHING" "restarting_service" "Restarting the website service"
   if ! run_logged "$SYSTEMCTL_BIN" restart "$SERVICE_NAME"; then
     fail "SERVICE_RESTART_FAILED" "Website service restart failed" true
   fi
-  set_publish_stage "verifying_production_url" "Verifying the production service and URL"
+  set_operation_stage "VERIFYING" "verifying_production_url" "Verifying the production service and URL"
   local attempt
   local healthy=false
   for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt += 1)); do
@@ -2990,6 +4406,14 @@ activate_release() {
   done
   if ! $healthy; then
     fail "HEALTH_CHECK_FAILED" "Website health check failed" true
+  fi
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    printf '%s\n' "$SYNC_TRANSACTION_ID" > "$RELEASE_DIRECTORY/.algae-sync-health-ok" || \
+      fail "HEALTH_MARKER_FAILED" "Cannot persist synchronization health verification" true
+    chmod 0600 -- "$RELEASE_DIRECTORY/.algae-sync-health-ok" || \
+      fail "HEALTH_MARKER_FAILED" "Cannot protect synchronization health verification" true
+    SYNC_HEALTH_VERIFIED=true
+    write_operation_state
   fi
 }
 
@@ -3189,6 +4613,8 @@ parse_arguments() {
   local content_type=""
   local stable_id=""
   local published_commit=""
+  local sync_trigger=""
+  local retry_blocked_count=0
   local json_count=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -3227,8 +4653,20 @@ parse_arguments() {
         published_commit=$2
         shift
         ;;
+      --trigger)
+        [[ -z "$sync_trigger" && $# -ge 2 ]] || fail "INVALID_ARGUMENTS" "--trigger requires one value"
+        sync_trigger=$2
+        shift
+        ;;
+      --retry-blocked)
+        ((retry_blocked_count += 1))
+        ;;
       *)
-        fail "INVALID_ARGUMENTS" "Unknown argument"
+        if [[ "$ACTION" == "sync-status" && -z "$transaction_id" && "$1" != --* ]]; then
+          transaction_id=$1
+        else
+          fail "INVALID_ARGUMENTS" "Unknown argument"
+        fi
         ;;
     esac
     shift
@@ -3236,24 +4674,54 @@ parse_arguments() {
   [[ $json_count -eq 1 ]] || fail "INVALID_ARGUMENTS" "--json is required exactly once"
   case "$ACTION" in
     status|list|pending-status)
-      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id$published_commit" ]] || \
+      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id$published_commit$sync_trigger" && \
+         $retry_blocked_count -eq 0 ]] || \
         fail "INVALID_ARGUMENTS" "This command does not accept values"
       ;;
     publish-status)
-      [[ -z "$bundle$bundle_sha256$content_type$stable_id$published_commit" && -n "$transaction_id" ]] || \
+      [[ -z "$bundle$bundle_sha256$content_type$stable_id$published_commit$sync_trigger" && \
+         -n "$transaction_id" && $retry_blocked_count -eq 0 ]] || \
         fail "INVALID_ARGUMENTS" "publish-status requires only --transaction"
       is_publish_transaction_id "$transaction_id" || fail "INVALID_TRANSACTION_ID" "Publish transaction id is invalid"
       PUBLISH_TRANSACTION_ID=$transaction_id
       ;;
+    sync-status)
+      [[ -z "$bundle$bundle_sha256$content_type$stable_id$published_commit$sync_trigger" && \
+         $retry_blocked_count -eq 0 ]] || \
+        fail "INVALID_ARGUMENTS" "sync-status accepts only an optional synchronization transaction id"
+      if [[ -n "$transaction_id" ]]; then
+        is_sync_transaction_id "$transaction_id" || \
+          fail "INVALID_SYNC_TRANSACTION_ID" "Synchronization transaction id is invalid"
+      fi
+      SYNC_REQUESTED_TRANSACTION_ID=$transaction_id
+      ;;
+    sync-pending)
+      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id$published_commit" && \
+         -n "$sync_trigger" && $retry_blocked_count -le 1 ]] || \
+        fail "INVALID_ARGUMENTS" "sync-pending requires only --trigger and optional --retry-blocked"
+      case "$sync_trigger" in
+        scheduled|manual) ;;
+        *) fail "INVALID_SYNC_TRIGGER" "Synchronization trigger must be scheduled or manual" ;;
+      esac
+      if [[ $retry_blocked_count -eq 1 && "$sync_trigger" != "manual" ]]; then
+        fail "INVALID_ARGUMENTS" "--retry-blocked requires --trigger manual"
+      fi
+      SYNC_TRIGGER=$sync_trigger
+      if [[ $retry_blocked_count -eq 1 ]]; then
+        SYNC_RETRY_BLOCKED=true
+      fi
+      ;;
     queue-init)
-      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id" && -n "$published_commit" ]] || \
+      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id$sync_trigger" && \
+         -n "$published_commit" && $retry_blocked_count -eq 0 ]] || \
         fail "INVALID_ARGUMENTS" "queue-init requires only --published"
       [[ "$published_commit" =~ ^[0-9a-f]{40}$ ]] || \
         fail "INVALID_CONTENT_COMMIT" "Published content commit is invalid"
       PARSED_PUBLISHED_COMMIT=$published_commit
       ;;
     publish|queue-upload)
-      [[ -n "$bundle" && -n "$transaction_id" && -n "$bundle_sha256" && -z "$content_type$stable_id$published_commit" ]] || \
+      [[ -n "$bundle" && -n "$transaction_id" && -n "$bundle_sha256" && \
+         -z "$content_type$stable_id$published_commit$sync_trigger" && $retry_blocked_count -eq 0 ]] || \
         fail "INVALID_ARGUMENTS" "$ACTION requires --transaction, --bundle, and --bundle-sha256"
       is_publish_transaction_id "$transaction_id" || fail "INVALID_TRANSACTION_ID" "Publish transaction id is invalid"
       is_bundle_sha256 "$bundle_sha256" || fail "INVALID_BUNDLE_SHA256" "Publish Bundle SHA-256 is invalid"
@@ -3262,7 +4730,8 @@ parse_arguments() {
       PARSED_BUNDLE=$bundle
       ;;
     delete)
-      [[ -z "$bundle$transaction_id$bundle_sha256$published_commit" && -n "$content_type" && -n "$stable_id" ]] || \
+      [[ -z "$bundle$transaction_id$bundle_sha256$published_commit$sync_trigger" && \
+         -n "$content_type" && -n "$stable_id" && $retry_blocked_count -eq 0 ]] || \
         fail "INVALID_ARGUMENTS" "delete requires --type and --id"
       PARSED_CONTENT_TYPE=$content_type
       PARSED_STABLE_ID=$stable_id
@@ -3293,6 +4762,20 @@ main() {
   if [[ "$ACTION" == "publish-status" ]]; then
     prepare_publish_status_runtime
     publish_status
+    return
+  fi
+  if [[ "$ACTION" == "sync-status" ]]; then
+    OP_LOG=/dev/null
+    prepare_queue_runtime
+    sync_status
+    return
+  fi
+  if [[ "$ACTION" == "sync-pending" ]]; then
+    OP_LOG=/dev/null
+    prepare_runtime
+    cleanup_publish_states
+    acquire_sync_lock
+    sync_pending
     return
   fi
   if [[ "$ACTION" == "pending-status" || "$ACTION" == "queue-init" || "$ACTION" == "queue-upload" ]]; then
