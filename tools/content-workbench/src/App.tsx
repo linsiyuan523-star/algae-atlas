@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DEFAULT_APPLICATION_MODE,
   applicationModeFeatures,
@@ -33,6 +33,7 @@ import { ServerContentPage } from "./components/ServerContentPage";
 import type { ServerContentSummary } from "./components/ServerContentPage";
 import { ServerSettingsPage } from "./components/ServerSettingsPage";
 import type { ServerConnectionState } from "./components/ServerSettingsPage";
+import { ServerSynchronizationPanel } from "./components/ServerSynchronizationPanel";
 import { inspectDraft, tauriDraftApi, unavailableDraftApi } from "./drafts";
 import type { Draft, DraftApi } from "./drafts";
 import type { GitHubPublishApi } from "./github-publish";
@@ -48,7 +49,12 @@ import {
 } from "./repository";
 import type { RepositoryApi } from "./repository";
 import {
+  createPublishTransactionId,
+  isQueuePublishState,
+  isQueuePublishTransaction,
   isServerPublishProgress,
+  isSyncTerminalStatus,
+  isSyncTransactionState,
   normalizeServerContentItem,
   normalizeServerUrl,
   serverResultError,
@@ -57,13 +63,17 @@ import {
   unavailableServerApi,
 } from "./server";
 import type {
+  PendingStatusData,
   PublishStage,
   ServerApi,
+  ServerCapabilitiesData,
   ServerCommandResult,
   ServerPublishData,
   ServerPublishProgress,
+  ServerPublishTransaction,
   ServerPublishRequest,
   ServerStatusData,
+  SyncTransactionData,
 } from "./server";
 import {
   tauriOnboardingApi,
@@ -77,6 +87,8 @@ const DELETE_SERVER_CONTENT_CONFIRMATION =
   "删除后该网页将从线上移除，但服务器会保留历史版本。确认删除？";
 const CONTROLLER_UPGRADE_MESSAGE =
   "服务器控制器版本过旧，尚不支持可靠发布事务。请先部署与当前工作台匹配的控制器。";
+const SYNC_TRANSACTION_STORAGE_KEY =
+  "algae-content-workbench:sync-transaction:v1";
 
 const RETRYABLE_CLIENT_ERROR_CODES = new Set([
   "SSH_UNAVAILABLE",
@@ -281,6 +293,7 @@ export default function App({
   const activeServerApi =
     serverApi ?? (isTauri() ? tauriServerApi : unavailableServerApi);
   const supportsOnboarding = Boolean(onboardingApi) || isTauri();
+  const supportsServer = Boolean(serverApi) || isTauri();
   const activeOnboardingApi =
     onboardingApi ?? (isTauri() ? tauriOnboardingApi : unavailableOnboardingApi);
   const features = applicationModeFeatures(applicationMode);
@@ -308,6 +321,22 @@ export default function App({
   const [serverContentError, setServerContentError] = useState<string | null>(
     null,
   );
+  const [serverCapabilities, setServerCapabilities] =
+    useState<ServerCapabilitiesData | null>(null);
+  const [pendingStatus, setPendingStatus] =
+    useState<PendingStatusData | null>(null);
+  const [syncTransaction, setSyncTransaction] =
+    useState<SyncTransactionData | null>(null);
+  const [serverSyncLoading, setServerSyncLoading] = useState(false);
+  const [manualSyncRunning, setManualSyncRunning] = useState(false);
+  const [serverSyncNotice, setServerSyncNotice] = useState<string | null>(null);
+  const [serverSyncError, setServerSyncError] = useState<string | null>(null);
+  const [publishRefreshToken, setPublishRefreshToken] = useState(0);
+  const syncOperationRef = useRef(false);
+  const syncPollGenerationRef = useRef(0);
+  const serverStateChecksEnabled =
+    supportsServer &&
+    (!supportsOnboarding || Boolean(onboardingStatus?.configured));
   const currentSection = navigationItems.some((item) => item.id === activeSection)
     ? activeSection
     : navigationItems[0].id;
@@ -335,6 +364,95 @@ export default function App({
       setServerContentLoading(false);
     }
   }, [activeServerApi]);
+
+  const refreshServerSynchronization = useCallback(
+    async (showLoading = true) => {
+      if (showLoading) {
+        setServerSyncLoading(true);
+      }
+      setServerSyncError(null);
+      try {
+        const result = await activeServerApi.getCapabilities();
+        if (!result.ok) {
+          if (result.code === "CONTROLLER_UPGRADE_REQUIRED") {
+            setServerCapabilities(incompatibleCapabilities(result));
+            setPendingStatus(null);
+            setSyncTransaction(null);
+            setServerConnectionState("available");
+            setServerConnectionError(CONTROLLER_UPGRADE_MESSAGE);
+            setServerSyncError(CONTROLLER_UPGRADE_MESSAGE);
+            return null;
+          }
+          throw new Error(serverResultError(result));
+        }
+        const capabilities = capabilitiesFromResult(result);
+        if (!capabilities) {
+          throw new Error("服务器返回的能力协商结果无效。");
+        }
+        setServerCapabilities(capabilities);
+        setServerConnectionState("available");
+        setServerConnectionError(null);
+
+        if (capabilities.protocolMode !== "queue" || !capabilities.queueModeActive) {
+          setPendingStatus(null);
+          setSyncTransaction(null);
+          setServerSyncNotice(null);
+          return capabilities;
+        }
+
+        const pendingResult = await activeServerApi.getPendingStatus();
+        if (!pendingResult.ok || typeof pendingResult.schema_version !== "number") {
+          throw new Error(serverResultError(pendingResult));
+        }
+        const pending = pendingResult as ServerCommandResult<PendingStatusData> &
+          PendingStatusData;
+        setPendingStatus(pending);
+
+        const storedSyncId = loadSyncTransactionId();
+        const syncId =
+          pending.active_sync_transaction_id ||
+          storedSyncId ||
+          pending.last_sync_transaction_id;
+        if (syncId) {
+          let syncResult = await activeServerApi.getSyncStatus({
+            transactionId: syncId,
+          });
+          if (
+            !isSyncTransactionState(syncResult) &&
+            storedSyncId === syncId &&
+            pending.last_sync_transaction_id &&
+            pending.last_sync_transaction_id !== syncId
+          ) {
+            syncResult = await activeServerApi.getSyncStatus({
+              transactionId: pending.last_sync_transaction_id,
+            });
+          }
+          if (isSyncTransactionState(syncResult)) {
+            setSyncTransaction(syncResult);
+            saveSyncTransactionId(syncResult.sync_transaction_id);
+          } else if (pending.active_sync_transaction_id) {
+            throw new Error(serverResultError(syncResult));
+          } else {
+            setSyncTransaction(null);
+          }
+        } else {
+          setSyncTransaction(null);
+        }
+        return capabilities;
+      } catch (caught) {
+        const message = describeError(caught);
+        setServerConnectionState("unavailable");
+        setServerConnectionError(message);
+        setServerSyncError(message);
+        return null;
+      } finally {
+        if (showLoading) {
+          setServerSyncLoading(false);
+        }
+      }
+    },
+    [activeServerApi],
+  );
 
   useEffect(() => {
     let isCurrent = true;
@@ -384,6 +502,28 @@ export default function App({
       isCurrent = false;
     };
   }, [activeOnboardingApi, supportsOnboarding]);
+
+  useEffect(() => {
+    if (!serverStateChecksEnabled) {
+      return;
+    }
+    void Promise.resolve().then(() => refreshServerSynchronization());
+  }, [refreshServerSynchronization, serverStateChecksEnabled]);
+
+  useEffect(() => {
+    if (!serverStateChecksEnabled) {
+      return;
+    }
+    const handleFocus = () => {
+      void refreshServerSynchronization(false);
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [refreshServerSynchronization, serverStateChecksEnabled]);
+
+  useEffect(() => () => {
+    syncPollGenerationRef.current += 1;
+  }, []);
 
   function handleDraftCreated(draft: Draft) {
     setInitialDraft(draft);
@@ -454,10 +594,47 @@ export default function App({
     setServerContentLoading(true);
     setServerContentError(null);
     try {
-      const result = await activeServerApi.deleteContent({
-        contentType: item.contentType as ServerPublishRequest["contentType"],
-        stableId: item.stableId,
-      });
+      const storedTransactionId = loadDeleteTransactionId(
+        item.contentType,
+        item.stableId,
+      );
+      const transactionId = storedTransactionId ?? createPublishTransactionId();
+      const capabilities = await requirePublishController(
+        transactionId,
+        "checking_server",
+      );
+      const queueMode = capabilities?.protocolMode === "queue" &&
+        capabilities.queueModeActive;
+      const repositoryPath =
+        onboardingStatus?.configuration?.repositoryPath.trim() ?? "";
+      if (queueMode && !repositoryPath) {
+        throw new Error("请先在本地设置中配置仓库路径。");
+      }
+
+      let result = queueMode
+        ? await activeServerApi.queueDeleteContent({
+            repositoryPath,
+            contentType: item.contentType as ServerPublishRequest["contentType"],
+            stableId: item.stableId,
+            transactionId,
+          })
+        : await activeServerApi.deleteContent({
+            contentType: item.contentType as ServerPublishRequest["contentType"],
+            stableId: item.stableId,
+          });
+
+      if (queueMode && result.ok) {
+        const status = await activeServerApi.getPublishStatus({ transactionId });
+        if (isQueuePublishState(status, transactionId)) {
+          result = status;
+        }
+        const pending = await activeServerApi.getPendingStatus();
+        if (pending.ok && typeof pending.schema_version === "number") {
+          setPendingStatus(
+            pending as ServerCommandResult<PendingStatusData> & PendingStatusData,
+          );
+        }
+      }
       if (!result.ok) {
         if (serverResultIndicatesUnavailable(result)) {
           setServerConnectionState("unavailable");
@@ -467,6 +644,26 @@ export default function App({
       }
       setServerConnectionState("available");
       setServerConnectionError(null);
+      if (queueMode) {
+        if (!isQueuePublishState(result, transactionId)) {
+          throw new Error("服务器返回的删除队列事务状态无效。");
+        }
+        saveDeleteTransactionId(item.contentType, item.stableId, transactionId);
+        setServerSyncNotice(queueDeleteMessage(result.status));
+        if (result.status !== "PUBLISHED") {
+          return {
+            message: queueDeleteMessage(result.status),
+            protocolMode: "queue" as const,
+            queueStatus: result.status,
+            transactionId,
+            contentSha: result.contentCommit,
+            sourceSha: result.sourceCommit,
+            releaseId: result.publishedReleaseId || undefined,
+            syncTransactionId:
+              result.includedInSyncTransactionId || undefined,
+          };
+        }
+      }
       setServerContentItems((current) =>
         current.filter(
           (candidate) =>
@@ -474,6 +671,13 @@ export default function App({
             candidate.contentType !== item.contentType,
         ),
       );
+      return {
+        message: queueMode ? "删除内容已同步上线" : result.message,
+        protocolMode: queueMode ? ("queue" as const) : ("legacy" as const),
+        queueStatus: queueMode ? ("PUBLISHED" as const) : undefined,
+        transactionId: queueMode ? transactionId : result.transactionId,
+        contentSha: result.contentCommit ?? result.contentSha,
+      };
     } catch (caught) {
       const message = describeError(caught);
       setServerContentError(message);
@@ -488,14 +692,16 @@ export default function App({
     stage: PublishStage,
     onFailure?: (progress: ServerPublishProgress) => void,
   ) {
-    const status = await activeServerApi.getStatus();
+    const status = await activeServerApi.getCapabilities();
+    const capabilities = status.ok ? capabilitiesFromResult(status) : null;
     const failure = !status.ok
       ? status
-      : supportsPublishTransactions(status)
+      : capabilities
         ? null
         : controllerUpgradeRequired();
     if (!failure) {
-      return status;
+      setServerCapabilities(capabilities);
+      return capabilities;
     }
 
     const failureStage =
@@ -540,6 +746,144 @@ export default function App({
     }
   }
 
+  async function handleSyncPendingNow() {
+    if (syncOperationRef.current) {
+      return;
+    }
+    syncOperationRef.current = true;
+    setManualSyncRunning(true);
+    setServerSyncNotice(null);
+    setServerSyncError(null);
+    const generation = ++syncPollGenerationRef.current;
+    try {
+      const pendingResult = await activeServerApi.getPendingStatus();
+      if (!pendingResult.ok || typeof pendingResult.schema_version !== "number") {
+        throw new Error(serverResultError(pendingResult));
+      }
+      const pending = pendingResult as ServerCommandResult<PendingStatusData> &
+        PendingStatusData;
+      setPendingStatus(pending);
+
+      if (pending.active_sync_transaction_id) {
+        saveSyncTransactionId(pending.active_sync_transaction_id);
+        const completed = await pollSyncTransaction(
+          activeServerApi,
+          pending.active_sync_transaction_id,
+          generation,
+          syncPollGenerationRef,
+          (transaction) => {
+            setSyncTransaction(transaction);
+            saveSyncTransactionId(transaction.sync_transaction_id);
+          },
+        );
+        if (completed) {
+          setSyncCompletionMessage(
+            completed,
+            setServerSyncNotice,
+            setServerSyncError,
+          );
+        }
+      } else if (!pending.has_pending_changes || pending.pending_upload_count === 0) {
+        setServerSyncNotice("当前没有等待同步的内容");
+        return;
+      } else {
+        let commandSettled = false;
+        let observedSyncTransactionId: string | null = null;
+        const rememberSyncTransaction = (transaction: SyncTransactionData) => {
+          observedSyncTransactionId = transaction.sync_transaction_id;
+          setSyncTransaction(transaction);
+          saveSyncTransactionId(transaction.sync_transaction_id);
+        };
+        const command = activeServerApi.syncPendingNow();
+        void command.then(
+          () => {
+            commandSettled = true;
+          },
+          () => {
+            commandSettled = true;
+          },
+        );
+
+        while (
+          !commandSettled &&
+          generation === syncPollGenerationRef.current
+        ) {
+          const status = await activeServerApi.getSyncStatus();
+          if (isSyncTransactionState(status)) {
+            rememberSyncTransaction(status);
+          } else if (
+            status.code !== "SYNC_TRANSACTION_NOT_FOUND" &&
+            status.code !== "NO_SYNC_TRANSACTION"
+          ) {
+            throw new Error(serverResultError(status));
+          }
+          await Promise.race([
+            command.then(() => undefined, () => undefined),
+            waitForServerPoll(2_000),
+          ]);
+        }
+
+        const result = await command;
+        if (isSyncTransactionState(result)) {
+          rememberSyncTransaction(result);
+          setSyncCompletionMessage(result, setServerSyncNotice, setServerSyncError);
+        } else if (!result.ok) {
+          const recoveryPendingResult = await activeServerApi.getPendingStatus();
+          const recoveryPending =
+            recoveryPendingResult.ok &&
+            typeof recoveryPendingResult.schema_version === "number"
+              ? recoveryPendingResult as ServerCommandResult<PendingStatusData> &
+                  PendingStatusData
+              : null;
+          if (recoveryPending) {
+            setPendingStatus(recoveryPending);
+          }
+          const recoveryTransactionId =
+            observedSyncTransactionId ||
+            recoveryPending?.active_sync_transaction_id ||
+            (recoveryPending?.last_sync_transaction_id &&
+            recoveryPending.last_sync_transaction_id !==
+              pending.last_sync_transaction_id
+              ? recoveryPending.last_sync_transaction_id
+              : null);
+          if (!recoveryTransactionId) {
+            throw new Error(serverResultError(result));
+          }
+          const recovered = await pollSyncTransaction(
+            activeServerApi,
+            recoveryTransactionId,
+            generation,
+            syncPollGenerationRef,
+            rememberSyncTransaction,
+          );
+          if (recovered) {
+            setSyncCompletionMessage(
+              recovered,
+              setServerSyncNotice,
+              setServerSyncError,
+            );
+          }
+        }
+      }
+
+      await refreshServerSynchronization(false);
+      setPublishRefreshToken((current) => current + 1);
+      await loadServerContent();
+    } catch (caught) {
+      const message = describeError(caught);
+      setServerSyncError(message);
+      if (message.includes("SSH") || message.includes("连接")) {
+        setServerConnectionState("unavailable");
+        setServerConnectionError(message);
+      }
+    } finally {
+      if (generation === syncPollGenerationRef.current) {
+        setManualSyncRunning(false);
+      }
+      syncOperationRef.current = false;
+    }
+  }
+
   async function handlePublishToServer(
     snapshot: DirectPublishSnapshot,
     options: DirectPublishOptions,
@@ -552,19 +896,8 @@ export default function App({
 
     const fields = inspectDraft(snapshot.draft).fields;
     let published: ServerCommandResult<ServerPublishData> | null = null;
-
-    if (options.resume) {
-      const existing = await handleQueryPublishStatus(
-        options.transactionId,
-        options.onProgress,
-      );
-      options.onProgress?.(existing);
-      if (existing.status === "succeeded") {
-        published = { ...existing, ok: true, action: "publish" };
-      } else if (existing.status === "failed" && !existing.retryable) {
-        throw new Error(existing.userMessage || existing.message);
-      }
-    } else {
+    let refreshedPending = pendingStatus;
+    if (!options.resume) {
       options.onProgress?.(
         createClientPublishProgress(
           options.transactionId,
@@ -587,12 +920,40 @@ export default function App({
       }
       setServerConnectionState("available");
       setServerConnectionError(null);
+    }
 
-      await requirePublishController(
+    const capabilities = await requirePublishController(
+      options.transactionId,
+      "checking_server",
+      options.onProgress,
+    );
+    const queueMode = capabilities?.protocolMode === "queue" &&
+      capabilities.queueModeActive;
+
+    if (options.resume) {
+      const existing = await handleQueryPublishStatus(
         options.transactionId,
-        "checking_server",
         options.onProgress,
       );
+      if (!isQueuePublishTransaction(existing)) {
+        options.onProgress?.(existing);
+      }
+      if (
+        existing.status === "succeeded" ||
+        (isQueuePublishTransaction(existing) &&
+          existing.status !== "FAILED")
+      ) {
+        published = {
+          ...existing,
+          ok: true,
+          action: queueMode ? "queue-upload" : "publish",
+        };
+      } else if (existing.status === "failed" && !existing.retryable) {
+        throw new Error(existing.userMessage || existing.message);
+      } else if (existing.status === "FAILED" && !existing.retryable) {
+        throw new Error(existing.userMessage || existing.message);
+      }
+    } else {
 
       const plannedAt = new Date();
       const branchName = createDirectPublishBranchName(
@@ -626,15 +987,57 @@ export default function App({
       );
     }
 
-    published ??= await activeServerApi.publishContent(
-      {
-        repositoryPath,
-        contentType: fields.contentType as ServerPublishRequest["contentType"],
-        stableId: fields.stableId,
+    const publishRequest = {
+      repositoryPath,
+      contentType: fields.contentType as ServerPublishRequest["contentType"],
+      stableId: fields.stableId,
+      transactionId: options.transactionId,
+    };
+    published ??= queueMode
+      ? await activeServerApi.queueContent(publishRequest, options.onProgress)
+      : await activeServerApi.publishContent(publishRequest, options.onProgress);
+
+    if (queueMode && published.ok) {
+      const transaction = await activeServerApi.getPublishStatus({
         transactionId: options.transactionId,
-      },
-      options.onProgress,
-    );
+      });
+      if (isQueuePublishState(transaction, options.transactionId)) {
+        published = {
+          ...published,
+          ...transaction,
+          bundleUploadedAt:
+            transaction.bundleUploadedAt ?? published.bundleUploadedAt,
+          bundleUploadDurationMs:
+            transaction.bundleUploadDurationMs ?? published.bundleUploadDurationMs,
+          bundleGenerationDurationMs:
+            transaction.bundleGenerationDurationMs ??
+            published.bundleGenerationDurationMs,
+          sha256DurationMs:
+            transaction.sha256DurationMs ?? published.sha256DurationMs,
+          serverValidationDurationMs:
+            transaction.serverValidationDurationMs ??
+            published.serverValidationDurationMs,
+          queueTotalDurationMs:
+            transaction.queueTotalDurationMs ?? published.queueTotalDurationMs,
+        };
+      } else if (!transaction.ok) {
+        setServerSyncError(
+          `内容已上传，但暂时无法刷新上传事务：${serverResultError(transaction)}`,
+        );
+      }
+
+      const pendingResult = await activeServerApi.getPendingStatus();
+      if (pendingResult.ok && typeof pendingResult.schema_version === "number") {
+        refreshedPending = pendingResult as ServerCommandResult<PendingStatusData> &
+          PendingStatusData;
+        setPendingStatus(refreshedPending);
+      } else {
+        setServerSyncError(
+          `内容已上传，但暂时无法刷新待同步状态：${serverResultError(pendingResult)}`,
+        );
+      }
+    }
+
     if (!published.ok) {
       if (isServerPublishProgress(published, options.transactionId)) {
         options.onProgress?.(published);
@@ -655,6 +1058,54 @@ export default function App({
     }
     setServerConnectionState("available");
     setServerConnectionError(null);
+
+    if (queueMode) {
+      if (!isQueuePublishState(published, options.transactionId)) {
+        throw new Error("服务器返回的队列上传事务状态无效。");
+      }
+      let url = "";
+      if (published.status === "PUBLISHED") {
+        const listed = await activeServerApi.listContent();
+        const item = (listed.items ?? [])
+          .map(normalizeServerContentItem)
+          .find(
+            (candidate) =>
+              candidate.stableId === fields.stableId &&
+              candidate.contentType === fields.contentType,
+          );
+        url = item?.urlZh ?? "";
+        if (listed.ok) {
+          setServerContentItems((listed.items ?? []).map(normalizeServerContentItem));
+        }
+      }
+      return {
+        message: queuePublishMessage(published.status),
+        protocolMode: "queue",
+        queueStatus: published.status,
+        url: published.status === "PUBLISHED" && url ? url : undefined,
+        publishedAt: published.publishedAt || undefined,
+        transactionId: published.transactionId,
+        contentSha: published.contentCommit,
+        sourceSha: published.sourceCommit,
+        releaseId: published.publishedReleaseId || undefined,
+        syncTransactionId: published.includedInSyncTransactionId || undefined,
+        coalescedIntoCommit: published.coalescedIntoCommit || undefined,
+        pendingContentSha: refreshedPending?.pending_content_commit,
+        siteSha: refreshedPending?.site_commit,
+        nextScheduledSyncAt: refreshedPending?.next_scheduled_sync_at,
+        pendingUploadCount: refreshedPending?.pending_upload_count,
+        totalDurationMs: published.queueTotalDurationMs,
+        bundleGenerationDurationMs: published.bundleGenerationDurationMs,
+        sha256DurationMs: published.sha256DurationMs,
+        bundleUploadDurationMs: published.bundleUploadDurationMs,
+        serverValidationDurationMs: published.serverValidationDurationMs,
+        retryable: published.retryable,
+        errorCode: published.errorCode,
+        failedStage: published.failedStage,
+        technicalSummary: published.technicalSummary,
+      };
+    }
+
     const publishedAt =
       published.publishedAt?.trim() ||
       published.updatedAt?.trim() ||
@@ -692,13 +1143,76 @@ export default function App({
   async function handleQueryPublishStatus(
     transactionId: string,
     onFailure?: (progress: ServerPublishProgress) => void,
-  ): Promise<ServerPublishProgress> {
+  ): Promise<ServerPublishTransaction> {
     await requirePublishController(
       transactionId,
       "confirming_server_status",
       onFailure,
     );
     const result = await activeServerApi.getPublishStatus({ transactionId });
+    if (isQueuePublishState(result, transactionId)) {
+      let queueResult = result;
+      const pendingResult = await activeServerApi.getPendingStatus();
+      const pending =
+        pendingResult.ok && typeof pendingResult.schema_version === "number"
+          ? pendingResult as ServerCommandResult<PendingStatusData> & PendingStatusData
+          : null;
+      if (pending) {
+        setPendingStatus(pending);
+        queueResult = {
+          ...queueResult,
+          siteCommit: queueResult.siteCommit || pending.site_commit,
+        };
+      }
+
+      const syncTransactionId =
+        queueResult.includedInSyncTransactionId ||
+        pending?.active_sync_transaction_id ||
+        (queueResult.status === "PUBLISHED"
+          ? pending?.last_sync_transaction_id
+          : null);
+      if (syncTransactionId) {
+        const syncResult = await activeServerApi.getSyncStatus({
+          transactionId: syncTransactionId,
+        });
+        if (isSyncTransactionState(syncResult)) {
+          setSyncTransaction(syncResult);
+          saveSyncTransactionId(syncResult.sync_transaction_id);
+          queueResult = {
+            ...queueResult,
+            siteCommit: syncResult.site_commit || queueResult.siteCommit,
+            publishedReleaseId:
+              syncResult.release_id || queueResult.publishedReleaseId,
+            publishedAt:
+              syncResult.completed_at || queueResult.publishedAt,
+          };
+        }
+      }
+
+      if (
+        queueResult.status === "PUBLISHED" &&
+        queueResult.contentType &&
+        queueResult.stableId
+      ) {
+        const listed = await activeServerApi.listContent();
+        if (listed.ok) {
+          const items = (listed.items ?? []).map(normalizeServerContentItem);
+          setServerContentItems(items);
+          const publishedItem = items.find(
+            (item) =>
+              item.contentType === queueResult.contentType &&
+              item.stableId === queueResult.stableId,
+          );
+          queueResult = {
+            ...queueResult,
+            url: publishedItem?.urlZh || queueResult.url,
+          };
+        }
+      }
+      setServerConnectionState("available");
+      setServerConnectionError(null);
+      return queueResult;
+    }
     if (!result.ok) {
       const message = serverResultError(result);
       onFailure?.(
@@ -825,6 +1339,18 @@ export default function App({
             无法检查异常恢复：{recoveryError}
           </p>
         ) : null}
+        <ServerSynchronizationPanel
+          connectionState={serverConnectionState}
+          capabilities={serverCapabilities}
+          pending={pendingStatus}
+          sync={syncTransaction}
+          loading={serverSyncLoading}
+          synchronizing={manualSyncRunning}
+          notice={serverSyncNotice}
+          error={serverSyncError}
+          onRefresh={() => void refreshServerSynchronization()}
+          onSyncNow={() => void handleSyncPendingNow()}
+        />
         <section className="workspace-page" aria-labelledby="workspace-title">
           <h2 id="workspace-title">{activeItem.label}</h2>
           {currentSection === "new-content" ? (
@@ -849,6 +1375,10 @@ export default function App({
               onDeleteServerContent={handleDeleteServerContent}
               onOpenPublishedUrl={openPublicSiteUrl}
               onQueryPublishStatus={handleQueryPublishStatus}
+              serverProtocolMode={serverCapabilities?.protocolMode}
+              serverQueueModeActive={serverCapabilities?.queueModeActive === true}
+              pendingStatus={pendingStatus}
+              publishRefreshToken={publishRefreshToken}
             />
           ) : currentSection === "server-content" ? (
             <ServerContentPage
@@ -946,4 +1476,149 @@ function describeError(error: unknown) {
     return error.message;
   }
   return typeof error === "string" ? error : "恢复检查失败。";
+}
+
+function capabilitiesFromResult(
+  result: ServerCommandResult<ServerCapabilitiesData>,
+): ServerCapabilitiesData | null {
+  if (
+    !result.ok ||
+    !["incompatible", "legacy", "queue"].includes(result.protocolMode ?? "") ||
+    typeof result.queueModeActive !== "boolean" ||
+    typeof result.ready !== "boolean" ||
+    typeof result.contentRepositoryReady !== "boolean" ||
+    typeof result.serviceActive !== "boolean" ||
+    typeof result.healthy !== "boolean"
+  ) {
+    return null;
+  }
+  return result as ServerCommandResult<ServerCapabilitiesData> &
+    ServerCapabilitiesData;
+}
+
+function incompatibleCapabilities(
+  result: ServerCommandResult<ServerCapabilitiesData>,
+): ServerCapabilitiesData {
+  return {
+    protocolMode: "incompatible",
+    queueModeActive: false,
+    ready: false,
+    contentRepositoryReady: false,
+    serviceActive: false,
+    healthy: false,
+    publishProtocolVersion: result.publishProtocolVersion ?? 0,
+    queueProtocolVersion: result.queueProtocolVersion ?? 0,
+  };
+}
+
+async function pollSyncTransaction(
+  api: ServerApi,
+  transactionId: string,
+  generation: number,
+  generationRef: { current: number },
+  onProgress: (transaction: SyncTransactionData) => void,
+) {
+  while (generation === generationRef.current) {
+    const result = await api.getSyncStatus({ transactionId });
+    if (!isSyncTransactionState(result)) {
+      throw new Error(serverResultError(result));
+    }
+    onProgress(result);
+    if (isSyncTerminalStatus(result.status)) {
+      return result;
+    }
+    await waitForServerPoll(2_000);
+  }
+  return null;
+}
+
+function setSyncCompletionMessage(
+  transaction: SyncTransactionData,
+  setNotice: (message: string | null) => void,
+  setError: (message: string | null) => void,
+) {
+  if (transaction.status === "PUBLISHED") {
+    setNotice("同步完成，待同步内容已上线。");
+    setError(null);
+  } else if (transaction.status === "SKIPPED_NO_PENDING") {
+    setNotice("当前没有等待同步的内容");
+    setError(null);
+  } else if (transaction.status === "FAILED_BLOCKED") {
+    setNotice(null);
+    setError("服务器无法自动同步此内容。请上传修正后的新版本。");
+  } else if (transaction.status === "FAILED_RETRYABLE") {
+    setNotice("服务器遇到临时错误，将在下一同步窗口重试。");
+    setError(null);
+  }
+}
+
+function waitForServerPoll(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function loadSyncTransactionId() {
+  try {
+    const value = localStorage.getItem(SYNC_TRANSACTION_STORAGE_KEY);
+    return value && /^[0-9a-f]{32}$/.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSyncTransactionId(transactionId: string) {
+  try {
+    localStorage.setItem(SYNC_TRANSACTION_STORAGE_KEY, transactionId);
+  } catch {
+    // The server remains authoritative when local browser storage is unavailable.
+  }
+}
+
+function deleteTransactionStorageKey(contentType: string, stableId: string) {
+  return `algae-content-workbench:delete:${contentType}:${stableId}`;
+}
+
+function loadDeleteTransactionId(contentType: string, stableId: string) {
+  try {
+    const value = localStorage.getItem(
+      deleteTransactionStorageKey(contentType, stableId),
+    );
+    return value && /^[0-9a-f]{32}$/.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveDeleteTransactionId(
+  contentType: string,
+  stableId: string,
+  transactionId: string,
+) {
+  try {
+    localStorage.setItem(
+      deleteTransactionStorageKey(contentType, stableId),
+      transactionId,
+    );
+  } catch {
+    // A repeated deletion still queries the deterministic server transaction first.
+  }
+}
+
+function queuePublishMessage(status: ServerPublishData["status"]) {
+  return {
+    QUEUED: "内容已安全上传到服务器，正在等待同步",
+    COALESCED: "此版本已包含在后续上传内容中，将随最新版本一同同步。",
+    SYNCING: "服务器正在同步此内容",
+    PUBLISHED: "内容已上线",
+    FAILED: "服务器未能接收此内容",
+  }[status as "QUEUED" | "COALESCED" | "SYNCING" | "PUBLISHED" | "FAILED"];
+}
+
+function queueDeleteMessage(status: ServerPublishData["status"]) {
+  return {
+    QUEUED: "删除内容已进入待同步队列，网站尚未更新。",
+    COALESCED: "删除事务已包含在后续上传内容中，将随最新版本一同同步。",
+    SYNCING: "服务器正在同步内容删除。",
+    PUBLISHED: "删除内容已同步上线。",
+    FAILED: "服务器未能接收删除事务。",
+  }[status as "QUEUED" | "COALESCED" | "SYNCING" | "PUBLISHED" | "FAILED"];
 }

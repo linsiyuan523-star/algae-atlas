@@ -8,6 +8,132 @@
   text-rendering: optimizeLegibility;
 }
 
+.server-synchronization-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 18px;
+  border-block: 1px solid #d7dde3;
+  background: #f8fafb;
+}
+
+.server-synchronization-heading,
+.server-synchronization-heading > div,
+.server-synchronization-actions {
+  display: flex;
+  align-items: center;
+}
+
+.server-synchronization-heading {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.server-synchronization-heading > div,
+.server-synchronization-actions {
+  gap: 10px;
+}
+
+.server-synchronization-heading strong,
+.server-synchronization-heading span {
+  display: block;
+}
+
+.server-synchronization-heading span {
+  margin-top: 2px;
+  color: #52616b;
+  font-size: 0.82rem;
+}
+
+.server-synchronization-grid,
+.server-sync-transaction,
+.queue-result-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 18px;
+  margin: 0;
+}
+
+.server-synchronization-grid > div,
+.server-sync-transaction > div {
+  min-width: 0;
+}
+
+.server-synchronization-grid dt,
+.server-sync-transaction dt {
+  color: #687782;
+  font-size: 0.76rem;
+}
+
+.server-synchronization-grid dd,
+.server-sync-transaction dd {
+  margin: 3px 0 0;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.server-synchronization-grid code,
+.server-sync-transaction code,
+.server-time-diagnostic code {
+  font-size: 0.76rem;
+}
+
+.server-sync-transaction {
+  padding-top: 10px;
+  border-top: 1px solid #d7dde3;
+}
+
+.server-mode-note,
+.server-mode-error,
+.server-time-diagnostic,
+.server-synchronization-panel .operation-notice,
+.server-synchronization-panel .operation-error,
+.queue-not-published {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.server-mode-note {
+  color: #475a64;
+}
+
+.server-mode-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #9d2d24;
+}
+
+.server-time-diagnostic {
+  color: #687782;
+}
+
+.queue-not-published {
+  color: #9a4d0c;
+  font-weight: 600;
+}
+
+.queue-publish-panel .publish-progress-heading strong {
+  letter-spacing: 0;
+}
+
+@media (max-width: 720px) {
+  .server-synchronization-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .server-synchronization-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .server-synchronization-grid,
+  .server-sync-transaction,
+  .queue-result-details {
+    grid-template-columns: 1fr;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

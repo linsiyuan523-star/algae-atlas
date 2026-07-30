@@ -20,7 +20,11 @@ import {
 } from "../forms/team-news";
 import { batchOneFormAdapters } from "../forms/batch-one";
 import type { MediaApi, StagedImage } from "../media";
-import type { ServerPublishProgress } from "../server";
+import type {
+  QueueUploadStatus,
+  ServerPublishProgress,
+  ServerQueuePublishState,
+} from "../server";
 
 function makeDraft(titleZh = "初始标题"): Draft {
   const prepared = createSharedRecordDraft(
@@ -85,6 +89,31 @@ function makePublishProgress(
 
 function storePublishProgress(progress: ServerPublishProgress) {
   localStorage.setItem(publishStorageKey, JSON.stringify(progress));
+}
+
+function makeQueuePublishState(
+  status: QueueUploadStatus,
+): ServerQueuePublishState {
+  return {
+    transactionId: "f".repeat(32),
+    status,
+    message: status,
+    contentCommit: "c".repeat(40),
+    sourceCommit: "d".repeat(40),
+    retryable: false,
+    includedInSyncTransactionId:
+      status === "SYNCING" || status === "PUBLISHED" ? "e".repeat(32) : undefined,
+    publishedReleaseId: status === "PUBLISHED" ? "release-queue-test" : undefined,
+    publishedAt:
+      status === "PUBLISHED" ? "2026-07-30T11:18:02.000Z" : undefined,
+    siteCommit: status === "PUBLISHED" ? "e".repeat(40) : undefined,
+    localDraftUpdatedAt:
+      status === "PUBLISHED" ? "2026-07-23T07:00:00Z" : undefined,
+    url:
+      status === "PUBLISHED"
+        ? "https://example.invalid/zh/fictional-draft"
+        : undefined,
+  };
 }
 
 function makeDirectPublishableDraft(): Draft {
@@ -694,6 +723,65 @@ test("queries and restores a running transaction after the editor reopens", asyn
     ),
   );
   expect(onPublishToServer).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["QUEUED", "等待服务器同步"],
+  ["COALESCED", "已合并到后续版本"],
+  ["SYNCING", "服务器正在同步"],
+  ["PUBLISHED", "已上线"],
+] as const)("restores the %s queue transaction without re-uploading", async (status, label) => {
+  localStorage.clear();
+  const transaction = makeQueuePublishState(status);
+  localStorage.setItem(publishStorageKey, JSON.stringify(transaction));
+  const onQueryPublishStatus = vi.fn(async () => transaction);
+  const onPublishToServer = vi.fn();
+
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={draft}
+      onPublishToServer={onPublishToServer}
+      onQueryPublishStatus={onQueryPublishStatus}
+      serverProtocolMode="queue"
+      serverQueueModeActive
+    />,
+  );
+
+  const panel = await screen.findByRole("region", { name: "当前队列状态" });
+  expect(within(panel).getByText(label)).toBeVisible();
+  expect(onPublishToServer).not.toHaveBeenCalled();
+
+  if (status === "PUBLISHED") {
+    expect(within(panel).getByText("网站源码 SHA").closest("div")).toHaveTextContent(
+      "e".repeat(40),
+    );
+    expect(screen.getByRole("link", { name: "打开线上页面" })).toHaveAttribute(
+      "href",
+      "https://example.invalid/zh/fictional-draft",
+    );
+  } else {
+    expect(within(panel).getByText("网站尚未更新")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "打开线上页面" })).not.toBeInTheDocument();
+  }
+});
+
+test("does not enable queue publishing unless the controller confirms queue activation", () => {
+  localStorage.clear();
+  render(
+    <DraftsPage
+      api={createApi()}
+      initialDraft={makeDirectPublishableDraft()}
+      onPublishToServer={vi.fn()}
+      serverProtocolMode="queue"
+      serverQueueModeActive={false}
+    />,
+  );
+
+  expect(screen.getByRole("button", { name: "发布到服务器" })).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "上传并等待同步" }),
+  ).not.toBeInTheDocument();
 });
 
 test("turns a failed recovery query into a stopped retryable status", async () => {

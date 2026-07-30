@@ -38,6 +38,8 @@ test("uses the backend command names and payload envelopes", async () => {
 
   await tauriServerApi.testConnection();
   await tauriServerApi.getStatus();
+  await tauriServerApi.getCapabilities();
+  await tauriServerApi.getPendingStatus();
   await tauriServerApi.listContent();
   await tauriServerApi.getPublishStatus({
     transactionId: "1".repeat(32),
@@ -48,6 +50,21 @@ test("uses the backend command names and payload envelopes", async () => {
     stableId: "example",
     transactionId: "1".repeat(32),
   });
+  await tauriServerApi.queueContent({
+    repositoryPath: "D:\\worktree",
+    contentType: "team-news",
+    stableId: "example",
+    transactionId: "2".repeat(32),
+  });
+  await tauriServerApi.queueDeleteContent({
+    repositoryPath: "D:\\worktree",
+    contentType: "team-news",
+    stableId: "example",
+    transactionId: "3".repeat(32),
+  });
+  await tauriServerApi.getSyncStatus();
+  await tauriServerApi.getSyncStatus({ transactionId: "2".repeat(32) });
+  await tauriServerApi.syncPendingNow();
   await tauriServerApi.deleteContent({
     contentType: "team-news",
     stableId: "example",
@@ -56,6 +73,8 @@ test("uses the backend command names and payload envelopes", async () => {
   expect(invokeMock.mock.calls).toEqual([
     ["test_server_connection"],
     ["get_server_status"],
+    ["negotiate_server_capabilities"],
+    ["get_pending_status"],
     ["list_server_content"],
     [
       "get_publish_status",
@@ -76,6 +95,34 @@ test("uses the backend command names and payload envelopes", async () => {
         },
       },
     ],
+    [
+      "queue_content_to_server",
+      {
+        request: {
+          repositoryPath: "D:\\worktree",
+          contentType: "team-news",
+          stableId: "example",
+          transactionId: "2".repeat(32),
+        },
+      },
+    ],
+    [
+      "queue_delete_content_from_server",
+      {
+        request: {
+          repositoryPath: "D:\\worktree",
+          contentType: "team-news",
+          stableId: "example",
+          transactionId: "3".repeat(32),
+        },
+      },
+    ],
+    ["get_sync_status", { request: {} }],
+    [
+      "get_sync_status",
+      { request: { transactionId: "2".repeat(32) } },
+    ],
+    ["sync_pending_now"],
     [
       "delete_server_content",
       {

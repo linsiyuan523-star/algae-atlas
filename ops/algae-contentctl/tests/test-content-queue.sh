@@ -103,6 +103,27 @@ commit_invalid_record() {
   "$GIT_BIN" -C "$SOURCE_REPOSITORY" rev-parse HEAD
 }
 
+commit_deleted_record() {
+  local base=$1
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" checkout -q --detach "$base"
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" rm -q -- \
+    content/records/science-article/example-id/record.json \
+    content/records/science-article/example-id/zh.md
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" commit -q -m "content: delete example-id"
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" rev-parse HEAD
+}
+
+commit_restored_record() {
+  local base=$1
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" checkout -q --detach "$base"
+  mkdir -p -- "$SOURCE_REPOSITORY/content/records/science-article/example-id"
+  write_record "Restored after queued deletion" "2026-07-29T00:07:00Z"
+  printf 'Restored body\n' > "$SOURCE_REPOSITORY/content/records/science-article/example-id/zh.md"
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" add -- content/records/science-article/example-id
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" commit -q -m "content: publish example-id"
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" rev-parse HEAD
+}
+
 LAST_DELIVERY=""
 LAST_BUNDLE=""
 LAST_SHA=""
@@ -124,7 +145,11 @@ create_delivery() {
   printf '%s  %s\n' "$bundle_sha" "$bundle_name" > "$delivery/$bundle_name.sha256.txt"
   printf '%s\n' 'queue test handoff' > "$delivery/HANDOFF.md"
   printf '%s\n' 'queue test summary' > "$delivery/TEST-SUMMARY.txt"
-  printf '%s\n' 'content/records/science-article/example-id/record.json' > "$delivery/CHANGED-FILES.txt"
+  local -a changed_files=()
+  mapfile -t changed_files < <("$GIT_BIN" -C "$SOURCE_REPOSITORY" diff-tree \
+    --no-commit-id --name-only --no-renames -r "$head_commit" | LC_ALL=C sort)
+  [[ ${#changed_files[@]} -gt 0 ]] || fail_test "delivery commit did not change content"
+  printf '%s\n' "${changed_files[@]}" > "$delivery/CHANGED-FILES.txt"
   printf '%s\n' 'queue test import helper' > "$delivery/Import-Bundle.ps1"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$delivery/Validate-Bundle.sh"
   printf '%s\n' 'process.exit(0);' > "$delivery/validate-bundle.mjs"
@@ -138,7 +163,7 @@ BundleSizeBytes=$bundle_size
 BundleSha256=$bundle_sha
 History=complete
 ImportBranch=import/content-direct-$transaction_id-example-id
-ChangedFileCount=1
+ChangedFileCount=${#changed_files[@]}
 Artifacts=$bundle_name,$bundle_name.sha256.txt,MANIFEST.txt,HANDOFF.md,TEST-SUMMARY.txt,CHANGED-FILES.txt,Import-Bundle.ps1,Validate-Bundle.sh,validate-bundle.mjs
 MANIFEST
   LAST_DELIVERY=$delivery
@@ -592,15 +617,46 @@ if legacy_delete_json=$(run_ctl delete --type science-article --id example-id --
 fi
 assert_json_field "$legacy_delete_json" code QUEUE_MODE_ACTIVE
 
+tx_delete=000000000000000000000000000000ad
+commit_delete=$(commit_deleted_record "$commit_c")
+create_delivery "$tx_delete" "$commit_delete" "$commit_c"
+delete_delivery=$LAST_DELIVERY
+delete_sha=$LAST_SHA
+queued_delete=$(run_queue_upload "$tx_delete" "$delete_delivery" "$delete_sha")
+assert_json_field "$queued_delete" status QUEUED
+delete_status=$(run_ctl pending-status --json)
+pending_delete=$(json_field "$delete_status" pending_content_commit)
+if "$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file -e \
+  "$pending_delete:content/records/science-article/example-id/record.json" 2>/dev/null; then
+  fail_test "queued deletion left the record in pending"
+fi
+"$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file -e \
+  "$published_commit:content/records/science-article/example-id/record.json" || \
+  fail_test "queued deletion changed published content"
+[[ $(json_field "$delete_status" pending_upload_count) -gt 0 ]] || \
+  fail_test "queued deletion did not increase pending uploads"
+
+tx_restore=000000000000000000000000000000ae
+commit_restore=$(commit_restored_record "$commit_delete")
+create_delivery "$tx_restore" "$commit_restore" "$commit_delete"
+restored_upload=$(run_queue_upload "$tx_restore" "$LAST_DELIVERY" "$LAST_SHA")
+assert_json_field "$restored_upload" status QUEUED
+assert_json_field "$(run_ctl publish-status --transaction "$tx_delete" --json)" status COALESCED
+final_pending_source=$commit_restore
+final_pending_content=$(json_field "$(run_ctl pending-status --json)" pending_content_commit)
+"$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file -e \
+  "$final_pending_content:content/records/science-article/example-id/record.json" || \
+  fail_test "queued restoration did not restore the record in pending"
+
 final_status=$(run_ctl pending-status --json)
 assert_pending_schema "$final_status"
 assert_json_field "$final_status" published_content_commit "$published_commit"
-assert_json_field "$final_status" pending_content_commit "$pending_c"
+assert_json_field "$final_status" pending_content_commit "$final_pending_content"
 assert_json_field "$final_status" syncing_content_commit null
 assert_json_field "$final_status" has_pending_changes true
 [[ $("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse HEAD) == "$published_commit" ]] || \
   fail_test "queue tests changed repository HEAD"
-[[ $("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse refs/algae/source/pending) == "$commit_c" ]] || \
+[[ $("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse refs/algae/source/pending) == "$final_pending_source" ]] || \
   fail_test "pending source ref does not retain the latest uploaded commit"
 [[ $("$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file -t refs/algae/queue-state) == blob ]] || \
   fail_test "queue state is not stored as a Git blob"
@@ -612,4 +668,4 @@ assert_json_field "$final_status" has_pending_changes true
   fail_test "queue operations changed production current"
 [[ ! -s "$EXTERNAL_LOG" ]] || fail_test "queue operations invoked an external build or production command"
 
-printf 'algae-contentctl queue tests: PASS (20 required scenarios plus collision checks)\n'
+printf 'algae-contentctl queue tests: PASS (22 required scenarios plus collision checks)\n'

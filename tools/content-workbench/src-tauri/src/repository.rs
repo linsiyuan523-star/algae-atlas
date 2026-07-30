@@ -11,6 +11,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Command, Output},
     sync::{Arc, Mutex, MutexGuard},
+    time::Instant,
 };
 use thiserror::Error;
 use uuid::{Uuid, Version};
@@ -208,6 +209,8 @@ pub struct RepositoryBundleExportResult {
     pub bundle_file_name: String,
     pub bundle_size_bytes: u64,
     pub sha256: String,
+    pub bundle_generation_duration_ms: u64,
+    pub sha256_duration_ms: u64,
     pub import_branch_name: String,
     pub artifact_names: Vec<String>,
 }
@@ -224,6 +227,8 @@ pub(crate) enum RepositoryError {
     Storage(#[from] std::io::Error),
     #[error("local commit request is invalid: {0}")]
     InvalidCommitRequest(&'static str),
+    #[error("local delete commit request is invalid: {0}")]
+    InvalidDeleteRequest(&'static str),
     #[error("bundle export request is invalid: {0}")]
     InvalidBundleRequest(&'static str),
     #[error("repository state blocks the local content commit")]
@@ -648,9 +653,10 @@ pub(crate) fn inspect_repository_bundle(
                 }
 
                 if let Some(record_id) = record_id {
-                    let expected_subject = format!("content: publish {record_id}");
+                    let publish_subject = format!("content: publish {record_id}");
+                    let delete_subject = format!("content: delete {record_id}");
                     if match git_stdout(&reported_root, &["log", "-1", "--format=%s", "HEAD"]) {
-                        Ok(subject) => subject != expected_subject,
+                        Ok(subject) => subject != publish_subject && subject != delete_subject,
                         Err(_) => true,
                     } {
                         conflicts.push(conflict(
@@ -1726,6 +1732,353 @@ where
     }
 }
 
+pub(crate) fn ensure_direct_delete_commit(
+    publisher: &RepositoryPublisher,
+    repository_path: &str,
+    content_type: &str,
+    stable_id: &str,
+    transaction_id: &str,
+) -> RepositoryResult<RepositoryLocalCommitResult> {
+    if !CONTENT_TYPES.contains(&content_type)
+        || !is_stable_id(stable_id)
+        || transaction_id.len() != 32
+        || !transaction_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(RepositoryError::InvalidDeleteRequest("identity"));
+    }
+
+    let branch_name = format!("content/direct-{transaction_id}-{stable_id}");
+    if !valid_branch_name(&branch_name, stable_id, true) {
+        return Err(RepositoryError::InvalidDeleteRequest("branchName"));
+    }
+
+    let _operation_guard = publisher.lock()?;
+    let repository_root = canonical_selected_directory(repository_path)?;
+    let base_branch = git_stdout(
+        &repository_root,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )
+    .map_err(|_| RepositoryError::RepositoryBlocked)?;
+    let base_head = git_stdout(&repository_root, &["rev-parse", "--verify", "HEAD"])
+        .map_err(|_| RepositoryError::RepositoryBlocked)?;
+    if !git_stdout(
+        &repository_root,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )
+    .is_ok_and(|status| status.is_empty())
+        || !git_stdout(&repository_root, &["remote"]).is_ok_and(|remotes| remotes.is_empty())
+        || git_operation_in_progress(&repository_root)
+    {
+        return Err(RepositoryError::RepositoryBlocked);
+    }
+
+    if base_branch == branch_name {
+        return verify_existing_delete_commit(
+            &repository_root,
+            &branch_name,
+            content_type,
+            stable_id,
+        );
+    }
+    if git_succeeds(
+        &repository_root,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch_name}"),
+        ],
+    ) {
+        return Err(RepositoryError::RepositoryChanged);
+    }
+
+    let record_root = format!("content/records/{content_type}/{stable_id}");
+    let record_prefix = format!("{record_root}/");
+    let tracked = git_stdout(
+        &repository_root,
+        &["ls-tree", "-r", "--name-only", "HEAD", "--", &record_root],
+    )
+    .map_err(|_| RepositoryError::RepositoryBlocked)?
+    .lines()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    let required = [
+        format!("{record_prefix}record.json"),
+        format!("{record_prefix}zh.md"),
+    ];
+    if !required.iter().all(|path| tracked.contains(path))
+        || tracked.is_empty()
+        || tracked.len() > 3
+        || tracked
+            .iter()
+            .any(|path| !required.contains(path) && path != &format!("{record_prefix}en.md"))
+    {
+        return Err(RepositoryError::InvalidDeleteRequest("record files"));
+    }
+    for relative in &tracked {
+        let target = join_relative(&repository_root, relative);
+        let metadata =
+            fs::symlink_metadata(target).map_err(|_| RepositoryError::RepositoryChanged)?;
+        if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+            return Err(RepositoryError::UnsafeRepositoryPath);
+        }
+    }
+
+    let staging = create_bundle_staging(publisher, &repository_root)?;
+    let hooks_root = staging.root.join("hooks-disabled");
+    fs::create_dir(&hooks_root)?;
+    controlled_git_checked(
+        &repository_root,
+        &hooks_root,
+        &["switch".to_owned(), "-c".to_owned(), branch_name.clone()],
+        "create delete branch",
+    )?;
+
+    let mut commit_created = false;
+    let operation = (|| -> RepositoryResult<RepositoryLocalCommitResult> {
+        let mut remove_args = vec!["rm".to_owned(), "--".to_owned()];
+        remove_args.extend(tracked.iter().cloned());
+        controlled_git_checked(
+            &repository_root,
+            &hooks_root,
+            &remove_args,
+            "stage record deletion",
+        )?;
+        verify_staged_deletion(&repository_root, &hooks_root, &tracked)?;
+
+        let commit_message = format!("content: delete {stable_id}");
+        controlled_git_checked(
+            &repository_root,
+            &hooks_root,
+            &[
+                "commit".to_owned(),
+                "--no-verify".to_owned(),
+                "--no-gpg-sign".to_owned(),
+                "-m".to_owned(),
+                commit_message.clone(),
+            ],
+            "commit record deletion",
+        )?;
+        commit_created = true;
+        let commit_sha = controlled_git_stdout(
+            &repository_root,
+            &hooks_root,
+            &["rev-parse", "--verify", "HEAD"],
+        )?;
+        verify_delete_commit(
+            &repository_root,
+            &hooks_root,
+            &branch_name,
+            &base_head,
+            stable_id,
+            &tracked,
+        )?;
+        Ok(RepositoryLocalCommitResult {
+            branch_name: branch_name.clone(),
+            previous_head_sha: base_head.clone(),
+            commit_sha,
+            commit_message,
+            committed_paths: tracked.iter().cloned().collect(),
+        })
+    })();
+
+    if operation.is_err() && !commit_created {
+        let mut restore_args = vec![
+            "restore".to_owned(),
+            "--source=HEAD".to_owned(),
+            "--staged".to_owned(),
+            "--worktree".to_owned(),
+            "--".to_owned(),
+        ];
+        restore_args.extend(tracked.iter().cloned());
+        let restored = controlled_git_command(&repository_root, &hooks_root, &restore_args)
+            .is_ok_and(|output| output.status.success());
+        let switched = controlled_git_command(
+            &repository_root,
+            &hooks_root,
+            &["switch".to_owned(), "--".to_owned(), base_branch.clone()],
+        )
+        .is_ok_and(|output| output.status.success());
+        let removed = controlled_git_command(
+            &repository_root,
+            &hooks_root,
+            &[
+                "branch".to_owned(),
+                "-d".to_owned(),
+                "--".to_owned(),
+                branch_name,
+            ],
+        )
+        .is_ok_and(|output| output.status.success());
+        if !(restored && switched && removed) {
+            return Err(RepositoryError::RollbackFailed);
+        }
+    }
+    operation
+}
+
+fn verify_staged_deletion(
+    root: &Path,
+    hooks_root: &Path,
+    expected: &BTreeSet<String>,
+) -> RepositoryResult<()> {
+    let output = controlled_git_checked(
+        root,
+        hooks_root,
+        &[
+            "diff".to_owned(),
+            "--cached".to_owned(),
+            "--name-status".to_owned(),
+            "--no-renames".to_owned(),
+            "-z".to_owned(),
+        ],
+        "verify staged deletion",
+    )?;
+    let fields = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>();
+    if fields.len() != expected.len() * 2 {
+        return Err(RepositoryError::Git("unexpected staged deletion"));
+    }
+    let mut actual = BTreeSet::new();
+    for pair in fields.chunks_exact(2) {
+        if pair[0] != b"D" {
+            return Err(RepositoryError::Git("unexpected staged deletion status"));
+        }
+        let path = std::str::from_utf8(pair[1])
+            .map_err(|_| RepositoryError::Git("invalid staged deletion path"))?;
+        actual.insert(path.to_owned());
+    }
+    if &actual != expected {
+        return Err(RepositoryError::Git("unexpected staged deletion paths"));
+    }
+    controlled_git_checked(
+        root,
+        hooks_root,
+        &[
+            "diff".to_owned(),
+            "--cached".to_owned(),
+            "--check".to_owned(),
+        ],
+        "check staged deletion",
+    )?;
+    Ok(())
+}
+
+fn verify_delete_commit(
+    root: &Path,
+    hooks_root: &Path,
+    branch_name: &str,
+    parent: &str,
+    stable_id: &str,
+    expected: &BTreeSet<String>,
+) -> RepositoryResult<()> {
+    if controlled_git_stdout(root, hooks_root, &["rev-parse", "HEAD^"])? != parent
+        || controlled_git_stdout(
+            root,
+            hooks_root,
+            &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        )? != branch_name
+        || controlled_git_stdout(root, hooks_root, &["log", "-1", "--format=%s", "HEAD"])?
+            != format!("content: delete {stable_id}")
+        || !controlled_git_stdout(
+            root,
+            hooks_root,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        )?
+        .is_empty()
+    {
+        return Err(RepositoryError::Git("post-delete commit state"));
+    }
+    let output = controlled_git_checked(
+        root,
+        hooks_root,
+        &[
+            "diff-tree".to_owned(),
+            "--no-commit-id".to_owned(),
+            "--name-only".to_owned(),
+            "--no-renames".to_owned(),
+            "-r".to_owned(),
+            "-z".to_owned(),
+            "HEAD".to_owned(),
+        ],
+        "verify delete commit paths",
+    )?;
+    if nul_paths(&output.stdout)? != *expected {
+        return Err(RepositoryError::Git("unexpected delete commit paths"));
+    }
+    Ok(())
+}
+
+fn verify_existing_delete_commit(
+    root: &Path,
+    branch_name: &str,
+    content_type: &str,
+    stable_id: &str,
+) -> RepositoryResult<RepositoryLocalCommitResult> {
+    let commit_sha = git_stdout(root, &["rev-parse", "--verify", "HEAD"])
+        .map_err(|_| RepositoryError::RepositoryChanged)?;
+    let parent = git_stdout(root, &["rev-parse", "HEAD^"])
+        .map_err(|_| RepositoryError::RepositoryChanged)?;
+    let record_prefix = format!("content/records/{content_type}/{stable_id}/");
+    let output = git_command(
+        root,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "--name-status",
+            "--no-renames",
+            "-r",
+            "-z",
+            "HEAD",
+        ],
+    )
+    .map_err(|_| RepositoryError::RepositoryChanged)?;
+    if !output.status.success() {
+        return Err(RepositoryError::RepositoryChanged);
+    }
+    let fields = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>();
+    let mut paths = BTreeSet::new();
+    for pair in fields.chunks_exact(2) {
+        let path = std::str::from_utf8(pair[1]).map_err(|_| RepositoryError::RepositoryChanged)?;
+        if pair[0] != b"D"
+            || !matches!(
+                path.strip_prefix(&record_prefix),
+                Some("record.json" | "zh.md" | "en.md")
+            )
+        {
+            return Err(RepositoryError::RepositoryChanged);
+        }
+        paths.insert(path.to_owned());
+    }
+    if fields.len() != paths.len() * 2
+        || paths.len() < 2
+        || !paths.contains(&format!("{record_prefix}record.json"))
+        || !paths.contains(&format!("{record_prefix}zh.md"))
+        || !matches!(
+            git_stdout(root, &["log", "-1", "--format=%s", "HEAD"]),
+            Ok(subject) if subject == format!("content: delete {stable_id}")
+        )
+    {
+        return Err(RepositoryError::RepositoryChanged);
+    }
+    Ok(RepositoryLocalCommitResult {
+        branch_name: branch_name.to_owned(),
+        previous_head_sha: parent,
+        commit_sha,
+        commit_message: format!("content: delete {stable_id}"),
+        committed_paths: paths.into_iter().collect(),
+    })
+}
+
 pub(crate) fn export_repository_bundle(
     publisher: &RepositoryPublisher,
     request: RepositoryBundleExportRequest,
@@ -1771,6 +2124,7 @@ pub(crate) fn export_repository_bundle(
     let hooks_root = staging.root.join("hooks-disabled");
     fs::create_dir(&hooks_root)?;
     let staged_bundle = staging.root.join(&bundle_name);
+    let bundle_started = Instant::now();
     controlled_git_checked(
         &repository_root,
         &hooks_root,
@@ -1789,16 +2143,19 @@ pub(crate) fn export_repository_bundle(
         &request.expected_branch_name,
         &request.expected_head_sha,
     )?;
+    let bundle_generation_duration_ms = bundle_started.elapsed().as_millis() as u64;
 
     let bundle_size = fs::metadata(&staged_bundle)?.len();
     if bundle_size == 0 || bundle_size > MAX_BUNDLE_BYTES {
         return Err(RepositoryError::InvalidBundleRequest("bundle size"));
     }
+    let sha256_started = Instant::now();
     let bundle_bytes = fs::read(&staged_bundle)?;
     if bundle_bytes.len() as u64 != bundle_size {
         return Err(RepositoryError::Git("bundle size changed"));
     }
     let bundle_sha256 = sha256_hex(&bundle_bytes).to_ascii_uppercase();
+    let sha256_duration_ms = sha256_started.elapsed().as_millis() as u64;
     let artifact_context = BundleArtifactContext {
         bundle_name: &bundle_name,
         branch_name: &request.expected_branch_name,
@@ -1857,6 +2214,8 @@ pub(crate) fn export_repository_bundle(
         bundle_file_name: bundle_name,
         bundle_size_bytes: bundle_size,
         sha256: bundle_sha256,
+        bundle_generation_duration_ms,
+        sha256_duration_ms,
         import_branch_name: import_branch,
         artifact_names: artifacts,
     })
@@ -2865,11 +3224,11 @@ fn nul_paths(bytes: &[u8]) -> RepositoryResult<BTreeSet<String>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        export_repository_bundle, inspect_repository_bundle, inspect_repository_export,
-        publish_local_commit, PublishFault, RepositoryBundleExportRequest,
-        RepositoryBundlePreflightRequest, RepositoryDryRunRequest, RepositoryDryRunResult,
-        RepositoryError, RepositoryImageFile, RepositoryLocalCommitRequest, RepositoryPublisher,
-        RepositoryTextFile,
+        ensure_direct_delete_commit, export_repository_bundle, inspect_repository_bundle,
+        inspect_repository_export, publish_local_commit, PublishFault,
+        RepositoryBundleExportRequest, RepositoryBundlePreflightRequest, RepositoryDryRunRequest,
+        RepositoryDryRunResult, RepositoryError, RepositoryImageFile, RepositoryLocalCommitRequest,
+        RepositoryPublisher, RepositoryTextFile,
     };
     use std::{
         collections::BTreeMap,
@@ -2950,6 +3309,61 @@ mod tests {
             .env("VALIDATOR_TEST_SECRET", "must-not-be-printed")
             .output()
             .expect("runs portable bundle validator")
+    }
+
+    #[test]
+    fn direct_delete_commit_removes_only_the_target_record_and_is_idempotent() {
+        let (temporary, root) = repository_fixture();
+        let record_root = root.join("content/records/science-article/delete-fixture");
+        fs::create_dir_all(&record_root).expect("creates record fixture");
+        fs::write(record_root.join("record.json"), b"{}\n").expect("writes record fixture");
+        fs::write(record_root.join("zh.md"), b"# fixture\n").expect("writes Chinese fixture");
+        fs::write(record_root.join("en.md"), b"# fixture\n").expect("writes English fixture");
+        fs::create_dir_all(root.join("content/records/science-article/keep-fixture"))
+            .expect("creates retained fixture");
+        fs::write(
+            root.join("content/records/science-article/keep-fixture/record.json"),
+            b"{}\n",
+        )
+        .expect("writes retained fixture");
+        git(&root, &["add", "--", "content"]);
+        git(&root, &["commit", "-m", "content: add deletion fixtures"]);
+        let parent = git(&root, &["rev-parse", "HEAD"]);
+        let publisher = RepositoryPublisher::new(temporary.path().join("publication-staging"));
+        let transaction_id = "a".repeat(32);
+
+        let result = ensure_direct_delete_commit(
+            &publisher,
+            root.to_string_lossy().as_ref(),
+            "science-article",
+            "delete-fixture",
+            &transaction_id,
+        )
+        .expect("creates direct delete commit");
+
+        assert_eq!(result.previous_head_sha, parent);
+        assert_eq!(result.commit_message, "content: delete delete-fixture");
+        assert_eq!(result.committed_paths.len(), 3);
+        assert!(result
+            .committed_paths
+            .iter()
+            .all(|path| path.starts_with("content/records/science-article/delete-fixture/")));
+        assert!(!record_root.exists());
+        assert!(root
+            .join("content/records/science-article/keep-fixture/record.json")
+            .is_file());
+        assert!(git(&root, &["status", "--short"]).is_empty());
+
+        let repeated = ensure_direct_delete_commit(
+            &publisher,
+            root.to_string_lossy().as_ref(),
+            "science-article",
+            "delete-fixture",
+            &transaction_id,
+        )
+        .expect("reuses direct delete commit");
+        assert_eq!(repeated.commit_sha, result.commit_sha);
+        assert_eq!(git(&root, &["rev-list", "--count", "HEAD"]), "3");
     }
 
     fn request(root: &Path) -> RepositoryDryRunRequest {

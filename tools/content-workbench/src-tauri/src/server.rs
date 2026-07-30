@@ -1,7 +1,7 @@
 use crate::repository::{
     self, RepositoryBundleExportRequest, RepositoryBundlePreflightRequest, RepositoryPublisher,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
     collections::HashSet,
@@ -36,6 +36,8 @@ const LOCAL_VALIDATOR_TIMEOUT: Duration = Duration::from_secs(90);
 const PUBLISH_PROGRESS_EVENT: &str = "server-publish-progress";
 const MAX_NETWORK_ATTEMPTS: usize = 3;
 const REQUIRED_PUBLISH_PROTOCOL_VERSION: u64 = 1;
+const REQUIRED_QUEUE_PROTOCOL_VERSION: u64 = 1;
+const REQUIRED_SYNC_PROTOCOL_VERSION: u64 = 1;
 
 const CONTENT_TYPES: [&str; 11] = [
     "team-news",
@@ -66,11 +68,143 @@ pub struct PublishStatusRequest {
     pub transaction_id: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SyncStatusRequest {
+    #[serde(default)]
+    pub transaction_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeleteServerContentRequest {
     pub content_type: String,
     pub stable_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ControllerStatusProtocol {
+    ready: bool,
+    content_repository_ready: bool,
+    current_release: Option<String>,
+    previous_release: Option<String>,
+    service_active: bool,
+    healthy: bool,
+    #[serde(default)]
+    publish_protocol_version: Option<u64>,
+    #[serde(default)]
+    queue_protocol_version: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct PendingStatusProtocol {
+    schema_version: u64,
+    published_content_commit: String,
+    pending_content_commit: String,
+    syncing_content_commit: Option<String>,
+    has_pending_changes: bool,
+    pending_upload_count: u64,
+    latest_upload_transaction_id: Option<String>,
+    active_sync_transaction_id: Option<String>,
+    last_sync_transaction_id: Option<String>,
+    last_sync_status: Option<SyncStatusProtocol>,
+    blocked_content_commit: Option<String>,
+    next_scheduled_sync_at: String,
+    sync_timer_active: bool,
+    server_time: String,
+    site_commit: String,
+    queue_protocol_version: u64,
+    sync_protocol_version: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum UploadStatusProtocol {
+    Failed,
+    Queued,
+    Coalesced,
+    Syncing,
+    Published,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QueueUploadProtocol {
+    schema_version: u64,
+    transaction_id: String,
+    bundle_sha256: String,
+    source_commit: String,
+    content_commit: String,
+    status: UploadStatusProtocol,
+    queued_at: String,
+    coalesced_into_commit: String,
+    included_in_sync_transaction_id: String,
+    published_release_id: String,
+    #[serde(default)]
+    published_at: String,
+    retryable: bool,
+    error_code: String,
+    content_type: String,
+    stable_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum SyncStatusProtocol {
+    Created,
+    Snapshotting,
+    PreparingSource,
+    PreparingDependencies,
+    Checking,
+    Building,
+    Switching,
+    Verifying,
+    Published,
+    FailedRetryable,
+    FailedBlocked,
+    Recovering,
+    SkippedNoPending,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum SyncTriggerProtocol {
+    Scheduled,
+    Manual,
+    Recovery,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct SyncTransactionProtocol {
+    schema_version: u64,
+    sync_transaction_id: String,
+    active_sync_transaction_id: String,
+    last_sync_transaction_id: String,
+    status: SyncStatusProtocol,
+    stage: SyncStatusProtocol,
+    trigger: SyncTriggerProtocol,
+    content_commit: String,
+    source_content_commit: String,
+    site_commit: String,
+    release_id: String,
+    release_path: String,
+    started_at: String,
+    updated_at: String,
+    completed_at: String,
+    #[serde(default)]
+    stage_started_at: String,
+    elapsed_ms: u64,
+    retryable: bool,
+    blocked: bool,
+    error_code: String,
+    attempt: u64,
+    max_attempts: u64,
+    recovered: bool,
+    switch_completed: bool,
+    health_verified: bool,
 }
 
 /// A stable envelope for every server-facing Tauri command.
@@ -136,19 +270,53 @@ pub async fn test_server_connection() -> ServerCommandResult {
 
 #[tauri::command]
 pub async fn get_server_status() -> ServerCommandResult {
-    spawn_server_command("status", || {
-        let response = controller_json(
-            "status",
-            &["sudo", "-n", CONTROLLER_PATH, "status", "--json"],
-            QUERY_TIMEOUT,
-        );
-        if response.ok {
-            validate_status_response(response)
-        } else {
-            response
+    spawn_server_command("status", query_server_status).await
+}
+
+#[tauri::command]
+pub async fn negotiate_server_capabilities() -> ServerCommandResult {
+    spawn_server_command("capabilities", negotiate_capabilities).await
+}
+
+#[tauri::command]
+pub async fn get_pending_status() -> ServerCommandResult {
+    spawn_server_command("pending-status", query_pending_status).await
+}
+
+#[tauri::command]
+pub async fn get_sync_status(request: SyncStatusRequest) -> ServerCommandResult {
+    spawn_server_command("sync-status", move || {
+        if request
+            .transaction_id
+            .as_deref()
+            .is_some_and(|transaction_id| !is_sync_transaction_id(transaction_id))
+        {
+            return invalid_request("sync-status", "transactionId");
         }
+        query_sync_status(request.transaction_id.as_deref())
     })
     .await
+}
+
+#[tauri::command]
+pub async fn sync_pending_now() -> ServerCommandResult {
+    spawn_server_command("sync-pending", || {
+        let response = controller_json("sync-pending", &manual_sync_remote_args(), PUBLISH_TIMEOUT);
+        validate_sync_response(response, "sync-pending")
+    })
+    .await
+}
+
+fn manual_sync_remote_args() -> [&'static str; 7] {
+    [
+        "sudo",
+        "-n",
+        CONTROLLER_PATH,
+        "sync-pending",
+        "--trigger",
+        "manual",
+        "--json",
+    ]
 }
 
 #[tauri::command]
@@ -188,6 +356,63 @@ pub async fn publish_content_to_server(
     let publish_app = app.clone();
     Ok(spawn_server_command("publish", move || {
         publish_content(&publish_app, &publisher, request)
+    })
+    .await)
+}
+
+#[tauri::command]
+pub async fn queue_content_to_server(
+    app: tauri::AppHandle,
+    request: PublishContentRequest,
+) -> Result<ServerCommandResult, String> {
+    let publisher = app.state::<RepositoryPublisher>().inner().clone();
+    let publish_app = app.clone();
+    Ok(spawn_server_command("queue-upload", move || {
+        queue_content(&publish_app, &publisher, request)
+    })
+    .await)
+}
+
+#[tauri::command]
+pub async fn queue_delete_content_from_server(
+    app: tauri::AppHandle,
+    request: PublishContentRequest,
+) -> Result<ServerCommandResult, String> {
+    let publisher = app.state::<RepositoryPublisher>().inner().clone();
+    let publish_app = app.clone();
+    Ok(spawn_server_command("queue-upload", move || {
+        if let Err(field) = validate_publish_request(&request) {
+            return invalid_request("queue-upload", field);
+        }
+        let existing = query_publish_status(&request.transaction_id);
+        if existing.ok && !status_allows_publish_retry(&existing) {
+            return transaction_result_from_status(existing, &request, PublishMode::Queue);
+        }
+        if !existing.ok && existing.code.as_deref() != Some("TRANSACTION_NOT_FOUND") {
+            return transaction_error_for(existing, &request.transaction_id, PublishMode::Queue);
+        }
+        if repository::ensure_direct_delete_commit(
+            &publisher,
+            &request.repository_path,
+            &request.content_type,
+            &request.stable_id,
+            &request.transaction_id,
+        )
+        .is_err()
+        {
+            return transaction_error_for(
+                ServerCommandResult::error(
+                    "queue-upload",
+                    "DELETE_COMMIT_FAILED",
+                    "The local content deletion commit could not be created safely.",
+                    None,
+                    None,
+                ),
+                &request.transaction_id,
+                PublishMode::Queue,
+            );
+        }
+        queue_content(&publish_app, &publisher, request)
     })
     .await)
 }
@@ -233,6 +458,108 @@ where
             None,
         ),
     }
+}
+
+fn query_server_status() -> ServerCommandResult {
+    let response = controller_json(
+        "status",
+        &["sudo", "-n", CONTROLLER_PATH, "status", "--json"],
+        QUERY_TIMEOUT,
+    );
+    if response.ok {
+        validate_status_response(response)
+    } else {
+        response
+    }
+}
+
+fn negotiate_capabilities() -> ServerCommandResult {
+    let status = query_server_status();
+    if !status.ok {
+        return status_with_action(status, "capabilities");
+    }
+    let Some(protocol) = protocol_details::<ControllerStatusProtocol>(&status) else {
+        return protocol_invalid("capabilities", "Server capability status is invalid.");
+    };
+    let publish_version = protocol.publish_protocol_version.unwrap_or(0);
+    let queue_version = protocol.queue_protocol_version.unwrap_or(0);
+    if publish_version < REQUIRED_PUBLISH_PROTOCOL_VERSION {
+        return ServerCommandResult::error(
+            "capabilities",
+            "CONTROLLER_UPGRADE_REQUIRED",
+            "The server controller must be upgraded before reliable publish transactions can be used.",
+            None,
+            Some(json!({
+                "protocolMode": "incompatible",
+                "queueModeActive": false,
+                "publishProtocolVersion": publish_version,
+                "queueProtocolVersion": queue_version,
+                "requiredPublishProtocolVersion": REQUIRED_PUBLISH_PROTOCOL_VERSION,
+            })),
+        );
+    }
+
+    if queue_version < REQUIRED_QUEUE_PROTOCOL_VERSION {
+        return capability_result(status, "legacy", false);
+    }
+
+    let pending = query_pending_status();
+    if pending.ok {
+        return capability_result(status, "queue", true);
+    }
+    if matches!(
+        pending.code.as_deref(),
+        Some("QUEUE_NOT_INITIALIZED" | "QUEUE_MODE_INACTIVE")
+    ) {
+        return capability_result(status, "legacy", false);
+    }
+    status_with_action(pending, "capabilities")
+}
+
+fn capability_result(
+    mut status: ServerCommandResult,
+    protocol_mode: &str,
+    queue_mode_active: bool,
+) -> ServerCommandResult {
+    status.action = "capabilities".to_owned();
+    status.message = if queue_mode_active {
+        "Asynchronous content queue is active."
+    } else {
+        "The server is using synchronous legacy publishing."
+    }
+    .to_owned();
+    status.details.insert(
+        "protocolMode".to_owned(),
+        Value::String(protocol_mode.to_owned()),
+    );
+    status
+        .details
+        .insert("queueModeActive".to_owned(), Value::Bool(queue_mode_active));
+    status
+}
+
+fn status_with_action(mut response: ServerCommandResult, action: &str) -> ServerCommandResult {
+    response.action = action.to_owned();
+    response
+}
+
+fn query_pending_status() -> ServerCommandResult {
+    let response = controller_json(
+        "pending-status",
+        &["sudo", "-n", CONTROLLER_PATH, "pending-status", "--json"],
+        QUERY_TIMEOUT,
+    );
+    validate_pending_status_response(response)
+}
+
+fn query_sync_status(transaction_id: Option<&str>) -> ServerCommandResult {
+    let mut arguments = vec!["sudo", "-n", CONTROLLER_PATH, "sync-status"];
+    if let Some(transaction_id) = transaction_id {
+        arguments.push(transaction_id);
+    }
+    arguments.push("--json");
+    let response = controller_json("sync-status", &arguments, QUERY_TIMEOUT);
+    validate_sync_response(response, "sync-status")
 }
 
 struct PublishTimeline {
@@ -317,13 +644,50 @@ fn is_publish_transaction_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+fn is_sync_transaction_id(value: &str) -> bool {
+    is_publish_transaction_id(value)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublishMode {
+    Legacy,
+    Queue,
+}
+
+impl PublishMode {
+    fn action(self) -> &'static str {
+        match self {
+            Self::Legacy => "publish",
+            Self::Queue => "queue-upload",
+        }
+    }
+}
+
 fn publish_content(
     app: &tauri::AppHandle,
     publisher: &RepositoryPublisher,
     request: PublishContentRequest,
 ) -> ServerCommandResult {
+    deliver_content(app, publisher, request, PublishMode::Legacy)
+}
+
+fn queue_content(
+    app: &tauri::AppHandle,
+    publisher: &RepositoryPublisher,
+    request: PublishContentRequest,
+) -> ServerCommandResult {
+    deliver_content(app, publisher, request, PublishMode::Queue)
+}
+
+fn deliver_content(
+    app: &tauri::AppHandle,
+    publisher: &RepositoryPublisher,
+    request: PublishContentRequest,
+    mode: PublishMode,
+) -> ServerCommandResult {
+    let action = mode.action();
     if let Err(field) = validate_publish_request(&request) {
-        return invalid_request("publish", field);
+        return invalid_request(action, field);
     }
     let mut timeline = PublishTimeline::new();
     timeline.transition(
@@ -342,17 +706,17 @@ fn publish_content(
     let existing = query_publish_status(&request.transaction_id);
     if existing.ok {
         if !status_allows_publish_retry(&existing) {
-            return publish_result_from_status(existing, &request);
+            return transaction_result_from_status(existing, &request, mode);
         }
     } else if existing.code.as_deref() != Some("TRANSACTION_NOT_FOUND") {
-        return publish_error_for_transaction(existing, &request.transaction_id);
+        return transaction_error_for(existing, &request.transaction_id, mode);
     }
 
     let temporary = match Builder::new().prefix("algae-server-publish-").tempdir() {
         Ok(temporary) => temporary,
         Err(_) => {
             return ServerCommandResult::error(
-                "publish",
+                action,
                 "TEMPORARY_DIRECTORY_FAILED",
                 "Could not create a temporary Bundle delivery directory.",
                 None,
@@ -378,7 +742,7 @@ fn publish_content(
     );
     let export = match export_server_delivery(publisher, &request, &delivery) {
         Ok(export) => export,
-        Err(error) => return publish_error_for_transaction(*error, &job_id),
+        Err(error) => return transaction_error_for(*error, &job_id, mode),
     };
     timeline.transition(
         app,
@@ -393,21 +757,26 @@ fn publish_content(
         },
     );
     if let Err(error) = validate_portable_bundle(&delivery, &export.bundle_file_name) {
-        return publish_error_for_transaction(*error, &job_id);
+        return transaction_error_for(*error, &job_id, mode);
     }
 
     let current = query_publish_status(&job_id);
     if current.ok {
         if !status_allows_publish_retry(&current) {
-            return publish_result_from_status_with_sha(current, &request, &export.sha256);
+            return transaction_result_from_status_with_sha(
+                current,
+                &request,
+                &export.sha256,
+                mode,
+            );
         }
     } else if current.code.as_deref() != Some("TRANSACTION_NOT_FOUND") {
-        return publish_error_for_transaction(current, &job_id);
+        return transaction_error_for(current, &job_id, mode);
     }
 
     let Some(remote_delivery) = remote_delivery_path(&job_id) else {
         return ServerCommandResult::error(
-            "publish",
+            action,
             "UPLOAD_PATH_INVALID",
             "The uploaded Bundle path could not be derived safely.",
             None,
@@ -445,25 +814,26 @@ fn publish_content(
                 &export.sha256,
                 export.bundle_size_bytes,
             ) {
-                return publish_error_for_transaction(*error, &job_id);
+                return transaction_error_for(*error, &job_id, mode);
             }
             uploaded_at = current_timestamp();
             upload_duration_ms = upload_started.elapsed().as_millis() as u64;
         }
         RemoteBundleState::Mismatch => {
-            return publish_error_for_transaction(
+            return transaction_error_for(
                 ServerCommandResult::error(
-                    "publish",
+                    action,
                     "REMOTE_BUNDLE_MISMATCH",
                     "The transaction already has a different uploaded Bundle.",
                     None,
                     None,
                 ),
                 &job_id,
+                mode,
             );
         }
         RemoteBundleState::Unavailable(error) => {
-            return publish_error_for_transaction(error, &job_id);
+            return transaction_error_for(error, &job_id, mode);
         }
     }
     timeline.transition(
@@ -471,7 +841,11 @@ fn publish_content(
         &job_id,
         PublishTransition {
             stage: "bundle_uploaded",
-            message: "Bundle upload is complete; server processing is starting",
+            message: if mode == PublishMode::Queue {
+                "Bundle upload is complete; server quick validation is starting"
+            } else {
+                "Bundle upload is complete; server processing is starting"
+            },
             attempt: 1,
             is_uploading: false,
             server_started: false,
@@ -485,31 +859,37 @@ fn publish_content(
         app,
         &job_id,
         PublishTransition {
-            stage: "connecting_server",
-            message: "Connecting to the server publish controller",
+            stage: if mode == PublishMode::Queue {
+                "server_validating"
+            } else {
+                "connecting_server"
+            },
+            message: if mode == PublishMode::Queue {
+                "The server is quickly validating the queued Bundle"
+            } else {
+                "Connecting to the server publish controller"
+            },
             attempt: 1,
             is_uploading: false,
             server_started: true,
             extra: None,
         },
     );
-    let response = controller_json(
-        "publish",
-        &[
-            "sudo",
-            "-n",
-            CONTROLLER_PATH,
-            "publish",
-            "--transaction",
-            &job_id,
-            "--bundle",
-            &remote_delivery,
-            "--bundle-sha256",
-            &export.sha256,
-            "--json",
-        ],
-        PUBLISH_TIMEOUT,
+    let server_validation_started = Instant::now();
+    let remote_args = content_mutation_remote_args(mode, &job_id, &remote_delivery, &export.sha256);
+    let mut response = controller_json(
+        action,
+        &remote_args,
+        if mode == PublishMode::Queue {
+            QUERY_TIMEOUT
+        } else {
+            PUBLISH_TIMEOUT
+        },
     );
+    if mode == PublishMode::Queue {
+        response = validate_queue_upload_response(response, action);
+    }
+    let server_validation_duration_ms = server_validation_started.elapsed().as_millis() as u64;
     if publish_result_is_ambiguous(&response) {
         timeline.transition(
             app,
@@ -524,14 +904,77 @@ fn publish_content(
             },
         );
         if let Some(status) = query_publish_status_with_retry(&job_id) {
-            return publish_result_from_status_with_sha(status, &request, &export.sha256);
+            let result =
+                transaction_result_from_status_with_sha(status, &request, &export.sha256, mode);
+            return attach_queue_timings(
+                result,
+                mode,
+                &export,
+                &uploaded_at,
+                upload_duration_ms,
+                server_validation_duration_ms,
+                timeline.started.elapsed().as_millis() as u64,
+            );
         }
     }
-    validate_mutation_identity(
-        publish_error_for_transaction(response, &job_id),
+    let result = validate_mutation_identity(
+        transaction_error_for(response, &job_id, mode),
         &request.content_type,
         &request.stable_id,
+    );
+    attach_queue_timings(
+        result,
+        mode,
+        &export,
+        &uploaded_at,
+        upload_duration_ms,
+        server_validation_duration_ms,
+        timeline.started.elapsed().as_millis() as u64,
     )
+}
+
+fn content_mutation_remote_args<'a>(
+    mode: PublishMode,
+    transaction_id: &'a str,
+    remote_delivery: &'a str,
+    bundle_sha256: &'a str,
+) -> Vec<&'a str> {
+    vec![
+        "sudo",
+        "-n",
+        CONTROLLER_PATH,
+        mode.action(),
+        "--transaction",
+        transaction_id,
+        "--bundle",
+        remote_delivery,
+        "--bundle-sha256",
+        bundle_sha256,
+        "--json",
+    ]
+}
+
+fn attach_queue_timings(
+    mut response: ServerCommandResult,
+    mode: PublishMode,
+    export: &repository::RepositoryBundleExportResult,
+    uploaded_at: &str,
+    upload_duration_ms: u64,
+    server_validation_duration_ms: u64,
+    total_duration_ms: u64,
+) -> ServerCommandResult {
+    if mode != PublishMode::Queue {
+        return response;
+    }
+    response.details.extend(details_map(Some(json!({
+        "bundleUploadedAt": uploaded_at,
+        "bundleUploadDurationMs": upload_duration_ms,
+        "bundleGenerationDurationMs": export.bundle_generation_duration_ms,
+        "sha256DurationMs": export.sha256_duration_ms,
+        "serverValidationDurationMs": server_validation_duration_ms,
+        "queueTotalDurationMs": total_duration_ms,
+    }))));
+    response
 }
 
 fn validate_publish_request(request: &PublishContentRequest) -> Result<(), &'static str> {
@@ -582,18 +1025,33 @@ fn status_allows_publish_retry(response: &ServerCommandResult) -> bool {
             .is_some_and(|attempt| attempt < MAX_NETWORK_ATTEMPTS as u64)
 }
 
-fn publish_result_from_status(
+fn transaction_result_from_status(
     response: ServerCommandResult,
     request: &PublishContentRequest,
+    mode: PublishMode,
 ) -> ServerCommandResult {
-    publish_result_from_status_with_sha(response, request, "")
+    transaction_result_from_status_with_sha(response, request, "", mode)
 }
 
-fn publish_result_from_status_with_sha(
+fn transaction_result_from_status_with_sha(
     mut response: ServerCommandResult,
     request: &PublishContentRequest,
     expected_sha256: &str,
+    mode: PublishMode,
 ) -> ServerCommandResult {
+    let action = mode.action();
+    let status = response
+        .details
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let transaction_kind_matches = match mode {
+        PublishMode::Legacy => matches!(status, "running" | "failed" | "succeeded"),
+        PublishMode::Queue => matches!(
+            status,
+            "FAILED" | "QUEUED" | "COALESCED" | "SYNCING" | "PUBLISHED"
+        ),
+    };
     let transaction_matches = matches!(
         response.details.get("transactionId"),
         Some(Value::String(value)) if value == &request.transaction_id
@@ -614,36 +1072,51 @@ fn publish_result_from_status_with_sha(
             Some(value) => value == expected,
         }
     });
-    if !transaction_matches || !hash_matches || !content_matches {
-        return publish_error_for_transaction(
+    if !transaction_kind_matches || !transaction_matches || !hash_matches || !content_matches {
+        return transaction_error_for(
             ServerCommandResult::error(
-                "publish",
+                action,
                 "TRANSACTION_STATE_MISMATCH",
                 "The saved publish transaction does not match this content or Bundle.",
                 None,
                 None,
             ),
             &request.transaction_id,
+            mode,
         );
     }
-    response.action = "publish".to_owned();
-    if matches!(response.details.get("status"), Some(Value::String(status)) if status == "failed") {
+    response.action = action.to_owned();
+    if matches!(status, "failed" | "FAILED") {
         response.ok = false;
         response.code = response
             .details
             .get("errorCode")
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .or_else(|| Some("PUBLISH_FAILED".to_owned()));
+            .or_else(|| {
+                Some(if mode == PublishMode::Queue {
+                    "UPLOAD_FAILED".to_owned()
+                } else {
+                    "PUBLISH_FAILED".to_owned()
+                })
+            });
     }
     response
 }
 
 fn publish_error_for_transaction(
-    mut response: ServerCommandResult,
+    response: ServerCommandResult,
     transaction_id: &str,
 ) -> ServerCommandResult {
-    response.action = "publish".to_owned();
+    transaction_error_for(response, transaction_id, PublishMode::Legacy)
+}
+
+fn transaction_error_for(
+    mut response: ServerCommandResult,
+    transaction_id: &str,
+    mode: PublishMode,
+) -> ServerCommandResult {
+    response.action = mode.action().to_owned();
     response.details.insert(
         "transactionId".to_owned(),
         Value::String(transaction_id.to_owned()),
@@ -652,7 +1125,7 @@ fn publish_error_for_transaction(
         let code = response
             .code
             .clone()
-            .unwrap_or_else(|| "PUBLISH_FAILED".to_owned());
+            .unwrap_or_else(|| mode.action().to_ascii_uppercase().replace('-', "_"));
         let retryable = retryable_client_error(&code);
         response
             .details
@@ -1249,6 +1722,11 @@ fn parse_server_json(bytes: &[u8], expected_action: &str) -> Result<ServerComman
         _ => return Err(()),
     };
 
+    let fallback_code = (!ok)
+        .then(|| object.get("error_code").and_then(Value::as_str))
+        .flatten()
+        .filter(|code| valid_error_code(code))
+        .map(str::to_owned);
     let code = object.remove("code");
     let message = object.remove("message");
     let log_tail = object.remove("logTail");
@@ -1258,7 +1736,7 @@ fn parse_server_json(bytes: &[u8], expected_action: &str) -> Result<ServerComman
     let code = match code {
         Some(Value::String(code)) if valid_error_code(&code) => Some(code),
         Some(_) => return Err(()),
-        None if !ok => return Err(()),
+        None if !ok => Some(fallback_code.ok_or(())?),
         None => None,
     };
     let message = match message {
@@ -1281,6 +1759,289 @@ fn parse_server_json(bytes: &[u8], expected_action: &str) -> Result<ServerComman
         log_tail,
         details: object,
     })
+}
+
+fn protocol_details<T: DeserializeOwned>(response: &ServerCommandResult) -> Option<T> {
+    serde_json::from_value(Value::Object(response.details.clone())).ok()
+}
+
+fn protocol_invalid(action: &str, message: &str) -> ServerCommandResult {
+    ServerCommandResult::error(action, "CONTROLLER_PROTOCOL_INVALID", message, None, None)
+}
+
+fn valid_protocol_text(value: &str, maximum: usize) -> bool {
+    value.len() <= maximum && !value.chars().any(char::is_control)
+}
+
+fn valid_optional_commit(value: &str) -> bool {
+    value.is_empty() || valid_release_sha(value)
+}
+
+fn valid_optional_transaction(value: &str) -> bool {
+    value.is_empty() || is_publish_transaction_id(value)
+}
+
+fn valid_optional_timestamp(value: &str) -> bool {
+    value.is_empty() || valid_publish_timestamp(value)
+}
+
+fn valid_server_path(value: &str) -> bool {
+    value.is_empty()
+        || (value.starts_with('/')
+            && value.len() <= 4 * 1024
+            && !value.contains("..")
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"/._-".contains(&byte)))
+}
+
+fn valid_controller_status(protocol: &ControllerStatusProtocol) -> bool {
+    let releases_valid = [
+        protocol.current_release.as_deref(),
+        protocol.previous_release.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .all(|value| valid_protocol_text(value, 4 * 1024));
+    let versions_valid = [
+        protocol.publish_protocol_version,
+        protocol.queue_protocol_version,
+    ]
+    .into_iter()
+    .flatten()
+    .all(|version| version <= 100);
+    let _health_snapshot = (
+        protocol.ready,
+        protocol.content_repository_ready,
+        protocol.service_active,
+        protocol.healthy,
+    );
+    releases_valid && versions_valid
+}
+
+fn valid_pending_status(protocol: &PendingStatusProtocol) -> bool {
+    protocol.schema_version == REQUIRED_QUEUE_PROTOCOL_VERSION
+        && protocol.queue_protocol_version >= REQUIRED_QUEUE_PROTOCOL_VERSION
+        && protocol.queue_protocol_version <= 100
+        && protocol.sync_protocol_version >= REQUIRED_SYNC_PROTOCOL_VERSION
+        && protocol.sync_protocol_version <= 100
+        && valid_release_sha(&protocol.published_content_commit)
+        && valid_release_sha(&protocol.pending_content_commit)
+        && protocol
+            .syncing_content_commit
+            .as_deref()
+            .is_none_or(valid_release_sha)
+        && protocol
+            .blocked_content_commit
+            .as_deref()
+            .is_none_or(valid_release_sha)
+        && protocol
+            .latest_upload_transaction_id
+            .as_deref()
+            .is_none_or(is_publish_transaction_id)
+        && protocol
+            .active_sync_transaction_id
+            .as_deref()
+            .is_none_or(is_sync_transaction_id)
+        && protocol
+            .last_sync_transaction_id
+            .as_deref()
+            .is_none_or(is_sync_transaction_id)
+        && valid_publish_timestamp(&protocol.next_scheduled_sync_at)
+        && valid_publish_timestamp(&protocol.server_time)
+        && valid_release_sha(&protocol.site_commit)
+        && protocol.pending_upload_count <= MAX_SERVER_ITEMS as u64
+        && protocol.has_pending_changes
+            == (protocol.pending_content_commit != protocol.published_content_commit)
+        && (protocol.sync_timer_active || !protocol.next_scheduled_sync_at.is_empty())
+        && protocol
+            .last_sync_status
+            .is_none_or(|_| protocol.last_sync_transaction_id.is_some())
+}
+
+fn valid_queue_upload(protocol: &QueueUploadProtocol) -> bool {
+    if protocol.schema_version != REQUIRED_QUEUE_PROTOCOL_VERSION
+        || !is_publish_transaction_id(&protocol.transaction_id)
+        || !valid_bundle_sha256(&protocol.bundle_sha256)
+        || !valid_protocol_text(&protocol.published_release_id, 200)
+        || !valid_protocol_text(&protocol.error_code, 200)
+        || !valid_optional_transaction(&protocol.included_in_sync_transaction_id)
+        || !valid_optional_commit(&protocol.coalesced_into_commit)
+        || !valid_optional_timestamp(&protocol.published_at)
+        || protocol.retryable
+    {
+        return false;
+    }
+
+    if protocol.status == UploadStatusProtocol::Failed {
+        return protocol.source_commit.is_empty()
+            && protocol.content_commit.is_empty()
+            && protocol.queued_at.is_empty()
+            && protocol.coalesced_into_commit.is_empty()
+            && !protocol.error_code.is_empty()
+            && valid_protocol_text(&protocol.content_type, 200)
+            && valid_protocol_text(&protocol.stable_id, 200);
+    }
+
+    let identity_valid = CONTENT_TYPES.contains(&protocol.content_type.as_str())
+        && is_stable_id(&protocol.stable_id);
+    let base_valid = valid_release_sha(&protocol.source_commit)
+        && valid_release_sha(&protocol.content_commit)
+        && valid_publish_timestamp(&protocol.queued_at)
+        && protocol.error_code.is_empty()
+        && identity_valid;
+    let state_valid = match protocol.status {
+        UploadStatusProtocol::Queued => protocol.coalesced_into_commit.is_empty(),
+        UploadStatusProtocol::Coalesced => !protocol.coalesced_into_commit.is_empty(),
+        UploadStatusProtocol::Syncing => !protocol.included_in_sync_transaction_id.is_empty(),
+        UploadStatusProtocol::Published => {
+            !protocol.included_in_sync_transaction_id.is_empty()
+                && !protocol.published_release_id.is_empty()
+                && !protocol.published_at.is_empty()
+        }
+        UploadStatusProtocol::Failed => false,
+    };
+    base_valid && state_valid
+}
+
+fn valid_sync_transaction(protocol: &SyncTransactionProtocol) -> bool {
+    if protocol.schema_version != REQUIRED_SYNC_PROTOCOL_VERSION
+        || !is_sync_transaction_id(&protocol.sync_transaction_id)
+        || !valid_optional_transaction(&protocol.active_sync_transaction_id)
+        || !valid_optional_transaction(&protocol.last_sync_transaction_id)
+        || !valid_sync_stage(protocol.status, protocol.stage)
+        || !valid_optional_commit(&protocol.content_commit)
+        || !valid_optional_commit(&protocol.source_content_commit)
+        || !valid_optional_commit(&protocol.site_commit)
+        || !valid_protocol_text(&protocol.release_id, 200)
+        || !valid_server_path(&protocol.release_path)
+        || !valid_publish_timestamp(&protocol.started_at)
+        || !valid_publish_timestamp(&protocol.updated_at)
+        || !valid_optional_timestamp(&protocol.completed_at)
+        || !valid_optional_timestamp(&protocol.stage_started_at)
+        || protocol.attempt == 0
+        || protocol.attempt > protocol.max_attempts
+        || protocol.max_attempts > 100
+        || !valid_protocol_text(&protocol.error_code, 200)
+    {
+        return false;
+    }
+
+    let terminal = matches!(
+        protocol.status,
+        SyncStatusProtocol::Published
+            | SyncStatusProtocol::FailedRetryable
+            | SyncStatusProtocol::FailedBlocked
+            | SyncStatusProtocol::SkippedNoPending
+    );
+    let state_valid = match protocol.status {
+        SyncStatusProtocol::FailedRetryable => {
+            protocol.retryable && !protocol.blocked && !protocol.error_code.is_empty()
+        }
+        SyncStatusProtocol::FailedBlocked => {
+            !protocol.retryable && protocol.blocked && !protocol.error_code.is_empty()
+        }
+        SyncStatusProtocol::Published => {
+            !protocol.retryable
+                && !protocol.blocked
+                && !protocol.release_id.is_empty()
+                && !protocol.release_path.is_empty()
+                && protocol.switch_completed
+                && protocol.health_verified
+        }
+        _ => !protocol.retryable && !protocol.blocked,
+    };
+    let _progress_snapshot = (protocol.trigger, protocol.elapsed_ms, protocol.recovered);
+    state_valid && terminal == !protocol.completed_at.is_empty()
+}
+
+fn valid_sync_stage(status: SyncStatusProtocol, stage: SyncStatusProtocol) -> bool {
+    if status == stage {
+        return true;
+    }
+    matches!(
+        status,
+        SyncStatusProtocol::FailedRetryable | SyncStatusProtocol::FailedBlocked
+    ) && matches!(
+        stage,
+        SyncStatusProtocol::Created
+            | SyncStatusProtocol::Snapshotting
+            | SyncStatusProtocol::PreparingSource
+            | SyncStatusProtocol::PreparingDependencies
+            | SyncStatusProtocol::Checking
+            | SyncStatusProtocol::Building
+            | SyncStatusProtocol::Switching
+            | SyncStatusProtocol::Verifying
+            | SyncStatusProtocol::Recovering
+    )
+}
+
+fn validate_pending_status_response(response: ServerCommandResult) -> ServerCommandResult {
+    if !response.ok {
+        return response;
+    }
+    match protocol_details::<PendingStatusProtocol>(&response) {
+        Some(protocol) if valid_pending_status(&protocol) => response,
+        _ => protocol_invalid(
+            "pending-status",
+            "The pending content status has an invalid protocol structure.",
+        ),
+    }
+}
+
+fn validate_queue_upload_response(
+    mut response: ServerCommandResult,
+    expected_action: &str,
+) -> ServerCommandResult {
+    let typed = protocol_details::<QueueUploadProtocol>(&response);
+    match typed {
+        Some(protocol) if valid_queue_upload(&protocol) => {
+            if protocol.status == UploadStatusProtocol::Failed {
+                response.ok = false;
+                response.code = Some(if protocol.error_code.is_empty() {
+                    "UPLOAD_FAILED".to_owned()
+                } else {
+                    protocol.error_code
+                });
+            }
+            response
+        }
+        _ if !response.ok && !response.details.contains_key("status") => response,
+        _ => protocol_invalid(
+            expected_action,
+            "The queued upload status has an invalid protocol structure.",
+        ),
+    }
+}
+
+fn validate_sync_response(
+    mut response: ServerCommandResult,
+    expected_action: &str,
+) -> ServerCommandResult {
+    let typed = protocol_details::<SyncTransactionProtocol>(&response);
+    match typed {
+        Some(protocol) if valid_sync_transaction(&protocol) => {
+            if expected_action == "sync-pending" {
+                match protocol.status {
+                    SyncStatusProtocol::FailedBlocked => {
+                        response.ok = false;
+                        response.code = Some("SYNC_BLOCKED".to_owned());
+                    }
+                    SyncStatusProtocol::FailedRetryable => {
+                        response.ok = false;
+                        response.code = Some("SYNC_FAILED_RETRYABLE".to_owned());
+                    }
+                    _ => {}
+                }
+            }
+            response
+        }
+        _ if !response.ok && !response.details.contains_key("status") => response,
+        _ => protocol_invalid(
+            expected_action,
+            "The synchronization status has an invalid protocol structure.",
+        ),
+    }
 }
 
 fn validate_list_response(response: ServerCommandResult) -> ServerCommandResult {
@@ -1323,41 +2084,22 @@ fn validate_list_response(response: ServerCommandResult) -> ServerCommandResult 
 }
 
 fn validate_status_response(response: ServerCommandResult) -> ServerCommandResult {
-    let valid = [
-        "ready",
-        "contentRepositoryReady",
-        "serviceActive",
-        "healthy",
-    ]
-    .iter()
-    .all(|key| matches!(response.details.get(*key), Some(Value::Bool(_))))
-        && ["currentRelease", "previousRelease"].iter().all(|key| {
-            match response.details.get(*key) {
-                Some(Value::String(value)) => value.len() <= 4 * 1024,
-                Some(Value::Null) | None => true,
-                Some(_) => false,
-            }
-        })
-        && match response.details.get("publishProtocolVersion") {
-            Some(value) => value
-                .as_u64()
-                .is_some_and(|version| (1..=100).contains(&version)),
-            None => true,
-        };
-    if valid {
-        response
-    } else {
-        ServerCommandResult::error(
+    match protocol_details::<ControllerStatusProtocol>(&response) {
+        Some(protocol) if valid_controller_status(&protocol) => response,
+        _ => protocol_invalid(
             "status",
-            "SERVER_RESPONSE_INVALID",
-            "The server status has an invalid structure.",
-            None,
-            None,
-        )
+            "The server status has an invalid protocol structure.",
+        ),
     }
 }
 
 fn validate_publish_status_response(response: ServerCommandResult) -> ServerCommandResult {
+    if matches!(
+        response.details.get("status").and_then(Value::as_str),
+        Some("FAILED" | "QUEUED" | "COALESCED" | "SYNCING" | "PUBLISHED")
+    ) {
+        return validate_queue_upload_response(response, "publish-status");
+    }
     let string_field = |key: &str, maximum: usize| {
         response
             .details
@@ -1627,7 +2369,15 @@ fn valid_release_sha(value: &str) -> bool {
 fn valid_action(value: &str) -> bool {
     matches!(
         value,
-        "status" | "list" | "publish-status" | "publish" | "delete"
+        "status"
+            | "list"
+            | "pending-status"
+            | "publish-status"
+            | "publish"
+            | "queue-upload"
+            | "sync-status"
+            | "sync-pending"
+            | "delete"
     )
 }
 
@@ -2004,13 +2754,16 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        bundle_matches_request, is_publish_transaction_id, legacy_controller_protocol_error,
-        parse_server_json, publish_error_for_transaction, publish_result_from_status,
-        remote_upload_chmod_specs, remote_upload_cleanup_spec, remote_upload_finalize_spec,
-        retryable_client_error, scp_command_spec, ssh_command_spec, status_allows_publish_retry,
-        upload_timeout, valid_https_url, validate_content_identity, validate_list_response,
-        validate_mutation_identity, validate_publish_request, validate_publish_status_response,
-        validate_status_response, CapturedOutput, PublishContentRequest, ServerCommandResult,
+        bundle_matches_request, capability_result, content_mutation_remote_args,
+        is_publish_transaction_id, legacy_controller_protocol_error, manual_sync_remote_args,
+        parse_server_json, publish_error_for_transaction, remote_upload_chmod_specs,
+        remote_upload_cleanup_spec, remote_upload_finalize_spec, retryable_client_error,
+        scp_command_spec, ssh_command_spec, status_allows_publish_retry,
+        transaction_result_from_status, upload_timeout, valid_https_url, validate_content_identity,
+        validate_list_response, validate_mutation_identity, validate_pending_status_response,
+        validate_publish_request, validate_publish_status_response, validate_status_response,
+        validate_sync_response, CapturedOutput, PublishContentRequest, PublishMode,
+        ServerCommandResult, SyncStatusRequest,
     };
     use crate::repository::RepositoryBundlePreflightResult;
     use serde_json::{json, Value};
@@ -2077,6 +2830,114 @@ mod tests {
                 "switchCompleted": switch_completed,
                 "sourceMethod": "cache",
                 "stageDurationsMs": { "verifying_bundle": 250 }
+            })),
+        )
+    }
+
+    fn controller_status(
+        publish_protocol_version: Option<u64>,
+        queue_protocol_version: Option<u64>,
+    ) -> ServerCommandResult {
+        ServerCommandResult::success(
+            "status",
+            "Checked",
+            Some(json!({
+                "ready": true,
+                "contentRepositoryReady": true,
+                "serviceActive": true,
+                "healthy": true,
+                "publishProtocolVersion": publish_protocol_version,
+                "queueProtocolVersion": queue_protocol_version,
+                "currentRelease": "/srv/algae-atlas/releases/example",
+                "previousRelease": null
+            })),
+        )
+    }
+
+    fn pending_status() -> ServerCommandResult {
+        ServerCommandResult::success(
+            "pending-status",
+            "Pending content status checked",
+            Some(json!({
+                "schema_version": 1,
+                "published_content_commit": "a".repeat(40),
+                "pending_content_commit": "b".repeat(40),
+                "syncing_content_commit": null,
+                "has_pending_changes": true,
+                "pending_upload_count": 2,
+                "latest_upload_transaction_id": "1".repeat(32),
+                "active_sync_transaction_id": null,
+                "last_sync_transaction_id": "2".repeat(32),
+                "last_sync_status": "PUBLISHED",
+                "blocked_content_commit": null,
+                "next_scheduled_sync_at": "2026-07-30T12:30:00.000Z",
+                "sync_timer_active": true,
+                "server_time": "2026-07-30T12:15:00.000Z",
+                "site_commit": "c".repeat(40),
+                "queue_protocol_version": 1,
+                "sync_protocol_version": 1
+            })),
+        )
+    }
+
+    fn queue_upload_status(status: &str) -> ServerCommandResult {
+        let failed = status == "FAILED";
+        ServerCommandResult::success(
+            "publish-status",
+            "Queued upload status",
+            Some(json!({
+                "schemaVersion": 1,
+                "transactionId": "1".repeat(32),
+                "bundleSha256": "A".repeat(64),
+                "sourceCommit": if failed { "".to_owned() } else { "a".repeat(40) },
+                "contentCommit": if failed { "".to_owned() } else { "b".repeat(40) },
+                "status": status,
+                "queuedAt": if failed { "" } else { "2026-07-30T12:00:00.000Z" },
+                "coalescedIntoCommit": if status == "COALESCED" { "c".repeat(40) } else { String::new() },
+                "includedInSyncTransactionId": if matches!(status, "SYNCING" | "PUBLISHED") { "2".repeat(32) } else { String::new() },
+                "publishedReleaseId": if status == "PUBLISHED" { "release-example" } else { "" },
+                "publishedAt": if status == "PUBLISHED" { "2026-07-30T12:10:00.000Z" } else { "" },
+                "retryable": false,
+                "errorCode": if failed { "BUNDLE_HASH_MISMATCH" } else { "" },
+                "contentType": if failed { "" } else { "science-article" },
+                "stableId": if failed { "" } else { "example-id" }
+            })),
+        )
+    }
+
+    fn sync_status(status: &str) -> ServerCommandResult {
+        let terminal = matches!(
+            status,
+            "PUBLISHED" | "FAILED_RETRYABLE" | "FAILED_BLOCKED" | "SKIPPED_NO_PENDING"
+        );
+        ServerCommandResult::success(
+            "sync-status",
+            "Synchronization status",
+            Some(json!({
+                "schema_version": 1,
+                "sync_transaction_id": "2".repeat(32),
+                "active_sync_transaction_id": if terminal { String::new() } else { "2".repeat(32) },
+                "last_sync_transaction_id": if terminal { "2".repeat(32) } else { String::new() },
+                "status": status,
+                "stage": status,
+                "trigger": "manual",
+                "content_commit": if status == "SKIPPED_NO_PENDING" { "".to_owned() } else { "b".repeat(40) },
+                "source_content_commit": if status == "SKIPPED_NO_PENDING" { "".to_owned() } else { "a".repeat(40) },
+                "site_commit": "c".repeat(40),
+                "release_id": if status == "PUBLISHED" { "release-example" } else { "" },
+                "release_path": if status == "PUBLISHED" { "/srv/algae-atlas/releases/release-example" } else { "" },
+                "started_at": "2026-07-30T12:00:00.000Z",
+                "updated_at": "2026-07-30T12:00:02.000Z",
+                "completed_at": if terminal { "2026-07-30T12:00:02.000Z" } else { "" },
+                "elapsed_ms": 2_000,
+                "retryable": status == "FAILED_RETRYABLE",
+                "blocked": status == "FAILED_BLOCKED",
+                "error_code": if status.starts_with("FAILED_") { "BUILD_FAILED" } else { "" },
+                "attempt": 1,
+                "max_attempts": 3,
+                "recovered": false,
+                "switch_completed": status == "PUBLISHED",
+                "health_verified": status == "PUBLISHED"
             })),
         )
     }
@@ -2272,6 +3133,143 @@ mod tests {
     }
 
     #[test]
+    fn capability_results_distinguish_legacy_and_queue_modes() {
+        let legacy = capability_result(controller_status(Some(1), Some(1)), "legacy", false);
+        assert!(legacy.ok);
+        assert_eq!(legacy.action, "capabilities");
+        assert_eq!(legacy.details.get("protocolMode"), Some(&json!("legacy")));
+        assert_eq!(legacy.details.get("queueModeActive"), Some(&json!(false)));
+
+        let queue = capability_result(controller_status(Some(1), Some(1)), "queue", true);
+        assert!(queue.ok);
+        assert_eq!(queue.details.get("protocolMode"), Some(&json!("queue")));
+        assert_eq!(queue.details.get("queueModeActive"), Some(&json!(true)));
+
+        assert!(validate_status_response(controller_status(None, None)).ok);
+        assert!(!validate_status_response(controller_status(Some(101), Some(1))).ok);
+    }
+
+    #[test]
+    fn validates_pending_status_exactly_and_rejects_corrupt_protocol() {
+        assert!(validate_pending_status_response(pending_status()).ok);
+
+        let mut inconsistent = pending_status();
+        inconsistent
+            .details
+            .insert("has_pending_changes".to_owned(), json!(false));
+        let rejected = validate_pending_status_response(inconsistent);
+        assert!(!rejected.ok);
+        assert_eq!(
+            rejected.code.as_deref(),
+            Some("CONTROLLER_PROTOCOL_INVALID")
+        );
+
+        let mut unknown = pending_status();
+        unknown.details.insert("unexpected".to_owned(), json!(true));
+        assert!(!validate_pending_status_response(unknown).ok);
+    }
+
+    #[test]
+    fn validates_every_queued_upload_state_and_rejects_malformed_identity() {
+        for status in ["FAILED", "QUEUED", "COALESCED", "SYNCING", "PUBLISHED"] {
+            let response = validate_publish_status_response(queue_upload_status(status));
+            assert!(response.ok || status == "FAILED", "status {status}");
+            if status == "FAILED" {
+                assert_eq!(response.code.as_deref(), Some("BUNDLE_HASH_MISMATCH"));
+            }
+        }
+
+        let mut malformed = queue_upload_status("QUEUED");
+        malformed
+            .details
+            .insert("transactionId".to_owned(), json!("../unsafe"));
+        let rejected = validate_publish_status_response(malformed);
+        assert!(!rejected.ok);
+        assert_eq!(
+            rejected.code.as_deref(),
+            Some("CONTROLLER_PROTOCOL_INVALID")
+        );
+    }
+
+    #[test]
+    fn validates_sync_status_and_maps_terminal_manual_failures() {
+        for status in [
+            "SNAPSHOTTING",
+            "PREPARING_SOURCE",
+            "BUILDING",
+            "PUBLISHED",
+            "FAILED_RETRYABLE",
+            "FAILED_BLOCKED",
+            "SKIPPED_NO_PENDING",
+        ] {
+            assert!(
+                validate_sync_response(sync_status(status), "sync-status").ok,
+                "status {status}"
+            );
+        }
+
+        let retryable = validate_sync_response(sync_status("FAILED_RETRYABLE"), "sync-pending");
+        assert!(!retryable.ok);
+        assert_eq!(retryable.code.as_deref(), Some("SYNC_FAILED_RETRYABLE"));
+        let blocked = validate_sync_response(sync_status("FAILED_BLOCKED"), "sync-pending");
+        assert!(!blocked.ok);
+        assert_eq!(blocked.code.as_deref(), Some("SYNC_BLOCKED"));
+
+        let mut corrupt = sync_status("BUILDING");
+        corrupt.details.insert("stage".to_owned(), json!("UNKNOWN"));
+        assert_eq!(
+            validate_sync_response(corrupt, "sync-status")
+                .code
+                .as_deref(),
+            Some("CONTROLLER_PROTOCOL_INVALID")
+        );
+    }
+
+    #[test]
+    fn desktop_sync_request_exposes_only_status_queries_and_fixed_manual_trigger() {
+        assert!(serde_json::from_value::<SyncStatusRequest>(json!({})).is_ok());
+        assert!(serde_json::from_value::<SyncStatusRequest>(json!({
+            "transactionId": "2".repeat(32)
+        }))
+        .is_ok());
+        for forbidden in [
+            json!({ "trigger": "scheduled" }),
+            json!({ "retryBlocked": true }),
+            json!({ "command": "queue-init" }),
+        ] {
+            assert!(serde_json::from_value::<SyncStatusRequest>(forbidden).is_err());
+        }
+
+        let arguments = manual_sync_remote_args();
+        assert_eq!(
+            arguments,
+            [
+                "sudo",
+                "-n",
+                "/usr/local/sbin/algae-contentctl",
+                "sync-pending",
+                "--trigger",
+                "manual",
+                "--json"
+            ]
+        );
+        assert!(!arguments.contains(&"scheduled"));
+        assert!(!arguments.contains(&"--retry-blocked"));
+        assert!(!arguments.contains(&"queue-init"));
+    }
+
+    #[test]
+    fn accepts_structured_sync_failure_without_a_duplicate_top_level_code() {
+        let parsed = parse_server_json(
+            br#"{"ok":false,"action":"sync-pending","status":"FAILED_RETRYABLE","error_code":"BUILD_FAILED","message":"Build failed"}"#,
+            "sync-pending",
+        )
+        .expect("uses the structured synchronization error code");
+        assert!(!parsed.ok);
+        assert_eq!(parsed.code.as_deref(), Some("BUILD_FAILED"));
+    }
+
+    #[test]
     fn validates_publish_status_and_rejects_unknown_or_incomplete_stages() {
         assert!(
             validate_publish_status_response(publish_status(
@@ -2371,9 +3369,10 @@ mod tests {
 
     #[test]
     fn status_results_preserve_identity_and_refuse_mismatched_transactions() {
-        let response = publish_result_from_status(
+        let response = transaction_result_from_status(
             publish_status("succeeded", "succeeded", false, 1, true),
             &publish_request(),
+            PublishMode::Legacy,
         );
         assert!(response.ok);
         assert_eq!(response.action, "publish");
@@ -2382,7 +3381,8 @@ mod tests {
         mismatch
             .details
             .insert("transactionId".to_owned(), Value::String("f".repeat(32)));
-        let rejected = publish_result_from_status(mismatch, &publish_request());
+        let rejected =
+            transaction_result_from_status(mismatch, &publish_request(), PublishMode::Legacy);
         assert!(!rejected.ok);
         assert_eq!(rejected.code.as_deref(), Some("TRANSACTION_STATE_MISMATCH"));
     }
@@ -2478,6 +3478,39 @@ mod tests {
                 "algae-server:/home/ubuntu/algae-content-workbench/incoming/"
             ))
         );
+    }
+
+    #[test]
+    fn queue_upload_uses_only_the_fixed_controller_arguments() {
+        let transaction_id = "1".repeat(32);
+        let remote_delivery =
+            format!("/home/ubuntu/algae-content-workbench/incoming/{transaction_id}");
+        let bundle_sha256 = "A".repeat(64);
+        let arguments = content_mutation_remote_args(
+            PublishMode::Queue,
+            &transaction_id,
+            &remote_delivery,
+            &bundle_sha256,
+        );
+        assert_eq!(
+            arguments,
+            [
+                "sudo",
+                "-n",
+                "/usr/local/sbin/algae-contentctl",
+                "queue-upload",
+                "--transaction",
+                transaction_id.as_str(),
+                "--bundle",
+                remote_delivery.as_str(),
+                "--bundle-sha256",
+                bundle_sha256.as_str(),
+                "--json",
+            ]
+        );
+        assert!(!arguments.contains(&"queue-init"));
+        assert!(!arguments.contains(&"--retry-blocked"));
+        assert!(!arguments.contains(&"--trigger"));
     }
 
     #[test]
