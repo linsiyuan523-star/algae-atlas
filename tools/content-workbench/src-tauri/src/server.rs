@@ -194,6 +194,8 @@ struct SyncTransactionProtocol {
     started_at: String,
     updated_at: String,
     completed_at: String,
+    #[serde(default)]
+    stage_started_at: String,
     elapsed_ms: u64,
     retryable: bool,
     blocked: bool,
@@ -366,6 +368,50 @@ pub async fn queue_content_to_server(
     let publisher = app.state::<RepositoryPublisher>().inner().clone();
     let publish_app = app.clone();
     Ok(spawn_server_command("queue-upload", move || {
+        queue_content(&publish_app, &publisher, request)
+    })
+    .await)
+}
+
+#[tauri::command]
+pub async fn queue_delete_content_from_server(
+    app: tauri::AppHandle,
+    request: PublishContentRequest,
+) -> Result<ServerCommandResult, String> {
+    let publisher = app.state::<RepositoryPublisher>().inner().clone();
+    let publish_app = app.clone();
+    Ok(spawn_server_command("queue-upload", move || {
+        if let Err(field) = validate_publish_request(&request) {
+            return invalid_request("queue-upload", field);
+        }
+        let existing = query_publish_status(&request.transaction_id);
+        if existing.ok && !status_allows_publish_retry(&existing) {
+            return transaction_result_from_status(existing, &request, PublishMode::Queue);
+        }
+        if !existing.ok && existing.code.as_deref() != Some("TRANSACTION_NOT_FOUND") {
+            return transaction_error_for(existing, &request.transaction_id, PublishMode::Queue);
+        }
+        if repository::ensure_direct_delete_commit(
+            &publisher,
+            &request.repository_path,
+            &request.content_type,
+            &request.stable_id,
+            &request.transaction_id,
+        )
+        .is_err()
+        {
+            return transaction_error_for(
+                ServerCommandResult::error(
+                    "queue-upload",
+                    "DELETE_COMMIT_FAILED",
+                    "The local content deletion commit could not be created safely.",
+                    None,
+                    None,
+                ),
+                &request.transaction_id,
+                PublishMode::Queue,
+            );
+        }
         queue_content(&publish_app, &publisher, request)
     })
     .await)
@@ -1863,7 +1909,7 @@ fn valid_sync_transaction(protocol: &SyncTransactionProtocol) -> bool {
         || !is_sync_transaction_id(&protocol.sync_transaction_id)
         || !valid_optional_transaction(&protocol.active_sync_transaction_id)
         || !valid_optional_transaction(&protocol.last_sync_transaction_id)
-        || protocol.status != protocol.stage
+        || !valid_sync_stage(protocol.status, protocol.stage)
         || !valid_optional_commit(&protocol.content_commit)
         || !valid_optional_commit(&protocol.source_content_commit)
         || !valid_optional_commit(&protocol.site_commit)
@@ -1872,6 +1918,7 @@ fn valid_sync_transaction(protocol: &SyncTransactionProtocol) -> bool {
         || !valid_publish_timestamp(&protocol.started_at)
         || !valid_publish_timestamp(&protocol.updated_at)
         || !valid_optional_timestamp(&protocol.completed_at)
+        || !valid_optional_timestamp(&protocol.stage_started_at)
         || protocol.attempt == 0
         || protocol.attempt > protocol.max_attempts
         || protocol.max_attempts > 100
@@ -1906,6 +1953,27 @@ fn valid_sync_transaction(protocol: &SyncTransactionProtocol) -> bool {
     };
     let _progress_snapshot = (protocol.trigger, protocol.elapsed_ms, protocol.recovered);
     state_valid && terminal == !protocol.completed_at.is_empty()
+}
+
+fn valid_sync_stage(status: SyncStatusProtocol, stage: SyncStatusProtocol) -> bool {
+    if status == stage {
+        return true;
+    }
+    matches!(
+        status,
+        SyncStatusProtocol::FailedRetryable | SyncStatusProtocol::FailedBlocked
+    ) && matches!(
+        stage,
+        SyncStatusProtocol::Created
+            | SyncStatusProtocol::Snapshotting
+            | SyncStatusProtocol::PreparingSource
+            | SyncStatusProtocol::PreparingDependencies
+            | SyncStatusProtocol::Checking
+            | SyncStatusProtocol::Building
+            | SyncStatusProtocol::Switching
+            | SyncStatusProtocol::Verifying
+            | SyncStatusProtocol::Recovering
+    )
 }
 
 fn validate_pending_status_response(response: ServerCommandResult) -> ServerCommandResult {

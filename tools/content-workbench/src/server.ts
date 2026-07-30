@@ -110,6 +110,11 @@ export type ServerDeleteRequest = {
   stableId: string;
 };
 
+export type ServerQueueDeleteRequest = ServerDeleteRequest & {
+  repositoryPath: string;
+  transactionId: string;
+};
+
 export type ServerPublishData = {
   contentType?: ContentType;
   stableId?: string;
@@ -149,6 +154,7 @@ export type ServerPublishData = {
   coalescedIntoCommit?: string;
   includedInSyncTransactionId?: string;
   publishedReleaseId?: string;
+  localDraftUpdatedAt?: string;
 };
 
 export type PublishTransactionStatus = "running" | "failed" | "succeeded";
@@ -193,6 +199,7 @@ export type SyncTransactionData = {
   started_at: string;
   updated_at: string;
   completed_at: string;
+  stage_started_at?: string;
   elapsed_ms: number;
   retryable: boolean;
   blocked: boolean;
@@ -246,6 +253,19 @@ export type ServerPublishProgress = ServerPublishData & {
   clientStartedAt?: string;
 };
 
+export type ServerQueuePublishState = ServerPublishData & {
+  transactionId: string;
+  status: QueueUploadStatus;
+  message: string;
+  contentCommit: string;
+  sourceCommit: string;
+  retryable: boolean;
+};
+
+export type ServerPublishTransaction =
+  | ServerPublishProgress
+  | ServerQueuePublishState;
+
 export type PublishProgressListener = (progress: ServerPublishProgress) => void;
 
 export type ServerApi = {
@@ -263,6 +283,10 @@ export type ServerApi = {
   ) => Promise<ServerCommandResult<ServerPublishData>>;
   queueContent: (
     request: ServerPublishRequest,
+    onProgress?: PublishProgressListener,
+  ) => Promise<ServerCommandResult<ServerPublishData>>;
+  queueDeleteContent: (
+    request: ServerQueueDeleteRequest,
     onProgress?: PublishProgressListener,
   ) => Promise<ServerCommandResult<ServerPublishData>>;
   getSyncStatus: (
@@ -285,6 +309,8 @@ export const tauriServerApi: ServerApi = {
   publishContent: (request, onProgress) => invokePublish(request, onProgress),
   queueContent: (request, onProgress) =>
     invokePublish(request, onProgress, "queue_content_to_server"),
+  queueDeleteContent: (request, onProgress) =>
+    invokePublish(request, onProgress, "queue_delete_content_from_server"),
   getSyncStatus: (request = {}) =>
     invokeServer("get_sync_status", { request }),
   syncPendingNow: () => invokeServer("sync_pending_now"),
@@ -302,6 +328,7 @@ export const unavailableServerApi: ServerApi = {
   getPublishStatus: async () => unavailableResult("publish-status"),
   publishContent: async () => unavailableResult("publish"),
   queueContent: async () => unavailableResult("queue-upload"),
+  queueDeleteContent: async () => unavailableResult("queue-upload"),
   getSyncStatus: async () => unavailableResult("sync-status"),
   syncPendingNow: async () => unavailableResult("sync-pending"),
   deleteContent: async () => unavailableResult("delete"),
@@ -445,6 +472,7 @@ async function invokeServer<TData extends object>(
     | "sync_pending_now"
     | "publish_content_to_server"
     | "queue_content_to_server"
+    | "queue_delete_content_from_server"
     | "delete_server_content",
   args?: Record<string, unknown>,
 ): Promise<ServerCommandResult<TData>> {
@@ -464,10 +492,12 @@ async function invokeServer<TData extends object>(
 }
 
 async function invokePublish(
-  request: ServerPublishRequest,
+  request: ServerPublishRequest | ServerQueueDeleteRequest,
   onProgress?: PublishProgressListener,
-  command: "publish_content_to_server" | "queue_content_to_server" =
-    "publish_content_to_server",
+  command:
+    | "publish_content_to_server"
+    | "queue_content_to_server"
+    | "queue_delete_content_from_server" = "publish_content_to_server",
 ): Promise<ServerCommandResult<ServerPublishData>> {
   let stopped = false;
   let unlisten: (() => void) | undefined;
@@ -506,11 +536,14 @@ async function invokePublish(
       onProgress?.(result);
     }
     if (result.action === "publish-status") {
+      const queueCommand = command !== "publish_content_to_server";
       result = {
         ...result,
-        ok: result.status !== "failed",
-        action: "publish",
-        code: result.status === "failed" ? result.errorCode || "PUBLISH_FAILED" : undefined,
+        ok: !matchesFailedStatus(result.status),
+        action: queueCommand ? "queue-upload" : "publish",
+        code: matchesFailedStatus(result.status)
+          ? result.errorCode || (queueCommand ? "UPLOAD_FAILED" : "PUBLISH_FAILED")
+          : undefined,
       };
     }
     return result;
@@ -557,6 +590,71 @@ export function isServerPublishProgress(
     typeof result.elapsedMs === "number" &&
     typeof result.attempt === "number"
   );
+}
+
+export function isQueuePublishState(
+  result: ServerCommandResult<ServerPublishData>,
+  transactionId: string,
+): result is ServerCommandResult<ServerPublishData> & ServerQueuePublishState {
+  return (
+    result.transactionId === transactionId &&
+    ["FAILED", "QUEUED", "COALESCED", "SYNCING", "PUBLISHED"].includes(
+      result.status ?? "",
+    ) &&
+    typeof result.message === "string" &&
+    typeof result.contentCommit === "string" &&
+    typeof result.sourceCommit === "string" &&
+    typeof result.retryable === "boolean"
+  );
+}
+
+export function isQueuePublishTransaction(
+  value: ServerPublishTransaction | null | undefined,
+): value is ServerQueuePublishState {
+  return Boolean(
+    value &&
+      ["FAILED", "QUEUED", "COALESCED", "SYNCING", "PUBLISHED"].includes(
+        value.status,
+      ),
+  );
+}
+
+export function isSyncTerminalStatus(status: SyncTransactionStatus) {
+  return [
+    "PUBLISHED",
+    "FAILED_RETRYABLE",
+    "FAILED_BLOCKED",
+    "SKIPPED_NO_PENDING",
+  ].includes(status);
+}
+
+export function isSyncTransactionState(
+  result: ServerCommandResult<SyncTransactionData>,
+): result is ServerCommandResult<SyncTransactionData> & SyncTransactionData {
+  return (
+    typeof result.sync_transaction_id === "string" &&
+    /^[0-9a-f]{32}$/.test(result.sync_transaction_id) &&
+    typeof result.status === "string" &&
+    [
+      "CREATED",
+      "SNAPSHOTTING",
+      "PREPARING_SOURCE",
+      "PREPARING_DEPENDENCIES",
+      "CHECKING",
+      "BUILDING",
+      "SWITCHING",
+      "VERIFYING",
+      "PUBLISHED",
+      "FAILED_RETRYABLE",
+      "FAILED_BLOCKED",
+      "RECOVERING",
+      "SKIPPED_NO_PENDING",
+    ].includes(result.status)
+  );
+}
+
+function matchesFailedStatus(status: ServerPublishData["status"]) {
+  return status === "failed" || status === "FAILED";
 }
 
 function normalizeServerCommandResult<TData extends object>(
@@ -609,6 +707,9 @@ function commandAction(command: string): ServerCommandAction {
     return "publish";
   }
   if (command === "queue_content_to_server") {
+    return "queue-upload";
+  }
+  if (command === "queue_delete_content_from_server") {
     return "queue-upload";
   }
   return "delete";

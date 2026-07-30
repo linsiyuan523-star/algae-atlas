@@ -65,6 +65,7 @@ pub fn run() {
             server::sync_pending_now,
             server::publish_content_to_server,
             server::queue_content_to_server,
+            server::queue_delete_content_from_server,
             server::delete_server_content,
             onboarding::onboarding_status,
             onboarding::save_onboarding_configuration,
