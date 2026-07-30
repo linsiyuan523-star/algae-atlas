@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Controlled server-side publisher for the Algae Atlas content workbench.
-# This script deliberately accepts only five fixed commands. It never reads
+# This script deliberately accepts only fixed commands. It never reads
 # /srv/algae-atlas/source and it never executes helpers uploaded with a bundle.
 
 set -Eeuo pipefail
@@ -36,6 +36,7 @@ readonly SITE_ARCHIVE_ATTEMPT_TIMEOUT_SECONDS=20
 readonly SITE_ARCHIVE_TOTAL_TIMEOUT_SECONDS=40
 readonly PUBLISH_STATE_RETENTION_DAYS=30
 readonly PUBLISH_PROTOCOL_VERSION=1
+readonly QUEUE_PROTOCOL_VERSION=1
 
 JSON_MODE=false
 ACTION=""
@@ -92,6 +93,35 @@ PUBLISH_URL=""
 PUBLISH_SWITCH_COMPLETED=false
 PUBLISH_STATE_INITIALIZED=false
 declare -A PUBLISH_STAGE_DURATIONS_MS=()
+UPLOAD_STATE_ACTIVE=false
+UPLOAD_STATE_PERSISTED=false
+QUEUE_STAGING_ACTIVE=false
+UPLOAD_STATUS=""
+UPLOAD_QUEUED_AT=""
+UPLOAD_SOURCE_COMMIT=""
+UPLOAD_CONTENT_COMMIT=""
+UPLOAD_COALESCED_INTO_COMMIT=""
+UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=""
+UPLOAD_PUBLISHED_RELEASE_ID=""
+UPLOAD_CONTENT_TYPE=""
+UPLOAD_STABLE_ID=""
+UPLOAD_RETRYABLE=false
+UPLOAD_ERROR_CODE=""
+UPLOAD_MESSAGE=""
+QUEUE_SCHEMA_VERSION=0
+QUEUE_INITIALIZED_AT=""
+QUEUE_UPDATED_AT=""
+QUEUE_LATEST_UPLOAD_TRANSACTION_ID=""
+QUEUE_PUBLISHED_CONTENT_COMMIT=""
+QUEUE_PENDING_CONTENT_COMMIT=""
+QUEUE_SYNCING_CONTENT_COMMIT=""
+QUEUE_PUBLISHED_SOURCE_COMMIT=""
+QUEUE_PENDING_SOURCE_COMMIT=""
+QUEUE_SYNCING_SOURCE_COMMIT=""
+PARSED_BUNDLE=""
+PARSED_CONTENT_TYPE=""
+PARSED_STABLE_ID=""
+PARSED_PUBLISHED_COMMIT=""
 
 if [[ "${ALGAE_CONTENTCTL_TESTING:-}" == "1" && "$(realpath -m -- "$0")" != "$INSTALLED_PATH" ]]; then
   TEST_MODE=true
@@ -124,6 +154,17 @@ configuration_value() {
 
 CONTENT_ROOT="$(configuration_value ALGAE_CONTENT_ROOT "$DEFAULT_CONTENT_ROOT")"
 CONTENT_REPOSITORY="$CONTENT_ROOT/repository"
+readonly QUEUE_STATE_REF="refs/algae/queue-state"
+readonly PUBLISHED_CONTENT_REF="refs/algae/published"
+readonly PENDING_CONTENT_REF="refs/algae/pending"
+readonly SYNCING_CONTENT_REF="refs/algae/syncing"
+readonly PUBLISHED_SOURCE_REF="refs/algae/source/published"
+readonly PENDING_SOURCE_REF="refs/algae/source/pending"
+readonly SYNCING_SOURCE_REF="refs/algae/source/syncing"
+readonly UPLOAD_TRANSACTION_REF_ROOT="refs/algae/upload-transactions"
+readonly UPLOAD_SOURCE_REF_ROOT="refs/algae/upload-sources"
+readonly UPLOAD_CONTENT_REF_ROOT="refs/algae/upload-content"
+readonly QUEUE_STAGING_REF_ROOT="refs/algae/staging"
 TRANSACTION_ROOT="$CONTENT_ROOT/transactions"
 PUBLISH_STATE_ROOT="$CONTENT_ROOT/publish-state"
 SITE_SOURCE_CACHE_ROOT="$CONTENT_ROOT/site-source-cache"
@@ -158,7 +199,12 @@ usage() {
 Usage:
   algae-contentctl status --json
   algae-contentctl list --json
+  algae-contentctl pending-status --json
   algae-contentctl publish-status --transaction <transaction-id> --json
+  algae-contentctl queue-init --published <content-commit> --json
+  algae-contentctl queue-upload --transaction <transaction-id> \
+    --bundle /home/ubuntu/algae-content-workbench/incoming/<transaction-id> \
+    --bundle-sha256 <sha256> --json
   algae-contentctl publish --transaction <transaction-id> \
     --bundle /home/ubuntu/algae-content-workbench/incoming/<transaction-id> \
     --bundle-sha256 <sha256> --json
@@ -185,7 +231,7 @@ emit_error() {
   local log_tail=${3:-}
   local error_action="unknown"
   case "$ACTION" in
-    status|list|publish-status|publish|delete) error_action=$ACTION ;;
+    status|list|pending-status|publish-status|queue-init|queue-upload|publish|delete) error_action=$ACTION ;;
   esac
   ERROR_EMITTED=true
   if $JSON_MODE; then
@@ -196,6 +242,13 @@ emit_error() {
         "$(json_quote "${PUBLISH_TECHNICAL_SUMMARY:-$code: $message}")" \
         "$(json_quote "${PUBLISH_FAILED_STAGE:-${PUBLISH_STAGE:-unknown}}")" \
         "$(json_quote "$PUBLISH_TRANSACTION_ID")" "$PUBLISH_ATTEMPT"
+    fi
+    if [[ "$error_action" == "queue-upload" ]]; then
+      printf ',"transactionId":%s,"retryable":false,"errorCode":%s' \
+        "$(json_quote "$PUBLISH_TRANSACTION_ID")" "$(json_quote "$code")"
+      if $UPLOAD_STATE_PERSISTED; then
+        printf ',"status":%s' "$(json_quote "FAILED")"
+      fi
     fi
     if [[ -n "$log_tail" ]]; then
       printf ',"logTail":%s' "$(json_quote "$log_tail")"
@@ -240,6 +293,9 @@ fail() {
     PUBLISH_TECHNICAL_SUMMARY="${code}: ${message}"
     fail_publish_state "$code" "$message" "$details"
   fi
+  if [[ "$ACTION" == "queue-upload" && -n "$PUBLISH_TRANSACTION_ID" ]] && $UPLOAD_STATE_ACTIVE; then
+    fail_upload_state "$code" "$message" || true
+  fi
   emit_error "$code" "$message" "$details"
   exit 1
 }
@@ -256,6 +312,9 @@ on_unexpected_error() {
   if ! $ERROR_EMITTED; then
     if [[ "$ACTION" == "publish" && -n "$PUBLISH_TRANSACTION_ID" ]]; then
       fail_publish_state "$code" "$message" "$(log_tail || true)"
+    fi
+    if [[ "$ACTION" == "queue-upload" && -n "$PUBLISH_TRANSACTION_ID" ]] && $UPLOAD_STATE_ACTIVE; then
+      fail_upload_state "$code" "$message" || true
     fi
     emit_error "$code" "$message" "$(log_tail || true)"
   fi
@@ -424,6 +483,37 @@ prepare_runtime() {
   assert_no_symlinks_in_tree "$CONTENT_REPOSITORY"
 }
 
+prepare_queue_runtime() {
+  if ! $TEST_MODE && [[ $EUID -ne 0 ]]; then
+    fail "PERMISSION_DENIED" "This controller must run as root or through a reviewed restricted sudo rule"
+  fi
+  assert_regular_command "node" "$NODE_BIN"
+  assert_regular_command "git" "$GIT_BIN"
+  assert_regular_command "chmod" "$CHMOD_BIN"
+  ensure_safe_directory "$CONTENT_ROOT"
+  ensure_safe_directory "$TRANSACTION_ROOT"
+  if [[ "$ACTION" == "queue-upload" ]]; then
+    ensure_safe_directory "$INCOMING_ROOT"
+  fi
+  [[ -d "$CONTENT_REPOSITORY" && ! -L "$CONTENT_REPOSITORY" && -d "$CONTENT_REPOSITORY/.git" ]] || \
+    fail "CONTENT_REPOSITORY_MISSING" "Content repository is not installed"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+    fail "CONTENT_REPOSITORY_INVALID" "Content repository is not a Git working tree"
+  local repository_status
+  repository_status=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" status --porcelain --untracked-files=all 2>/dev/null) || \
+    fail "CONTENT_REPOSITORY_INVALID" "Content repository status cannot be read"
+  [[ -z "$repository_status" ]] || fail "CONTENT_REPOSITORY_DIRTY" "Content repository has uncommitted changes"
+  if ! $TEST_MODE; then
+    [[ $(stat -c '%U' -- "$CONTENT_REPOSITORY") == "root" ]] || \
+      fail "CONTENT_REPOSITORY_INVALID" "Content repository must be root owned"
+    local repository_mode
+    repository_mode=$(stat -c '%a' -- "$CONTENT_REPOSITORY")
+    [[ $((8#$repository_mode & 0022)) -eq 0 ]] || \
+      fail "CONTENT_REPOSITORY_INVALID" "Content repository must not be group or world writable"
+  fi
+  assert_no_symlinks_in_tree "$CONTENT_REPOSITORY"
+}
+
 acquire_lock() {
   local lock_file="$CONTENT_ROOT/.algae-contentctl.lock"
   if command -v flock >/dev/null 2>&1; then
@@ -447,10 +537,11 @@ acquire_lock() {
     fi
     LOCK_FD_OPEN=true
   else
-    LOCK_DIR="$CONTENT_ROOT/.algae-contentctl.lockdir"
-    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    local lock_directory="$CONTENT_ROOT/.algae-contentctl.lockdir"
+    if ! mkdir "$lock_directory" 2>/dev/null; then
       fail "CONTROLLER_BUSY" "Another content operation is in progress"
     fi
+    LOCK_DIR=$lock_directory
   fi
 }
 
@@ -461,6 +552,14 @@ release_lock() {
   if $LOCK_FD_OPEN; then
     flock -u 9 2>/dev/null || true
   fi
+}
+
+cleanup_queue_staging_refs() {
+  [[ "$ACTION" == "queue-upload" && -n "$PUBLISH_TRANSACTION_ID" ]] || return 0
+  $QUEUE_STAGING_ACTIVE || return 0
+  [[ -n "$GIT_BIN" && -x "$GIT_BIN" && -d "$CONTENT_REPOSITORY/.git" ]] || return 0
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref -d "$(queue_staging_source_ref)" >/dev/null 2>&1 || true
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref -d "$(queue_staging_content_ref)" >/dev/null 2>&1 || true
 }
 
 safe_remove_transaction() {
@@ -776,6 +875,21 @@ begin_publish_state() {
 }
 
 publish_status() {
+  OP_LOG=/dev/null
+  local upload_ref="$UPLOAD_TRANSACTION_REF_ROOT/$PUBLISH_TRANSACTION_ID"
+  if [[ -n "$GIT_BIN" && -x "$GIT_BIN" && -d "$CONTENT_REPOSITORY/.git" ]] && \
+     queue_ref_exists "$upload_ref"; then
+    local queue_status=0
+    load_queue_state || queue_status=$?
+    [[ $queue_status -eq 0 ]] || fail "QUEUE_STATE_CORRUPT" "Content queue state is invalid"
+    load_upload_state_ref "$upload_ref" "$PUBLISH_TRANSACTION_ID" || \
+      fail "STATE_CORRUPT" "Upload transaction state is invalid"
+    validate_loaded_upload_against_pending || \
+      fail "STATE_CORRUPT" "Upload transaction state is outside the pending content history"
+    emit_upload_state_json "$upload_ref" "publish-status" || \
+      fail "STATE_CORRUPT" "Upload transaction state cannot be read"
+    return
+  fi
   initialize_publish_state_context
   if [[ ! -e "$PUBLISH_STATE_FILE" && ! -L "$PUBLISH_STATE_FILE" ]]; then
     PUBLISH_FAILED_STAGE="status_query"
@@ -790,6 +904,323 @@ cleanup_publish_states() {
   find -P "$PUBLISH_STATE_ROOT" -maxdepth 1 -type f \
     \( -name '[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*.json' -o -name '[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*.events.jsonl' \) \
     -mtime "+$PUBLISH_STATE_RETENTION_DAYS" -delete 2>/dev/null || true
+}
+
+upload_transaction_ref() {
+  printf '%s/%s' "$UPLOAD_TRANSACTION_REF_ROOT" "$PUBLISH_TRANSACTION_ID"
+}
+
+upload_source_ref() {
+  printf '%s/%s' "$UPLOAD_SOURCE_REF_ROOT" "$PUBLISH_TRANSACTION_ID"
+}
+
+upload_content_ref() {
+  printf '%s/%s' "$UPLOAD_CONTENT_REF_ROOT" "$PUBLISH_TRANSACTION_ID"
+}
+
+queue_staging_source_ref() {
+  printf '%s/source/%s' "$QUEUE_STAGING_REF_ROOT" "$PUBLISH_TRANSACTION_ID"
+}
+
+queue_staging_content_ref() {
+  printf '%s/content/%s' "$QUEUE_STAGING_REF_ROOT" "$PUBLISH_TRANSACTION_ID"
+}
+
+queue_ref_exists() {
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" show-ref --verify --quiet "$1" 2>/dev/null
+}
+
+resolve_queue_commit_ref() {
+  local ref=$1
+  local required=${2:-false}
+  RESOLVED_QUEUE_REF=""
+  if ! queue_ref_exists "$ref"; then
+    [[ "$required" != "true" ]]
+    return
+  fi
+  local raw commit
+  raw=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$ref" 2>>"$OP_LOG") || return 1
+  commit=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$ref^{commit}" 2>>"$OP_LOG") || return 1
+  [[ "$raw" == "$commit" && "$commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  RESOLVED_QUEUE_REF=$commit
+}
+
+load_queue_state() {
+  queue_ref_exists "$QUEUE_STATE_REF" || return 2
+  local raw object
+  raw=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$QUEUE_STATE_REF" 2>>"$OP_LOG") || return 1
+  object=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$QUEUE_STATE_REF^{blob}" 2>>"$OP_LOG") || return 1
+  [[ "$raw" == "$object" && "$object" =~ ^[0-9a-f]{40}$ ]] || return 1
+
+  local validator
+  validator=$(cat <<'NODE'
+const fs = require("fs");
+let state;
+try {
+  state = JSON.parse(fs.readFileSync(0, "utf8"));
+} catch {
+  process.exit(2);
+}
+const exactKeys = ["schemaVersion", "initializedAt", "updatedAt", "latestUploadTransactionId"];
+const keys = Object.keys(state || {}).sort();
+if (!state || Array.isArray(state) || keys.join("\n") !== [...exactKeys].sort().join("\n")) process.exit(3);
+const timestamp = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value));
+if (state.schemaVersion !== 1 || !timestamp(state.initializedAt) || !timestamp(state.updatedAt)) process.exit(4);
+if (typeof state.latestUploadTransactionId !== "string" || (state.latestUploadTransactionId !== "" && !/^[0-9a-f]{32}$/.test(state.latestUploadTransactionId))) process.exit(5);
+process.stdout.write(`${state.schemaVersion}\n${state.initializedAt}\n${state.updatedAt}\n${state.latestUploadTransactionId}\n`);
+NODE
+)
+  local -a fields=()
+  mapfile -t fields < <("$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file blob "$object" 2>>"$OP_LOG" | \
+    "$NODE_BIN" -e "$validator")
+  [[ ${#fields[@]} -eq 4 ]] || return 1
+  QUEUE_SCHEMA_VERSION=${fields[0]}
+  QUEUE_INITIALIZED_AT=${fields[1]}
+  QUEUE_UPDATED_AT=${fields[2]}
+  QUEUE_LATEST_UPLOAD_TRANSACTION_ID=${fields[3]}
+
+  resolve_queue_commit_ref "$PUBLISHED_CONTENT_REF" true || return 1
+  QUEUE_PUBLISHED_CONTENT_COMMIT=$RESOLVED_QUEUE_REF
+  resolve_queue_commit_ref "$PENDING_CONTENT_REF" true || return 1
+  QUEUE_PENDING_CONTENT_COMMIT=$RESOLVED_QUEUE_REF
+  resolve_queue_commit_ref "$SYNCING_CONTENT_REF" false || return 1
+  QUEUE_SYNCING_CONTENT_COMMIT=$RESOLVED_QUEUE_REF
+  resolve_queue_commit_ref "$PUBLISHED_SOURCE_REF" false || return 1
+  QUEUE_PUBLISHED_SOURCE_COMMIT=$RESOLVED_QUEUE_REF
+  resolve_queue_commit_ref "$PENDING_SOURCE_REF" false || return 1
+  QUEUE_PENDING_SOURCE_COMMIT=$RESOLVED_QUEUE_REF
+  resolve_queue_commit_ref "$SYNCING_SOURCE_REF" false || return 1
+  QUEUE_SYNCING_SOURCE_COMMIT=$RESOLVED_QUEUE_REF
+
+  [[ -n "$QUEUE_PUBLISHED_CONTENT_COMMIT" && -n "$QUEUE_PENDING_CONTENT_COMMIT" ]] || return 1
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+    "$QUEUE_PUBLISHED_CONTENT_COMMIT" "$QUEUE_PENDING_CONTENT_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+  if [[ -n "$QUEUE_SYNCING_CONTENT_COMMIT" ]]; then
+    "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+      "$QUEUE_PUBLISHED_CONTENT_COMMIT" "$QUEUE_SYNCING_CONTENT_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+    "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+      "$QUEUE_SYNCING_CONTENT_COMMIT" "$QUEUE_PENDING_CONTENT_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+  fi
+  if [[ -n "$QUEUE_PUBLISHED_SOURCE_COMMIT" || -n "$QUEUE_PENDING_SOURCE_COMMIT" ]]; then
+    [[ -n "$QUEUE_PUBLISHED_SOURCE_COMMIT" && -n "$QUEUE_PENDING_SOURCE_COMMIT" ]] || return 1
+    "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+      "$QUEUE_PUBLISHED_SOURCE_COMMIT" "$QUEUE_PENDING_SOURCE_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+  fi
+  if [[ -n "$QUEUE_SYNCING_SOURCE_COMMIT" ]]; then
+    [[ -n "$QUEUE_PUBLISHED_SOURCE_COMMIT" && -n "$QUEUE_PENDING_SOURCE_COMMIT" ]] || return 1
+    "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+      "$QUEUE_PUBLISHED_SOURCE_COMMIT" "$QUEUE_SYNCING_SOURCE_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+    "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+      "$QUEUE_SYNCING_SOURCE_COMMIT" "$QUEUE_PENDING_SOURCE_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+  fi
+  local source_initialized=false
+  if [[ -n "$QUEUE_PUBLISHED_SOURCE_COMMIT" && -n "$QUEUE_PENDING_SOURCE_COMMIT" ]]; then
+    source_initialized=true
+  elif [[ -n "$QUEUE_PUBLISHED_SOURCE_COMMIT" || -n "$QUEUE_PENDING_SOURCE_COMMIT" ]]; then
+    return 1
+  fi
+  if $source_initialized; then
+    [[ -n "$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" ]] || return 1
+    if [[ -n "$QUEUE_SYNCING_CONTENT_COMMIT" || -n "$QUEUE_SYNCING_SOURCE_COMMIT" ]]; then
+      [[ -n "$QUEUE_SYNCING_CONTENT_COMMIT" && -n "$QUEUE_SYNCING_SOURCE_COMMIT" ]] || return 1
+    fi
+    source_baseline_matches_pending "$QUEUE_PUBLISHED_SOURCE_COMMIT" "$QUEUE_PUBLISHED_CONTENT_COMMIT" || return 1
+    source_baseline_matches_pending "$QUEUE_PENDING_SOURCE_COMMIT" "$QUEUE_PENDING_CONTENT_COMMIT" || return 1
+    if [[ -n "$QUEUE_SYNCING_SOURCE_COMMIT" ]]; then
+      source_baseline_matches_pending "$QUEUE_SYNCING_SOURCE_COMMIT" "$QUEUE_SYNCING_CONTENT_COMMIT" || return 1
+    fi
+  else
+    [[ "$QUEUE_PENDING_CONTENT_COMMIT" == "$QUEUE_PUBLISHED_CONTENT_COMMIT" ]] || return 1
+    [[ -z "$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" && -z "$QUEUE_SYNCING_CONTENT_COMMIT" && \
+       -z "$QUEUE_SYNCING_SOURCE_COMMIT" ]] || return 1
+  fi
+  local repository_head
+  repository_head=$(git_head_or_empty "$CONTENT_REPOSITORY")
+  [[ "$repository_head" == "$QUEUE_PUBLISHED_CONTENT_COMMIT" ]] || return 1
+  if [[ -n "$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" ]]; then
+    queue_ref_exists "$UPLOAD_TRANSACTION_REF_ROOT/$QUEUE_LATEST_UPLOAD_TRANSACTION_ID" || return 1
+  fi
+}
+
+write_queue_state_blob() {
+  local latest_transaction_id=$1
+  local output="$TX_ROOT/queue-state.json"
+  local now
+  now=$(iso_timestamp)
+  [[ -n "$QUEUE_INITIALIZED_AT" ]] || QUEUE_INITIALIZED_AT=$now
+  {
+    printf '{"schemaVersion":%d,"initializedAt":%s,"updatedAt":%s,"latestUploadTransactionId":%s}\n' \
+      "$QUEUE_PROTOCOL_VERSION" "$(json_quote "$QUEUE_INITIALIZED_AT")" \
+      "$(json_quote "$now")" "$(json_quote "$latest_transaction_id")"
+  } >"$output"
+  chmod 0600 -- "$output"
+  QUEUE_STATE_BLOB=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" hash-object -w -- "$output" 2>>"$OP_LOG") || return 1
+  [[ "$QUEUE_STATE_BLOB" =~ ^[0-9a-f]{40}$ ]]
+}
+
+load_upload_state_ref() {
+  local ref=$1
+  local expected_transaction_id=${2:-}
+  queue_ref_exists "$ref" || return 2
+  local raw object
+  raw=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$ref" 2>>"$OP_LOG") || return 1
+  object=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$ref^{blob}" 2>>"$OP_LOG") || return 1
+  [[ "$raw" == "$object" && "$object" =~ ^[0-9a-f]{40}$ ]] || return 1
+  local validator
+  validator=$(cat <<'NODE'
+const fs = require("fs");
+const expectedId = process.argv[1];
+let state;
+try {
+  state = JSON.parse(fs.readFileSync(0, "utf8"));
+} catch {
+  process.exit(2);
+}
+const text = (value, limit = 4096) => typeof value === "string" && value.length <= limit && !/[\u0000-\u001f\u007f]/.test(value);
+const oid = (value) => text(value, 40) && (value === "" || /^[0-9a-f]{40}$/.test(value));
+const transaction = (value) => text(value, 32) && (value === "" || /^[0-9a-f]{32}$/.test(value));
+const timestamp = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value));
+const exactKeys = ["schemaVersion", "transactionId", "bundleSha256", "sourceCommit", "contentCommit",
+  "status", "queuedAt", "coalescedIntoCommit", "includedInSyncTransactionId", "publishedReleaseId",
+  "retryable", "errorCode", "message", "contentType", "stableId"];
+if (!state || Array.isArray(state) || state.schemaVersion !== 1) process.exit(3);
+if (Object.keys(state).sort().join("\n") !== exactKeys.sort().join("\n")) process.exit(3);
+if (!/^[0-9a-f]{32}$/.test(state.transactionId) || (expectedId && state.transactionId !== expectedId)) process.exit(4);
+if (!/^[0-9A-F]{64}$/.test(state.bundleSha256)) process.exit(5);
+if (!oid(state.sourceCommit) || !oid(state.contentCommit) || !oid(state.coalescedIntoCommit)) process.exit(6);
+if (!["FAILED", "QUEUED", "COALESCED", "SYNCING", "PUBLISHED"].includes(state.status)) process.exit(7);
+if (!text(state.queuedAt, 64) || !transaction(state.includedInSyncTransactionId)) process.exit(8);
+if (!text(state.publishedReleaseId, 200) || typeof state.retryable !== "boolean") process.exit(9);
+for (const key of ["errorCode", "message", "contentType", "stableId"]) if (!text(state[key] ?? "", key === "message" ? 16384 : 4096)) process.exit(10);
+if (state.status === "FAILED") {
+  if (state.sourceCommit || state.contentCommit || state.queuedAt || state.coalescedIntoCommit || state.retryable || !state.errorCode) process.exit(11);
+} else if (!state.sourceCommit || !state.contentCommit || !timestamp(state.queuedAt) || state.errorCode || state.retryable) {
+  process.exit(11);
+}
+if (state.status === "QUEUED" && state.coalescedIntoCommit) process.exit(12);
+if (state.status === "COALESCED" && !state.coalescedIntoCommit) process.exit(12);
+const values = [state.transactionId, state.bundleSha256, state.sourceCommit, state.contentCommit, state.status,
+  state.queuedAt, state.coalescedIntoCommit, state.includedInSyncTransactionId, state.publishedReleaseId,
+  String(state.retryable), state.errorCode, state.message, state.contentType, state.stableId];
+for (const value of values) process.stdout.write(`${value}\n`);
+NODE
+)
+  local -a fields=()
+  mapfile -t fields < <("$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file blob "$object" 2>>"$OP_LOG" | \
+    "$NODE_BIN" -e "$validator" "$expected_transaction_id")
+  [[ ${#fields[@]} -eq 14 ]] || return 1
+  PUBLISH_TRANSACTION_ID=${fields[0]}
+  PUBLISH_EXPECTED_BUNDLE_SHA256=${fields[1]}
+  UPLOAD_SOURCE_COMMIT=${fields[2]}
+  UPLOAD_CONTENT_COMMIT=${fields[3]}
+  UPLOAD_STATUS=${fields[4]}
+  UPLOAD_QUEUED_AT=${fields[5]}
+  UPLOAD_COALESCED_INTO_COMMIT=${fields[6]}
+  UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=${fields[7]}
+  UPLOAD_PUBLISHED_RELEASE_ID=${fields[8]}
+  UPLOAD_RETRYABLE=${fields[9]}
+  UPLOAD_ERROR_CODE=${fields[10]}
+  UPLOAD_MESSAGE=${fields[11]}
+  UPLOAD_CONTENT_TYPE=${fields[12]}
+  UPLOAD_STABLE_ID=${fields[13]}
+  if [[ "$UPLOAD_STATUS" != "FAILED" ]]; then
+    resolve_queue_commit_ref "$UPLOAD_SOURCE_REF_ROOT/$PUBLISH_TRANSACTION_ID" true || return 1
+    [[ "$RESOLVED_QUEUE_REF" == "$UPLOAD_SOURCE_COMMIT" ]] || return 1
+    resolve_queue_commit_ref "$UPLOAD_CONTENT_REF_ROOT/$PUBLISH_TRANSACTION_ID" true || return 1
+    [[ "$RESOLVED_QUEUE_REF" == "$UPLOAD_CONTENT_COMMIT" ]] || return 1
+    if [[ -n "$UPLOAD_COALESCED_INTO_COMMIT" ]]; then
+      local coalesced_raw coalesced_commit
+      coalesced_raw=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify \
+        "$UPLOAD_COALESCED_INTO_COMMIT" 2>>"$OP_LOG") || return 1
+      coalesced_commit=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify \
+        "$UPLOAD_COALESCED_INTO_COMMIT^{commit}" 2>>"$OP_LOG") || return 1
+      [[ "$coalesced_raw" == "$coalesced_commit" ]] || return 1
+      "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+        "$UPLOAD_CONTENT_COMMIT" "$coalesced_commit" >>"$OP_LOG" 2>&1 || return 1
+    fi
+  fi
+}
+
+validate_loaded_upload_against_pending() {
+  [[ "$UPLOAD_STATUS" != "FAILED" ]] || return 0
+  [[ -n "$QUEUE_PENDING_SOURCE_COMMIT" && -n "$QUEUE_PENDING_CONTENT_COMMIT" ]] || return 1
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+    "$UPLOAD_SOURCE_COMMIT" "$QUEUE_PENDING_SOURCE_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+    "$UPLOAD_CONTENT_COMMIT" "$QUEUE_PENDING_CONTENT_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+  if [[ -n "$UPLOAD_COALESCED_INTO_COMMIT" ]]; then
+    "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+      "$UPLOAD_COALESCED_INTO_COMMIT" "$QUEUE_PENDING_CONTENT_COMMIT" >>"$OP_LOG" 2>&1 || return 1
+  fi
+}
+
+write_upload_state_blob() {
+  local output=$1
+  {
+    printf '{"schemaVersion":%d,"transactionId":%s,"bundleSha256":%s' \
+      "$QUEUE_PROTOCOL_VERSION" "$(json_quote "$PUBLISH_TRANSACTION_ID")" \
+      "$(json_quote "$PUBLISH_EXPECTED_BUNDLE_SHA256")"
+    printf ',"sourceCommit":%s,"contentCommit":%s,"status":%s,"queuedAt":%s' \
+      "$(json_quote "$UPLOAD_SOURCE_COMMIT")" "$(json_quote "$UPLOAD_CONTENT_COMMIT")" \
+      "$(json_quote "$UPLOAD_STATUS")" "$(json_quote "$UPLOAD_QUEUED_AT")"
+    printf ',"coalescedIntoCommit":%s,"includedInSyncTransactionId":%s,"publishedReleaseId":%s' \
+      "$(json_quote "$UPLOAD_COALESCED_INTO_COMMIT")" \
+      "$(json_quote "$UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID")" \
+      "$(json_quote "$UPLOAD_PUBLISHED_RELEASE_ID")"
+    printf ',"retryable":%s,"errorCode":%s,"message":%s,"contentType":%s,"stableId":%s}\n' \
+      "$UPLOAD_RETRYABLE" "$(json_quote "$UPLOAD_ERROR_CODE")" "$(json_quote "$UPLOAD_MESSAGE")" \
+      "$(json_quote "$UPLOAD_CONTENT_TYPE")" "$(json_quote "$UPLOAD_STABLE_ID")"
+  } >"$output"
+  chmod 0600 -- "$output"
+  UPLOAD_STATE_BLOB=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" hash-object -w -- "$output" 2>>"$OP_LOG") || return 1
+  [[ "$UPLOAD_STATE_BLOB" =~ ^[0-9a-f]{40}$ ]]
+}
+
+emit_upload_state_json() {
+  local ref=$1
+  local response_action=$2
+  local renderer
+  renderer=$(cat <<'NODE'
+const fs = require("fs");
+const action = process.argv[1];
+const state = JSON.parse(fs.readFileSync(0, "utf8"));
+const failed = action !== "publish-status" && state.status === "FAILED";
+const output = { ok: !failed, action, ...state };
+if (failed) output.code = state.errorCode || "UPLOAD_FAILED";
+process.stdout.write(`${JSON.stringify(output)}\n`);
+NODE
+)
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file blob "$ref" 2>>"$OP_LOG" | \
+    "$NODE_BIN" -e "$renderer" "$response_action"
+}
+
+fail_upload_state() {
+  local code=$1
+  local message=$2
+  [[ -d "$CONTENT_REPOSITORY/.git" && -n "$GIT_BIN" && -x "$GIT_BIN" ]] || return 1
+  local ref
+  ref=$(upload_transaction_ref)
+  queue_ref_exists "$ref" && return 0
+  [[ -n "$TX_ROOT" && -d "$TX_ROOT" ]] || return 1
+  UPLOAD_STATUS="FAILED"
+  UPLOAD_SOURCE_COMMIT=""
+  UPLOAD_CONTENT_COMMIT=""
+  UPLOAD_QUEUED_AT=""
+  UPLOAD_COALESCED_INTO_COMMIT=""
+  UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=""
+  UPLOAD_PUBLISHED_RELEASE_ID=""
+  UPLOAD_RETRYABLE=false
+  UPLOAD_ERROR_CODE=$code
+  UPLOAD_MESSAGE=$message
+  UPLOAD_CONTENT_TYPE=${BUNDLE_CONTENT_TYPE:-}
+  UPLOAD_STABLE_ID=${BUNDLE_STABLE_ID:-}
+  write_upload_state_blob "$TX_ROOT/failed-upload-state.json" || return 1
+  if "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref "$ref" "$UPLOAD_STATE_BLOB" \
+    0000000000000000000000000000000000000000 >>"$OP_LOG" 2>&1; then
+    UPLOAD_STATE_PERSISTED=true
+    return 0
+  fi
+  return 1
 }
 
 regular_source_tree_is_safe() {
@@ -1354,6 +1785,7 @@ cleanup() {
   else
     safe_remove_transaction "$TX_ROOT" || true
   fi
+  cleanup_queue_staging_refs || true
   release_lock || true
   exit "$status"
 }
@@ -2048,6 +2480,408 @@ commit_candidate() {
   CANDIDATE_CONTENT_SHA=$("$GIT_BIN" -C "$CANDIDATE_REPOSITORY" rev-parse --verify HEAD 2>>"$OP_LOG") || fail "CONTENT_COMMIT_FAILED" "Candidate commit cannot be read" true
 }
 
+clone_queue_candidate_repository() {
+  CANDIDATE_REPOSITORY="$TX_ROOT/candidate-content"
+  if ! "$GIT_BIN" clone --quiet --no-hardlinks --no-checkout \
+    "$CONTENT_REPOSITORY" "$CANDIDATE_REPOSITORY" >>"$OP_LOG" 2>&1; then
+    fail "CONTENT_REPOSITORY_INVALID" "Cannot clone the queued content repository" true
+  fi
+  if ! "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" fetch --quiet --no-tags "$CONTENT_REPOSITORY" \
+    "$PENDING_CONTENT_REF:refs/algae/queue-base" >>"$OP_LOG" 2>&1; then
+    fail "QUEUE_STATE_CORRUPT" "Cannot load the pending content snapshot" true
+  fi
+  "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" checkout --quiet --detach refs/algae/queue-base >>"$OP_LOG" 2>&1 || \
+    fail "QUEUE_STATE_CORRUPT" "Cannot check out the pending content snapshot" true
+  assert_no_symlinks_in_tree "$CANDIDATE_REPOSITORY"
+  local remote
+  while IFS= read -r remote; do
+    [[ -n "$remote" ]] || continue
+    "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" remote remove "$remote" >>"$OP_LOG" 2>&1 || \
+      fail "CONTENT_REPOSITORY_INVALID" "Cannot detach the queued candidate repository" true
+  done < <("$GIT_BIN" -C "$CANDIDATE_REPOSITORY" remote 2>>"$OP_LOG")
+  "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" config user.name "Algae Content Controller" >>"$OP_LOG" 2>&1
+  "$GIT_BIN" -C "$CANDIDATE_REPOSITORY" config user.email "algae-contentctl@localhost" >>"$OP_LOG" 2>&1
+}
+
+tree_oid_or_missing() {
+  local repository=$1
+  local commit=$2
+  local path=$3
+  local oid
+  if oid=$("$GIT_BIN" -C "$repository" rev-parse --verify "$commit:$path" 2>/dev/null); then
+    [[ "$oid" =~ ^[0-9a-f]{40}$ ]] || return 1
+    printf '%s' "$oid"
+  else
+    printf '%s' "missing"
+  fi
+}
+
+source_baseline_matches_pending() {
+  local source_commit=$1
+  local canonical_commit=$2
+  local source_content canonical_content source_uploads canonical_uploads
+  source_content=$(tree_oid_or_missing "$CONTENT_REPOSITORY" "$source_commit" content) || return 1
+  canonical_content=$(tree_oid_or_missing "$CONTENT_REPOSITORY" "$canonical_commit" content) || return 1
+  [[ "$source_content" != "missing" && "$source_content" == "$canonical_content" ]] || return 1
+  source_uploads=$(tree_oid_or_missing "$CONTENT_REPOSITORY" "$source_commit" public/images/uploads) || return 1
+  canonical_uploads=$(tree_oid_or_missing "$CONTENT_REPOSITORY" "$canonical_commit" public/images/uploads) || return 1
+  [[ "$source_uploads" == "$canonical_uploads" ]]
+}
+
+import_verified_source_commit() {
+  local staging_ref
+  staging_ref=$(queue_staging_source_ref)
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref -d "$staging_ref" >/dev/null 2>&1 || true
+  if ! "$GIT_BIN" -C "$CONTENT_REPOSITORY" fetch --quiet --no-tags "$BUNDLE_REPOSITORY" \
+    "refs/heads/incoming:$staging_ref" >>"$OP_LOG" 2>&1; then
+    fail "BUNDLE_INVALID" "Cannot retain the verified Bundle commit" true
+  fi
+  local imported
+  imported=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$staging_ref^{commit}" 2>>"$OP_LOG") || \
+    fail "BUNDLE_INVALID" "Imported Bundle commit cannot be read" true
+  [[ "$imported" == "$MANIFEST_HEAD" ]] || fail "BUNDLE_INVALID" "Imported Bundle commit changed identity"
+}
+
+validate_queue_source_lineage() {
+  if [[ -z "$QUEUE_PENDING_SOURCE_COMMIT" ]]; then
+    source_baseline_matches_pending "$MANIFEST_BASE" "$QUEUE_PENDING_CONTENT_COMMIT" || \
+      fail "PENDING_BASE_MISMATCH" "Server pending content does not match the uploaded Bundle base"
+    QUEUE_PUBLISHED_SOURCE_COMMIT=$MANIFEST_BASE
+    return
+  fi
+  if [[ "$MANIFEST_HEAD" == "$QUEUE_PENDING_SOURCE_COMMIT" ]]; then
+    return
+  fi
+  [[ "$MANIFEST_BASE" == "$QUEUE_PENDING_SOURCE_COMMIT" ]] || \
+    fail "PENDING_BASE_MISMATCH" "Server has newer pending content; refresh the local content workspace before uploading again"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+    "$QUEUE_PENDING_SOURCE_COMMIT" "$MANIFEST_HEAD" >>"$OP_LOG" 2>&1 || \
+    fail "PENDING_BASE_MISMATCH" "Uploaded content does not fast-forward the pending content"
+}
+
+import_queue_candidate_commit() {
+  local staging_ref
+  staging_ref=$(queue_staging_content_ref)
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref -d "$staging_ref" >/dev/null 2>&1 || true
+  if ! "$GIT_BIN" -C "$CONTENT_REPOSITORY" fetch --quiet --no-tags "$CANDIDATE_REPOSITORY" \
+    "HEAD:$staging_ref" >>"$OP_LOG" 2>&1; then
+    fail "CONTENT_COMMIT_FAILED" "Cannot retain the queued content commit" true
+  fi
+  local imported
+  imported=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$staging_ref^{commit}" 2>>"$OP_LOG") || \
+    fail "CONTENT_COMMIT_FAILED" "Queued content commit cannot be read" true
+  [[ "$imported" == "$CANDIDATE_CONTENT_SHA" ]] || fail "CONTENT_COMMIT_FAILED" "Queued content commit changed identity"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" merge-base --is-ancestor \
+    "$QUEUE_PENDING_CONTENT_COMMIT" "$imported" >>"$OP_LOG" 2>&1 || \
+    fail "CONTENT_COMMIT_FAILED" "Queued content commit does not fast-forward pending"
+}
+
+coalesced_upload_blob() {
+  local ref=$1
+  local transaction_id=$2
+  local pending_commit=$3
+  local input="$TX_ROOT/coalesced-$transaction_id.input.json"
+  local output="$TX_ROOT/coalesced-$transaction_id.json"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file blob "$ref" >"$input" 2>>"$OP_LOG" || return 1
+  "$NODE_BIN" - "$input" "$output" "$pending_commit" <<'NODE'
+const fs = require("fs");
+const [input, output, pendingCommit] = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(input, "utf8"));
+state.status = "COALESCED";
+state.coalescedIntoCommit = pendingCommit;
+state.retryable = false;
+state.errorCode = "";
+state.message = "Included in a newer queued content commit";
+fs.writeFileSync(output, `${JSON.stringify(state)}\n`, { mode: 0o600 });
+NODE
+  local blob
+  blob=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" hash-object -w -- "$output" 2>>"$OP_LOG") || return 1
+  [[ "$blob" =~ ^[0-9a-f]{40}$ ]] || return 1
+  COALESCED_UPLOAD_BLOB=$blob
+}
+
+persist_queued_upload() {
+  local current_transaction=$PUBLISH_TRANSACTION_ID
+  local current_bundle_sha=$PUBLISH_EXPECTED_BUNDLE_SHA256
+  local current_source=$UPLOAD_SOURCE_COMMIT
+  local current_content=$UPLOAD_CONTENT_COMMIT
+  local current_queued_at=$UPLOAD_QUEUED_AT
+  local current_type=$UPLOAD_CONTENT_TYPE
+  local current_id=$UPLOAD_STABLE_ID
+  local queue_state_old
+  queue_state_old=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$QUEUE_STATE_REF^{blob}" 2>>"$OP_LOG") || \
+    fail "QUEUE_STATE_CORRUPT" "Queue state cannot be updated"
+  write_queue_state_blob "$current_transaction" || fail "QUEUE_STATE_UPDATE_FAILED" "Cannot create queue state"
+
+  local transaction_file="$TX_ROOT/queued-upload-state.json"
+  write_upload_state_blob "$transaction_file" || fail "QUEUE_STATE_UPDATE_FAILED" "Cannot create upload transaction state"
+  local current_transaction_blob=$UPLOAD_STATE_BLOB
+
+  local -a coalesced_refs=()
+  local -a coalesced_old_objects=()
+  local -a coalesced_new_objects=()
+  local ref transaction_id old_object existing_upload_status
+  if [[ -z "$QUEUE_PENDING_SOURCE_COMMIT" || "$current_source" != "$QUEUE_PENDING_SOURCE_COMMIT" ]]; then
+    local upload_refs_file="$TX_ROOT/upload-transaction-refs"
+    "$GIT_BIN" -C "$CONTENT_REPOSITORY" for-each-ref --format='%(refname)' \
+      "$UPLOAD_TRANSACTION_REF_ROOT/" >"$upload_refs_file" 2>>"$OP_LOG" || \
+      fail "QUEUE_STATE_CORRUPT" "Upload transaction refs cannot be enumerated"
+    while IFS= read -r ref; do
+      [[ -n "$ref" ]] || continue
+      transaction_id=${ref##*/}
+      [[ "$transaction_id" != "$current_transaction" ]] || continue
+      existing_upload_status=$(load_upload_state_ref "$ref" "$transaction_id" && \
+        validate_loaded_upload_against_pending && printf '%s' "$UPLOAD_STATUS") || \
+        fail "QUEUE_STATE_CORRUPT" "A queued upload transaction is invalid"
+      case "$existing_upload_status" in
+        QUEUED|COALESCED)
+          old_object=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$ref^{blob}" 2>>"$OP_LOG") || \
+            fail "QUEUE_STATE_CORRUPT" "A queued upload transaction cannot be read"
+          coalesced_upload_blob "$ref" "$transaction_id" "$current_content" || \
+            fail "QUEUE_STATE_UPDATE_FAILED" "Cannot coalesce an earlier upload transaction"
+          coalesced_refs+=("$ref")
+          coalesced_old_objects+=("$old_object")
+          coalesced_new_objects+=("$COALESCED_UPLOAD_BLOB")
+          ;;
+        FAILED|SYNCING|PUBLISHED) ;;
+        *) fail "QUEUE_STATE_CORRUPT" "A queued upload transaction has an invalid status" ;;
+      esac
+    done < "$upload_refs_file"
+  fi
+
+  PUBLISH_TRANSACTION_ID=$current_transaction
+  PUBLISH_EXPECTED_BUNDLE_SHA256=$current_bundle_sha
+  UPLOAD_SOURCE_COMMIT=$current_source
+  UPLOAD_CONTENT_COMMIT=$current_content
+  UPLOAD_STATUS="QUEUED"
+  UPLOAD_QUEUED_AT=$current_queued_at
+  UPLOAD_COALESCED_INTO_COMMIT=""
+  UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=""
+  UPLOAD_PUBLISHED_RELEASE_ID=""
+  UPLOAD_RETRYABLE=false
+  UPLOAD_ERROR_CODE=""
+  UPLOAD_MESSAGE="Content validated and queued for synchronization"
+  UPLOAD_CONTENT_TYPE=$current_type
+  UPLOAD_STABLE_ID=$current_id
+
+  local update_file="$TX_ROOT/queue-ref-update"
+  local staging_source staging_content transaction_ref source_ref content_ref
+  staging_source=$(queue_staging_source_ref)
+  staging_content=$(queue_staging_content_ref)
+  transaction_ref=$(upload_transaction_ref)
+  source_ref=$(upload_source_ref)
+  content_ref=$(upload_content_ref)
+  {
+    printf 'start\n'
+    printf 'update %s %s %s\n' "$QUEUE_STATE_REF" "$QUEUE_STATE_BLOB" "$queue_state_old"
+    if [[ -z "$QUEUE_PENDING_SOURCE_COMMIT" ]]; then
+      printf 'create %s %s\n' "$PUBLISHED_SOURCE_REF" "$MANIFEST_BASE"
+      printf 'create %s %s\n' "$PENDING_SOURCE_REF" "$current_source"
+    elif [[ "$current_source" == "$QUEUE_PENDING_SOURCE_COMMIT" ]]; then
+      printf 'verify %s %s\n' "$PENDING_SOURCE_REF" "$QUEUE_PENDING_SOURCE_COMMIT"
+    else
+      printf 'update %s %s %s\n' "$PENDING_SOURCE_REF" "$current_source" "$QUEUE_PENDING_SOURCE_COMMIT"
+    fi
+    if [[ "$current_content" == "$QUEUE_PENDING_CONTENT_COMMIT" ]]; then
+      printf 'verify %s %s\n' "$PENDING_CONTENT_REF" "$QUEUE_PENDING_CONTENT_COMMIT"
+    else
+      printf 'update %s %s %s\n' "$PENDING_CONTENT_REF" "$current_content" "$QUEUE_PENDING_CONTENT_COMMIT"
+    fi
+    printf 'create %s %s\n' "$source_ref" "$current_source"
+    printf 'create %s %s\n' "$content_ref" "$current_content"
+    printf 'create %s %s\n' "$transaction_ref" "$current_transaction_blob"
+    printf 'delete %s %s\n' "$staging_source" "$current_source"
+    if queue_ref_exists "$staging_content"; then
+      printf 'delete %s %s\n' "$staging_content" "$current_content"
+    fi
+    local index
+    for index in "${!coalesced_refs[@]}"; do
+      printf 'update %s %s %s\n' "${coalesced_refs[$index]}" \
+        "${coalesced_new_objects[$index]}" "${coalesced_old_objects[$index]}"
+    done
+    printf 'prepare\ncommit\n'
+  } >"$update_file"
+  chmod 0600 -- "$update_file"
+  if ! "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref --stdin <"$update_file" >>"$OP_LOG" 2>&1; then
+    fail "QUEUE_STATE_UPDATE_FAILED" "Cannot atomically advance the pending content queue" true
+  fi
+}
+
+pending_status() {
+  local response_action=${1:-pending-status}
+  local load_status=0
+  load_queue_state || load_status=$?
+  [[ $load_status -ne 2 ]] || fail "QUEUE_NOT_INITIALIZED" "Content queue has not been initialized"
+  [[ $load_status -eq 0 ]] || fail "QUEUE_STATE_CORRUPT" "Content queue state is invalid"
+  local latest=$QUEUE_LATEST_UPLOAD_TRANSACTION_ID
+  local pending_count=0 ref transaction_id
+  local upload_refs_output
+  upload_refs_output=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" for-each-ref --format='%(refname)' \
+    "$UPLOAD_TRANSACTION_REF_ROOT/" 2>>"$OP_LOG") || \
+    fail "QUEUE_STATE_CORRUPT" "Upload transaction refs cannot be enumerated"
+  local -a upload_refs=()
+  [[ -z "$upload_refs_output" ]] || mapfile -t upload_refs <<< "$upload_refs_output"
+  for ref in "${upload_refs[@]}"; do
+    [[ -n "$ref" ]] || continue
+    transaction_id=${ref##*/}
+    load_upload_state_ref "$ref" "$transaction_id" || fail "QUEUE_STATE_CORRUPT" "An upload transaction state is invalid"
+    validate_loaded_upload_against_pending || \
+      fail "QUEUE_STATE_CORRUPT" "An upload transaction is outside the pending history"
+    case "$UPLOAD_STATUS" in
+      QUEUED|COALESCED|SYNCING) ((pending_count += 1)) ;;
+      FAILED|PUBLISHED) ;;
+      *) fail "QUEUE_STATE_CORRUPT" "An upload transaction has an invalid status" ;;
+    esac
+  done
+  local has_pending=false syncing_json=null latest_json=null
+  [[ "$QUEUE_PENDING_CONTENT_COMMIT" == "$QUEUE_PUBLISHED_CONTENT_COMMIT" ]] || has_pending=true
+  [[ -z "$QUEUE_SYNCING_CONTENT_COMMIT" ]] || syncing_json=$(json_quote "$QUEUE_SYNCING_CONTENT_COMMIT")
+  [[ -z "$latest" ]] || latest_json=$(json_quote "$latest")
+  printf '{"ok":true,"action":%s,"schema_version":%d' \
+    "$(json_quote "$response_action")" "$QUEUE_SCHEMA_VERSION"
+  printf ',"published_content_commit":%s,"pending_content_commit":%s,"syncing_content_commit":%s' \
+    "$(json_quote "$QUEUE_PUBLISHED_CONTENT_COMMIT")" "$(json_quote "$QUEUE_PENDING_CONTENT_COMMIT")" "$syncing_json"
+  printf ',"has_pending_changes":%s,"pending_upload_count":%d,"latest_upload_transaction_id":%s' \
+    "$has_pending" "$pending_count" "$latest_json"
+  printf ',"next_scheduled_sync_at":null,"server_time":%s,"queue_protocol_version":%d,"message":%s}\n' \
+    "$(json_quote "$(iso_timestamp)")" "$QUEUE_PROTOCOL_VERSION" "$(json_quote "Pending content status checked")"
+}
+
+queue_init() {
+  local published_commit=$1
+  create_transaction "queue-init"
+  local existing_status=0
+  load_queue_state || existing_status=$?
+  if [[ $existing_status -eq 0 ]]; then
+    [[ "$QUEUE_PUBLISHED_CONTENT_COMMIT" == "$published_commit" ]] || \
+      fail "QUEUE_ALREADY_INITIALIZED" "Content queue is already initialized with different state"
+    SUCCESS=true
+    pending_status "queue-init"
+    return
+  fi
+  [[ $existing_status -eq 2 ]] || fail "QUEUE_STATE_CORRUPT" "Content queue state is invalid"
+  local existing_ref
+  existing_ref=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" for-each-ref \
+    --count=1 --format='%(refname)' refs/algae/ 2>>"$OP_LOG") || \
+    fail "QUEUE_STATE_CORRUPT" "Content queue refs cannot be enumerated"
+  [[ -z "$existing_ref" ]] || fail "QUEUE_STATE_CORRUPT" "Content queue refs exist without valid queue state"
+  local commit
+  commit=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" rev-parse --verify "$published_commit^{commit}" 2>>"$OP_LOG") || \
+    fail "CONTENT_COMMIT_NOT_FOUND" "Published content commit does not exist"
+  [[ "$commit" == "$published_commit" ]] || fail "CONTENT_COMMIT_NOT_FOUND" "Published content commit is not canonical"
+  local repository_head
+  repository_head=$(git_head_or_empty "$CONTENT_REPOSITORY")
+  [[ "$repository_head" == "$published_commit" ]] || \
+    fail "PUBLISHED_COMMIT_MISMATCH" "Published content must be initialized from the repository HEAD"
+  QUEUE_INITIALIZED_AT=""
+  write_queue_state_blob "" || fail "QUEUE_STATE_UPDATE_FAILED" "Cannot create initial queue state"
+  local update_file="$TX_ROOT/queue-init-ref-update"
+  {
+    printf 'start\n'
+    printf 'create %s %s\n' "$PUBLISHED_CONTENT_REF" "$published_commit"
+    printf 'create %s %s\n' "$PENDING_CONTENT_REF" "$published_commit"
+    printf 'create %s %s\n' "$QUEUE_STATE_REF" "$QUEUE_STATE_BLOB"
+    printf 'prepare\ncommit\n'
+  } >"$update_file"
+  chmod 0600 -- "$update_file"
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" update-ref --stdin <"$update_file" >>"$OP_LOG" 2>&1 || \
+    fail "QUEUE_STATE_UPDATE_FAILED" "Cannot atomically initialize the content queue" true
+  SUCCESS=true
+  pending_status "queue-init"
+}
+
+begin_queue_upload() {
+  initialize_publish_state_context
+  if [[ -e "$PUBLISH_STATE_FILE" || -L "$PUBLISH_STATE_FILE" ]]; then
+    fail "TRANSACTION_KIND_MISMATCH" "This transaction id already belongs to a synchronous publish"
+  fi
+
+  local queue_status=0
+  load_queue_state || queue_status=$?
+  [[ $queue_status -ne 2 ]] || fail "QUEUE_NOT_INITIALIZED" "Content queue has not been initialized"
+  [[ $queue_status -eq 0 ]] || fail "QUEUE_STATE_CORRUPT" "Content queue state is invalid"
+
+  local transaction_ref
+  transaction_ref=$(upload_transaction_ref)
+  if queue_ref_exists "$transaction_ref"; then
+    local requested_bundle_sha=$PUBLISH_EXPECTED_BUNDLE_SHA256
+    load_upload_state_ref "$transaction_ref" "$PUBLISH_TRANSACTION_ID" || \
+      fail "STATE_CORRUPT" "Upload transaction state is invalid"
+    validate_loaded_upload_against_pending || \
+      fail "STATE_CORRUPT" "Upload transaction state is outside the pending content history"
+    local stored_bundle_sha=$PUBLISH_EXPECTED_BUNDLE_SHA256
+    PUBLISH_EXPECTED_BUNDLE_SHA256=$requested_bundle_sha
+    [[ "$stored_bundle_sha" == "$requested_bundle_sha" ]] || \
+      fail "TRANSACTION_BUNDLE_MISMATCH" "This transaction id already belongs to a different Bundle"
+    emit_upload_state_json "$transaction_ref" "queue-upload" || \
+      fail "STATE_CORRUPT" "Upload transaction state cannot be read"
+    if [[ "$UPLOAD_STATUS" == "FAILED" ]]; then
+      ERROR_EMITTED=true
+      exit 1
+    fi
+    SUCCESS=true
+    exit 0
+  fi
+
+  create_transaction "queue-upload"
+  UPLOAD_STATE_ACTIVE=true
+  QUEUE_STAGING_ACTIVE=true
+  cleanup_queue_staging_refs
+}
+
+queue_upload() {
+  local bundle_directory=$1
+  [[ $(basename -- "$bundle_directory") == "$PUBLISH_TRANSACTION_ID" ]] || \
+    fail "TRANSACTION_BUNDLE_MISMATCH" "Bundle directory does not match the upload transaction id"
+  copy_uploaded_delivery "$bundle_directory"
+  local delivery=$DELIVERY_COPY
+  parse_manifest "$delivery"
+  [[ ${MANIFEST[BundleSha256]} == "$PUBLISH_EXPECTED_BUNDLE_SHA256" ]] || \
+    fail "TRANSACTION_BUNDLE_MISMATCH" "Bundle SHA-256 does not match the upload transaction"
+  validate_delivery_artifacts "$delivery"
+  import_and_validate_bundle "$delivery"
+  UPLOAD_CONTENT_TYPE=$BUNDLE_CONTENT_TYPE
+  UPLOAD_STABLE_ID=$BUNDLE_STABLE_ID
+  prepare_bundle_snapshot
+  validate_changed_paths_against_snapshot
+  import_verified_source_commit
+  validate_queue_source_lineage
+
+  clone_queue_candidate_repository
+  validate_shared_snapshot_media
+  install_bundle_snapshot
+  validate_candidate_record "$BUNDLE_CONTENT_TYPE" "$BUNDLE_STABLE_ID"
+  local candidate_status
+  candidate_status=$("$GIT_BIN" -C "$CANDIDATE_REPOSITORY" status --porcelain --untracked-files=all 2>>"$OP_LOG") || \
+    fail "CONTENT_REPOSITORY_INVALID" "Queued candidate status cannot be read" true
+  if [[ -n "$candidate_status" ]]; then
+    commit_candidate "content: queue $PUBLISH_TRANSACTION_ID $BUNDLE_STABLE_ID"
+    import_queue_candidate_commit
+    UPLOAD_CONTENT_COMMIT=$CANDIDATE_CONTENT_SHA
+  else
+    UPLOAD_CONTENT_COMMIT=$QUEUE_PENDING_CONTENT_COMMIT
+  fi
+  UPLOAD_SOURCE_COMMIT=$MANIFEST_HEAD
+  UPLOAD_STATUS="QUEUED"
+  UPLOAD_QUEUED_AT=$(iso_timestamp)
+  UPLOAD_COALESCED_INTO_COMMIT=""
+  UPLOAD_INCLUDED_IN_SYNC_TRANSACTION_ID=""
+  UPLOAD_PUBLISHED_RELEASE_ID=""
+  UPLOAD_RETRYABLE=false
+  UPLOAD_ERROR_CODE=""
+  UPLOAD_MESSAGE="Content validated and queued for synchronization"
+  persist_queued_upload
+  UPLOAD_STATE_ACTIVE=false
+  QUEUE_STAGING_ACTIVE=false
+  local transaction_ref
+  transaction_ref=$(upload_transaction_ref)
+  load_upload_state_ref "$transaction_ref" "$PUBLISH_TRANSACTION_ID" || \
+    fail "QUEUE_STATE_CORRUPT" "Queued upload transaction cannot be read"
+  SUCCESS=true
+  emit_upload_state_json "$transaction_ref" "queue-upload" || \
+    fail "QUEUE_STATE_CORRUPT" "Queued upload transaction cannot be rendered"
+}
+
 run_build_command() {
   local build_directory=$1
   shift
@@ -2290,8 +3124,9 @@ status() {
   if $repository_ready && [[ -n "$current" ]] && $service_active && $healthy; then
     ready=true
   fi
-  printf '{"ok":true,"action":"status","ready":%s,"contentRepositoryReady":%s,"currentRelease":%s,"previousRelease":%s,"serviceActive":%s,"healthy":%s,"publishProtocolVersion":%d,"message":%s}\n' \
-    "$ready" "$repository_ready" "$(json_quote "$current")" "$(json_quote "$previous")" "$service_active" "$healthy" "$PUBLISH_PROTOCOL_VERSION" "$(json_quote "Server status checked")"
+  printf '{"ok":true,"action":"status","ready":%s,"contentRepositoryReady":%s,"currentRelease":%s,"previousRelease":%s,"serviceActive":%s,"healthy":%s,"publishProtocolVersion":%d,"queueProtocolVersion":%d,"message":%s}\n' \
+    "$ready" "$repository_ready" "$(json_quote "$current")" "$(json_quote "$previous")" "$service_active" "$healthy" \
+    "$PUBLISH_PROTOCOL_VERSION" "$QUEUE_PROTOCOL_VERSION" "$(json_quote "Server status checked")"
 }
 
 list_content() {
@@ -2353,6 +3188,7 @@ parse_arguments() {
   local bundle_sha256=""
   local content_type=""
   local stable_id=""
+  local published_commit=""
   local json_count=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -2386,6 +3222,11 @@ parse_arguments() {
         stable_id=$2
         shift
         ;;
+      --published)
+        [[ -z "$published_commit" && $# -ge 2 ]] || fail "INVALID_ARGUMENTS" "--published requires one value"
+        published_commit=$2
+        shift
+        ;;
       *)
         fail "INVALID_ARGUMENTS" "Unknown argument"
         ;;
@@ -2394,18 +3235,26 @@ parse_arguments() {
   done
   [[ $json_count -eq 1 ]] || fail "INVALID_ARGUMENTS" "--json is required exactly once"
   case "$ACTION" in
-    status|list)
-      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id" ]] || fail "INVALID_ARGUMENTS" "This command does not accept values"
+    status|list|pending-status)
+      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id$published_commit" ]] || \
+        fail "INVALID_ARGUMENTS" "This command does not accept values"
       ;;
     publish-status)
-      [[ -z "$bundle$bundle_sha256$content_type$stable_id" && -n "$transaction_id" ]] || \
+      [[ -z "$bundle$bundle_sha256$content_type$stable_id$published_commit" && -n "$transaction_id" ]] || \
         fail "INVALID_ARGUMENTS" "publish-status requires only --transaction"
       is_publish_transaction_id "$transaction_id" || fail "INVALID_TRANSACTION_ID" "Publish transaction id is invalid"
       PUBLISH_TRANSACTION_ID=$transaction_id
       ;;
-    publish)
-      [[ -n "$bundle" && -n "$transaction_id" && -n "$bundle_sha256" && -z "$content_type$stable_id" ]] || \
-        fail "INVALID_ARGUMENTS" "publish requires --transaction, --bundle, and --bundle-sha256"
+    queue-init)
+      [[ -z "$bundle$transaction_id$bundle_sha256$content_type$stable_id" && -n "$published_commit" ]] || \
+        fail "INVALID_ARGUMENTS" "queue-init requires only --published"
+      [[ "$published_commit" =~ ^[0-9a-f]{40}$ ]] || \
+        fail "INVALID_CONTENT_COMMIT" "Published content commit is invalid"
+      PARSED_PUBLISHED_COMMIT=$published_commit
+      ;;
+    publish|queue-upload)
+      [[ -n "$bundle" && -n "$transaction_id" && -n "$bundle_sha256" && -z "$content_type$stable_id$published_commit" ]] || \
+        fail "INVALID_ARGUMENTS" "$ACTION requires --transaction, --bundle, and --bundle-sha256"
       is_publish_transaction_id "$transaction_id" || fail "INVALID_TRANSACTION_ID" "Publish transaction id is invalid"
       is_bundle_sha256 "$bundle_sha256" || fail "INVALID_BUNDLE_SHA256" "Publish Bundle SHA-256 is invalid"
       PUBLISH_TRANSACTION_ID=$transaction_id
@@ -2413,7 +3262,8 @@ parse_arguments() {
       PARSED_BUNDLE=$bundle
       ;;
     delete)
-      [[ -z "$bundle$transaction_id$bundle_sha256" && -n "$content_type" && -n "$stable_id" ]] || fail "INVALID_ARGUMENTS" "delete requires --type and --id"
+      [[ -z "$bundle$transaction_id$bundle_sha256$published_commit" && -n "$content_type" && -n "$stable_id" ]] || \
+        fail "INVALID_ARGUMENTS" "delete requires --type and --id"
       PARSED_CONTENT_TYPE=$content_type
       PARSED_STABLE_ID=$stable_id
       ;;
@@ -2421,6 +3271,16 @@ parse_arguments() {
       fail "INVALID_COMMAND" "Unsupported controller command"
       ;;
   esac
+}
+
+reject_legacy_mutation_when_queue_exists() {
+  local queue_ref
+  local log=${OP_LOG:-/dev/null}
+  queue_ref=$("$GIT_BIN" -C "$CONTENT_REPOSITORY" for-each-ref \
+    --count=1 --format='%(refname)' refs/algae/ 2>>"$log") || \
+    fail "QUEUE_STATE_CORRUPT" "Content queue refs cannot be inspected"
+  [[ -z "$queue_ref" ]] || \
+    fail "QUEUE_MODE_ACTIVE" "Synchronous publish and delete are disabled after the content queue is initialized"
 }
 
 main() {
@@ -2433,6 +3293,20 @@ main() {
   if [[ "$ACTION" == "publish-status" ]]; then
     prepare_publish_status_runtime
     publish_status
+    return
+  fi
+  if [[ "$ACTION" == "pending-status" || "$ACTION" == "queue-init" || "$ACTION" == "queue-upload" ]]; then
+    OP_LOG=/dev/null
+    prepare_queue_runtime
+    acquire_lock
+    case "$ACTION" in
+      pending-status) pending_status ;;
+      queue-init) queue_init "$PARSED_PUBLISHED_COMMIT" ;;
+      queue-upload)
+        begin_queue_upload
+        queue_upload "$PARSED_BUNDLE"
+        ;;
+    esac
     return
   fi
   if [[ "$ACTION" == "publish" ]]; then
@@ -2461,6 +3335,9 @@ main() {
   prepare_runtime
   cleanup_publish_states
   acquire_lock
+  if [[ "$ACTION" == "publish" || "$ACTION" == "delete" ]]; then
+    reject_legacy_mutation_when_queue_exists
+  fi
   case "$ACTION" in
     status) status ;;
     list) list_content ;;

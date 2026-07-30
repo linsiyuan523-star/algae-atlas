@@ -1,8 +1,9 @@
 # algae-contentctl
 
-`algae-contentctl` is the fixed, root-owned server-side endpoint for direct
-content publication. It has no generic shell, Git, systemd, or filesystem
-subcommand. The workbench calls only these JSON commands:
+`algae-contentctl` is the fixed, root-owned server-side endpoint for content
+publication and the pending synchronization queue. It has no generic shell,
+Git, systemd, or filesystem subcommand. The current desktop workbench still
+calls only these synchronous JSON commands:
 
 ```bash
 sudo -n /usr/local/sbin/algae-contentctl status --json
@@ -15,6 +16,19 @@ sudo -n /usr/local/sbin/algae-contentctl publish \
   --bundle-sha256 <sha256> --json
 sudo -n /usr/local/sbin/algae-contentctl delete \
   --type science-article --id example-id --json
+```
+
+Phase B1 also provides these administrator-only queue commands. They are not
+yet present in the desktop sudoers contract:
+
+```bash
+sudo /usr/local/sbin/algae-contentctl queue-init \
+  --published <canonical-content-commit> --json
+sudo /usr/local/sbin/algae-contentctl queue-upload \
+  --transaction <32-lowercase-hex-transaction-id> \
+  --bundle /home/ubuntu/algae-content-workbench/incoming/<transaction-id> \
+  --bundle-sha256 <sha256> --json
+sudo /usr/local/sbin/algae-contentctl pending-status --json
 ```
 
 `publish --bundle` accepts a standard workbench delivery directory, not an
@@ -52,6 +66,14 @@ source update.
 /srv/algae-atlas/current                       active release symlink
 /srv/algae-atlas/previous                      rollback release symlink
 ```
+
+The content repository also owns the queue namespace. Canonical server content
+uses `refs/algae/{published,pending,syncing}`. Verified uploaded source history
+uses `refs/algae/source/{published,pending,syncing}` because workbench commits
+and canonical server commits are separate histories. Queue metadata and upload
+transaction JSON are strict schema-versioned Git blobs addressed by controlled
+refs; per-transaction source and canonical refs keep every accepted commit
+reachable.
 
 The formal repository owns both the `content/` tree and the narrowly scoped
 `public/images/uploads/` blob tree referenced by media metadata. Image paths
@@ -112,6 +134,48 @@ only `content/records/<type>/<id>/` in a candidate repository and leaves media
 metadata and uploaded image files untouched. It also requires the deleted Chinese URL to return `404` or
 `410` before the formal content repository is updated.
 
+## Pending synchronization queue (phase B1)
+
+`queue-init` is the only migration entry point. It accepts one exact commit
+SHA, requires that commit to be the clean canonical repository `HEAD`, and
+atomically creates `published`, `pending`, and the schema-versioned queue-state
+ref. It never guesses a published baseline. Repeating initialization with the
+same published commit is idempotent.
+
+`queue-upload` reuses the existing delivery allowlist and Bundle validation,
+but stops after fast content validation and canonical candidate creation. It
+does not install dependencies, run a website build, create a release, switch
+`current`, restart a service, or perform a production health check. The Bundle
+head must equal the current source pending commit or directly fast-forward it;
+an older or divergent upload fails with `PENDING_BASE_MISMATCH`. The first
+upload is accepted only when its source base has the same managed content and
+upload trees as canonical published content.
+
+Accepted state is committed with one `git update-ref --stdin` transaction:
+queue metadata, source pending, canonical pending, the upload transaction, and
+the transaction's source/content retention refs either all advance or none do.
+Earlier queued uploads become `COALESCED` when a newer source commit includes
+them. Uploading the current pending source is idempotent and does not
+unnecessarily coalesce another queued transaction. Deterministic validation
+failures are retained as `FAILED` without advancing pending; a repeated
+transaction with the same Bundle returns that retained state, while a different
+Bundle hash returns `TRANSACTION_BUNDLE_MISMATCH`.
+
+All content mutations share the controller lock. Once `queue-init` has created
+the queue namespace, legacy synchronous `publish` and `delete` mutations fail
+with `QUEUE_MODE_ACTIVE`; their repository-swap implementation cannot preserve
+pending queue history. Before explicit initialization, the existing desktop
+synchronous path is unchanged. Phase B1 installs no timer and performs no
+automatic synchronization.
+
+`pending-status` reports the canonical published, pending, and optional syncing
+commit; whether pending differs; the number and latest ID of accepted uploads;
+server time; and `next_scheduled_sync_at: null`. Upload transaction schema 1
+retains `transactionId`, both source and canonical commits, status, queue time,
+coalescing target, future sync transaction and release IDs, retryability, error
+code, message, content type, and stable ID. The empty scheduling field is
+intentional: B1 does not pretend that a timer is installed.
+
 ## Installation
 
 Review `sudoers.example` and the fixed paths before installation. On the server,
@@ -145,10 +209,12 @@ incoming job directory.
 
 ## JSON contract
 
-`status --json` includes `publishProtocolVersion: 1`. The desktop checks this
-field before creating a local publication commit. Missing or older protocol
-versions are incompatible with transaction publication and must be upgraded;
-they are not treated as transient network failures.
+`status --json` includes `publishProtocolVersion: 1` and
+`queueProtocolVersion: 1`. The current desktop checks the publish field before
+creating a local publication commit. The queue field advertises the dormant B1
+server contract; the desktop does not call it yet. Missing or older required
+protocol versions are incompatible and are not treated as transient network
+failures.
 
 Every direct publish uses one 32-character lowercase hexadecimal transaction
 ID from local commit creation through upload, controller invocation, status
@@ -165,7 +231,10 @@ records timestamp, transaction, stage, attempt, duration, status, and error
 code. Both live under the root-owned mode `0700` publish-state directory and are
 retained for 30 days. `publish-status` returns the retained JSON without
 starting work, including the current stage, elapsed time, retryability, switch
-state, release identity, source method, and per-stage durations.
+state, release identity, source method, and per-stage durations. It first checks
+the queue transaction namespace and then falls back to legacy publish-state
+JSON, so one fixed query command supports both schemas without invalidating
+saved synchronous transactions.
 
 Successful publish responses include stable keys such as:
 
@@ -190,6 +259,15 @@ tarball failures including executable modes, symlink entries, and path
 traversal attempts. It does not touch `/srv/algae-atlas` or
 `/srv/algae-content`.
 
+The focused queue suite creates an independent temporary source history,
+canonical repository, Git Bundles, and injected Git wrapper. It covers queue
+initialization, fast-forward and divergent histories, equal-pending idempotency,
+`COALESCED` transactions, duplicate transaction identities, retained failures,
+corrupt state, missing refs, an injected atomic ref-transaction failure, shared
+lock ownership, and the absence of build, release, service, network, and
+`current` side effects. The main controller suite invokes it automatically.
+
 ```bash
 bash ops/algae-contentctl/tests/test-algae-contentctl.sh
+bash ops/algae-contentctl/tests/test-content-queue.sh
 ```
