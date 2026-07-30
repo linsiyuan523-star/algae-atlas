@@ -11,6 +11,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Command, Output},
     sync::{Arc, Mutex, MutexGuard},
+    time::Instant,
 };
 use thiserror::Error;
 use uuid::{Uuid, Version};
@@ -208,6 +209,8 @@ pub struct RepositoryBundleExportResult {
     pub bundle_file_name: String,
     pub bundle_size_bytes: u64,
     pub sha256: String,
+    pub bundle_generation_duration_ms: u64,
+    pub sha256_duration_ms: u64,
     pub import_branch_name: String,
     pub artifact_names: Vec<String>,
 }
@@ -1771,6 +1774,7 @@ pub(crate) fn export_repository_bundle(
     let hooks_root = staging.root.join("hooks-disabled");
     fs::create_dir(&hooks_root)?;
     let staged_bundle = staging.root.join(&bundle_name);
+    let bundle_started = Instant::now();
     controlled_git_checked(
         &repository_root,
         &hooks_root,
@@ -1789,16 +1793,19 @@ pub(crate) fn export_repository_bundle(
         &request.expected_branch_name,
         &request.expected_head_sha,
     )?;
+    let bundle_generation_duration_ms = bundle_started.elapsed().as_millis() as u64;
 
     let bundle_size = fs::metadata(&staged_bundle)?.len();
     if bundle_size == 0 || bundle_size > MAX_BUNDLE_BYTES {
         return Err(RepositoryError::InvalidBundleRequest("bundle size"));
     }
+    let sha256_started = Instant::now();
     let bundle_bytes = fs::read(&staged_bundle)?;
     if bundle_bytes.len() as u64 != bundle_size {
         return Err(RepositoryError::Git("bundle size changed"));
     }
     let bundle_sha256 = sha256_hex(&bundle_bytes).to_ascii_uppercase();
+    let sha256_duration_ms = sha256_started.elapsed().as_millis() as u64;
     let artifact_context = BundleArtifactContext {
         bundle_name: &bundle_name,
         branch_name: &request.expected_branch_name,
@@ -1857,6 +1864,8 @@ pub(crate) fn export_repository_bundle(
         bundle_file_name: bundle_name,
         bundle_size_bytes: bundle_size,
         sha256: bundle_sha256,
+        bundle_generation_duration_ms,
+        sha256_duration_ms,
         import_branch_name: import_branch,
         artifact_names: artifacts,
     })

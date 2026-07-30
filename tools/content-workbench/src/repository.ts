@@ -142,6 +142,8 @@ export type RepositoryBundleExportResult = {
   bundleFileName: string;
   bundleSizeBytes: number;
   sha256: string;
+  bundleGenerationDurationMs?: number;
+  sha256DurationMs?: number;
   importBranchName: string;
   artifactNames: string[];
 };
