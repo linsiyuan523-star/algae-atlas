@@ -12,6 +12,7 @@ export GIT_TERMINAL_PROMPT=0
 readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/algae-contentctl-test.XXXXXX")"
 readonly CONTROLLER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)/algae-contentctl"
 readonly BOOTSTRAP_HELPER="$(dirname -- "$CONTROLLER")/bootstrap.sh"
+readonly QUEUE_TEST="$(dirname -- "$CONTROLLER")/tests/test-content-queue.sh"
 readonly GIT_BIN="$(command -v git)"
 readonly NODE_BIN="$(command -v node || true)"
 readonly REAL_TIMEOUT_BIN="$(command -v timeout || true)"
@@ -1013,6 +1014,7 @@ status_json=$(env "${common_env[@]}" bash "$CONTROLLER" status --json)
 assert_json_field "$status_json" action status
 assert_json_field "$status_json" ready true
 assert_json_field "$status_json" publishProtocolVersion 1
+assert_json_field "$status_json" queueProtocolVersion 1
 
 printf 'CONTENT_REPOSITORY_SOURCE=legacy\n' > "$site_source_cache/repository/.env.production.local"
 : > "$MOCK_GIT_LOG"
@@ -1258,4 +1260,5 @@ assert_json_field "$outside_json" ok false
 assert_json_field "$outside_json" action publish
 assert_json_field "$outside_json" code INVALID_BUNDLE_PATH
 
+bash "$QUEUE_TEST"
 printf 'algae-contentctl mock tests: PASS\n'
