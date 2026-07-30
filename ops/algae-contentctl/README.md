@@ -18,17 +18,32 @@ sudo -n /usr/local/sbin/algae-contentctl delete \
   --type science-article --id example-id --json
 ```
 
-Phase B1 also provides these administrator-only queue commands. They are not
-yet present in the desktop sudoers contract:
+Phases B1 and B2 provide the queued publication contract below. The reviewed
+sudoers candidate permits the future B3 desktop to upload, query, and request a
+normal manual synchronization, but the current desktop does not call these
+commands yet:
+
+```bash
+sudo -n /usr/local/sbin/algae-contentctl queue-upload \
+  --transaction <32-lowercase-hex-transaction-id> \
+  --bundle /home/ubuntu/algae-content-workbench/incoming/<transaction-id> \
+  --bundle-sha256 <sha256> --json
+sudo -n /usr/local/sbin/algae-contentctl pending-status --json
+sudo -n /usr/local/sbin/algae-contentctl sync-status --json
+sudo -n /usr/local/sbin/algae-contentctl sync-status \
+  <32-lowercase-hex-sync-transaction-id> --json
+sudo -n /usr/local/sbin/algae-contentctl sync-pending \
+  --trigger manual --json
+```
+
+Queue initialization and an override of a blocked commit remain explicit
+administrator operations and are not in the desktop sudoers alias:
 
 ```bash
 sudo /usr/local/sbin/algae-contentctl queue-init \
   --published <canonical-content-commit> --json
-sudo /usr/local/sbin/algae-contentctl queue-upload \
-  --transaction <32-lowercase-hex-transaction-id> \
-  --bundle /home/ubuntu/algae-content-workbench/incoming/<transaction-id> \
-  --bundle-sha256 <sha256> --json
-sudo /usr/local/sbin/algae-contentctl pending-status --json
+sudo /usr/local/sbin/algae-contentctl sync-pending \
+  --trigger manual --retry-blocked --json
 ```
 
 `publish --bundle` accepts a standard workbench delivery directory, not an
@@ -75,6 +90,13 @@ transaction JSON are strict schema-versioned Git blobs addressed by controlled
 refs; per-transaction source and canonical refs keep every accepted commit
 reachable.
 
+Synchronization state uses strict schema-version-1 blobs at
+`refs/algae/sync-transactions/<sync-id>`. The controlled index refs are
+`refs/algae/sync-active`, `refs/algae/sync-last`, and
+`refs/algae/sync-blocked`. Frozen upload membership is retained under
+`refs/algae/sync-members/<sync-id>/<upload-id>`; neither CLI input nor content
+data can choose any of these ref names.
+
 The formal repository owns both the `content/` tree and the narrowly scoped
 `public/images/uploads/` blob tree referenced by media metadata. Image paths
 must have a four-digit year, a real two-digit month, a stable lowercase ID, and
@@ -82,7 +104,7 @@ an approved image suffix. Bundle entries must remain ordinary Git blobs; links,
 traversal, and every other `public/` path are rejected.
 
 The controller never reads `/srv/algae-atlas/source` or uses the active
-`current` release as source. Each publish or deletion first queries the official
+`current` release as source. Each legacy publish or deletion first queries the official
 GitHub commit API for the branch's exact commit and tree SHA, then checks a
 root-only cache keyed by both values. A cache hit is accepted only after its
 metadata, clean Git state, branch, tree SHA, and managed content trees are
@@ -101,6 +123,14 @@ local Git snapshot only after its written tree, including executable modes,
 matches the API tree SHA. The release SHA remains the real GitHub commit SHA;
 a local archive snapshot commit is merely a clean build workspace whose tree
 is rechecked before use.
+
+A queued synchronization is stricter: queue state records one exact
+`siteCommit`, initialized only from the validated `.release-sha`,
+`.content-sha`, and `.release-id` markers of the current release. The runner
+requests that exact commit and records it in the sync transaction and new
+release. A missing value fails with `SITE_COMMIT_UNAVAILABLE`; it never falls
+back to the latest GitHub `main`, so content synchronization cannot silently
+deploy unrelated website code.
 
 The controller reuses that exact prepared tree for both the candidate bootstrap
 and website build. It overlays a candidate `content/` directory, runs
@@ -165,16 +195,87 @@ All content mutations share the controller lock. Once `queue-init` has created
 the queue namespace, legacy synchronous `publish` and `delete` mutations fail
 with `QUEUE_MODE_ACTIVE`; their repository-swap implementation cannot preserve
 pending queue history. Before explicit initialization, the existing desktop
-synchronous path is unchanged. Phase B1 installs no timer and performs no
-automatic synchronization.
+synchronous path is unchanged. Merely installing B2 code or inactive units does
+not initialize the queue and therefore does not change that compatibility path.
 
 `pending-status` reports the canonical published, pending, and optional syncing
 commit; whether pending differs; the number and latest ID of accepted uploads;
-server time; and `next_scheduled_sync_at: null`. Upload transaction schema 1
+server time; the active, last, and blocked sync identities; and the next fixed
+UTC half-hour boundary. `sync_timer_active` is true only when systemd reports
+the timer both enabled and active, so an isolated or not-yet-activated host does
+not pretend scheduling is live. Upload transaction schema 1
 retains `transactionId`, both source and canonical commits, status, queue time,
-coalescing target, future sync transaction and release IDs, retryability, error
-code, message, content type, and stable ID. The empty scheduling field is
-intentional: B1 does not pretend that a timer is installed.
+coalescing target, sync transaction and release IDs, `publishedAt`,
+retryability, error code, message, content type, and stable ID. Legacy B1 blobs
+without `siteCommit` or `publishedAt` remain readable and can be migrated by an
+idempotent `queue-init` after the current release markers are verified.
+
+## Queued synchronization runner (phase B2)
+
+Both the systemd service and a manual request call the same command and state
+machine:
+
+```bash
+/usr/local/sbin/algae-contentctl sync-pending --trigger scheduled --json
+/usr/local/sbin/algae-contentctl sync-pending --trigger manual --json
+```
+
+A dedicated root-controlled `flock` spans the complete synchronization. A
+second scheduled or manual caller never starts another build: once the first
+caller has persisted `sync-active`, the second receives the existing sync ID,
+stage, and stable JSON. A separate short-held content mutation lock protects
+only snapshot and final ref transactions, so a validated upload may advance
+pending while the build runs.
+
+At start, one `git update-ref --stdin` transaction verifies published, pending,
+source pending, queue metadata, blocked state, and the absence of an active
+sync. It creates the sync transaction and active index, freezes pending into
+canonical and source syncing refs, records the rollback release links, marks
+the latest included upload `SYNCING`, and creates immutable member refs for all
+included uploads. The build reads only those syncing commits. If pending moves
+from B to C during the build, a successful transaction publishes B and leaves C
+pending for the next fixed cycle.
+
+The runner reuses the legacy source preparation, dependency installation,
+content validation, Next.js build, release creation, atomic `current` switch,
+service restart, health check, and rollback functions. It also verifies that
+`current` and `previous` still match the pointers captured with the snapshot
+before switching. A successful health check writes a transaction-specific
+marker into the release. Only then does one final ref transaction advance
+canonical and source published to syncing, remove both syncing refs, mark the
+sync `PUBLISHED`, move `sync-last`, clear `sync-active`, associate all frozen
+uploads with the sync/release/time, and preserve any newer pending commit. The
+latest frozen upload becomes `PUBLISHED`; earlier included uploads remain or
+become `COALESCED`, never failed.
+
+The schema exposes `scheduled`, `manual`, and `recovery` triggers and the stages
+`CREATED`, `SNAPSHOTTING`, `PREPARING_SOURCE`, `PREPARING_DEPENDENCIES`, `CHECKING`,
+`BUILDING`, `SWITCHING`, `VERIFYING`, `RECOVERING`, `PUBLISHED`,
+`FAILED_RETRYABLE`, `FAILED_BLOCKED`, and `SKIPPED_NO_PENDING`. Transient source
+or dependency failures are retryable for at most three automatic attempts,
+with the next attempt starting at a later fixed cycle rather than sleeping in
+one service invocation. Deterministic validation, build, switch, health,
+permission, and integrity failures become blocked. The same blocked content
+commit is returned without another scheduled build until pending advances or
+an administrator explicitly uses `--retry-blocked` with a manual trigger.
+
+An active transaction is recovered before selecting new pending. A pre-switch
+crash cleans only transaction-owned incomplete candidates and rebuilds the same
+fixed snapshot. A complete unswitched release is reused without rebuilding. A
+switched release with a valid health marker is finalized idempotently; without
+the marker it must pass a fresh service and live health check. Controlled blob,
+ref, release-marker, or release-link disagreement fails closed and retains
+active recovery evidence for an operator. A failed health check restores
+`current` and `previous`, restarts the restored service, leaves published
+unchanged, and records the blocked commit. Rollback failure retains the active
+transaction, release, and root-only workspace for manual inspection.
+
+`ops/systemd/algae-content-sync.timer` fixes the schedule to
+`*-*-* *:00,30:00 UTC`, with `Persistent=true`, `AccuracySec=1s`, and
+`RandomizedDelaySec=0`. UTC is explicit, and JSON timestamps use ISO 8601 `Z`.
+The paired root oneshot service has a ten-minute upper bound and calls only the
+scheduled form of the shared runner. The installer copies both units and runs
+`daemon-reload`, but deliberately does not enable or start the timer.
 
 ## Installation
 
@@ -198,21 +299,45 @@ repository from the same fresh-main snapshot on its first publish or delete;
 the Bundle base tree is never used as the source for that bootstrap. The
 installer also creates `content/authors`, `content/media`, and `content/records`,
 makes the incoming directory owned by `ubuntu`, and installs the controller as
-`/usr/local/sbin/algae-contentctl`. It does not deploy content or change the
-active release.
+`/usr/local/sbin/algae-contentctl`. It also installs the service and timer files
+with mode `0644` and reloads systemd. It does not enable or start the timer,
+initialize queue refs, deploy content, or change the active release.
 
-The supplied sudoers entry gives only `ubuntu` the five fixed invocations above
-and uses `NOSETENV`. The argument wildcards are necessary for job IDs and
-stable IDs; the script rejects extra arguments, unsafe paths, unsupported
-types, shell metacharacters, symlinks, writable uploads, and paths outside the
-incoming job directory.
+The supplied sudoers entry gives only `ubuntu` the listed fixed legacy and queue
+invocations and uses `NOSETENV`. It deliberately excludes `queue-init`, the
+scheduled trigger, and `--retry-blocked`. The argument wildcards are necessary
+for transaction IDs and stable IDs; the script rejects extra arguments, unsafe
+paths, unsupported types, shell metacharacters, symlinks, writable uploads, and
+paths outside the incoming job directory.
+
+### Production activation and rollback draft
+
+Phase B2 has not been activated in production. Activation must wait until B3
+has shipped the queue-upload workflow, pending status UI, manual sync action,
+and installer acceptance. At that point an operator should take a content-repo
+ref backup and record `current`/`previous`, install and verify the controller
+and units, verify the exact current release markers, run `queue-init` once with
+the current canonical content commit, exercise one reviewed manual sync, and
+only then enable the timer. `systemctl list-timers` and `pending-status` must
+both confirm the expected UTC schedule and active flag.
+
+Operational rollback starts by disabling and stopping the timer. An active
+sync must be inspected with `sync-status`; controlled refs or retained release
+evidence must not be deleted to force progress. Restore the previously reviewed
+controller and unit files, run `daemon-reload`, and restore release links only
+through the documented release recovery procedure. Queue initialization is a
+protocol migration: after it exists, legacy `publish/delete` intentionally
+remain disabled. Returning the desktop to the legacy path therefore requires a
+separate coordinated migration from backed-up refs and is not accomplished by
+disabling the timer alone.
 
 ## JSON contract
 
 `status --json` includes `publishProtocolVersion: 1` and
-`queueProtocolVersion: 1`. The current desktop checks the publish field before
-creating a local publication commit. The queue field advertises the dormant B1
-server contract; the desktop does not call it yet. Missing or older required
+`queueProtocolVersion: 1`; queued status responses also identify sync protocol
+version 1. The current desktop checks the publish field before
+creating a local publication commit. The queue field advertises the installed
+B1/B2 server contract; the desktop does not call it yet. Missing or older required
 protocol versions are incompatible and are not treated as transient network
 failures.
 
@@ -224,6 +349,13 @@ SHA-256 matches. Repeated publish calls with the same ID return the retained
 running or successful state. A retryable pre-switch failure can advance the
 same transaction up to three total controller attempts; deterministic failures
 and any transaction that completed the release switch are not retried.
+
+`sync-status [<sync-id>] --json` returns stable snake-case fields for the
+active, last, or named synchronization: stage, trigger, exact content/source and
+site commits, release identity, ISO timestamps, elapsed milliseconds, attempt
+and maximum attempts, retryable/blocked flags, error code, recovery flag,
+switch state, and health verification. `SKIPPED_NO_PENDING` is persisted as a
+real terminal transaction and never starts dependency or build commands.
 
 The controller writes each transaction to a mode `0600` JSON file using a
 same-directory temporary file and atomic rename. A mode `0600` JSONL event file
@@ -267,7 +399,19 @@ corrupt state, missing refs, an injected atomic ref-transaction failure, shared
 lock ownership, and the absence of build, release, service, network, and
 `current` side effects. The main controller suite invokes it automatically.
 
+The synchronization suite builds an isolated release chain with mock npm,
+systemd, and health commands. Its 35 required scenarios cover the fixed
+pending/source snapshot, build-period uploads, upload/release association,
+scheduled/manual concurrency, transient retries, blocked commits, new-pending
+unblock, explicit retry, health rollback, missing trusted site commit, four
+crash boundaries, live-health recovery, corrupt active state, and proof that no
+production path or latest-main source is used. The systemd suite checks all
+fixed directives on every platform and, when `systemd-analyze` is available,
+verifies four exact half-hour calendar events and both units.
+
 ```bash
 bash ops/algae-contentctl/tests/test-algae-contentctl.sh
 bash ops/algae-contentctl/tests/test-content-queue.sh
+bash ops/algae-contentctl/tests/test-content-sync.sh
+bash ops/algae-contentctl/tests/test-content-sync-systemd.sh
 ```
