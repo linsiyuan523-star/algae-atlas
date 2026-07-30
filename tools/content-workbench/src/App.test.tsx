@@ -179,6 +179,12 @@ function createServerApi(): ServerApi {
       message: "Content validated and queued for synchronization",
       status: "QUEUED" as const,
     })),
+    queueDeleteContent: vi.fn(async () => ({
+      ok: true,
+      action: "queue-upload",
+      message: "Deletion validated and queued for synchronization",
+      status: "QUEUED" as const,
+    })),
     getSyncStatus: vi.fn(async () => ({
       ok: false,
       action: "sync-status",
@@ -196,6 +202,93 @@ function createServerApi(): ServerApi {
       action: "delete",
       message: "Deleted",
     })),
+  };
+}
+
+function pendingStatus(
+  overrides: Partial<Awaited<ReturnType<ServerApi["getPendingStatus"]>>> = {},
+) {
+  return {
+    ok: true,
+    action: "pending-status",
+    message: "Pending status",
+    schema_version: 1,
+    published_content_commit: "1".repeat(40),
+    pending_content_commit: "2".repeat(40),
+    syncing_content_commit: null,
+    has_pending_changes: true,
+    pending_upload_count: 1,
+    latest_upload_transaction_id: "a".repeat(32),
+    active_sync_transaction_id: null,
+    last_sync_transaction_id: null,
+    last_sync_status: null,
+    blocked_content_commit: null,
+    next_scheduled_sync_at: "2026-07-30T11:30:00.000Z",
+    sync_timer_active: true,
+    server_time: "2026-07-30T11:17:00.000Z",
+    site_commit: "3".repeat(40),
+    queue_protocol_version: 1,
+    sync_protocol_version: 1,
+    ...overrides,
+  };
+}
+
+function queueServerApi() {
+  const api = createServerApi();
+  api.getCapabilities = vi.fn(async () => ({
+    ok: true,
+    action: "capabilities",
+    message: "Queue active",
+    protocolMode: "queue" as const,
+    queueModeActive: true,
+    ready: true,
+    contentRepositoryReady: true,
+    serviceActive: true,
+    healthy: true,
+    publishProtocolVersion: 1,
+    queueProtocolVersion: 1,
+  }));
+  api.getPendingStatus = vi.fn(async () => pendingStatus());
+  return api;
+}
+
+function syncTransaction(
+  status: "PUBLISHED" | "FAILED_BLOCKED" | "FAILED_RETRYABLE" = "PUBLISHED",
+) {
+  const failed = status.startsWith("FAILED");
+  return {
+    ok: !failed,
+    action: "sync-status",
+    code: status === "FAILED_BLOCKED"
+      ? "SYNC_BLOCKED"
+      : status === "FAILED_RETRYABLE"
+        ? "SYNC_FAILED_RETRYABLE"
+        : undefined,
+    message: status,
+    schema_version: 1,
+    sync_transaction_id: "b".repeat(32),
+    active_sync_transaction_id: "",
+    last_sync_transaction_id: "b".repeat(32),
+    status,
+    stage: status,
+    trigger: "manual" as const,
+    content_commit: "2".repeat(40),
+    source_content_commit: "4".repeat(40),
+    site_commit: "3".repeat(40),
+    release_id: status === "PUBLISHED" ? "release-queue-test" : "",
+    release_path: status === "PUBLISHED" ? "/srv/releases/release-queue-test" : "",
+    started_at: "2026-07-30T11:18:00.000Z",
+    updated_at: "2026-07-30T11:18:02.000Z",
+    completed_at: "2026-07-30T11:18:02.000Z",
+    elapsed_ms: 2_000,
+    retryable: status === "FAILED_RETRYABLE",
+    blocked: status === "FAILED_BLOCKED",
+    error_code: failed ? "TEST_SYNC_FAILURE" : "",
+    attempt: 1,
+    max_attempts: 3,
+    recovered: false,
+    switch_completed: status === "PUBLISHED",
+    health_verified: status === "PUBLISHED",
   };
 }
 
@@ -528,11 +621,19 @@ test("tests the SSH connection and reads server status", async () => {
       name: "服务器设置",
     }),
   );
-  expect(screen.getByText("尚未检测")).toBeVisible();
+  expect(
+    within(document.querySelector<HTMLElement>(".server-settings-page")!).getByText(
+      "连接可用",
+    ),
+  ).toBeVisible();
 
   await user.click(screen.getByRole("button", { name: "测试连接" }));
 
-  expect(await screen.findByText("连接可用")).toBeVisible();
+  expect(
+    within(document.querySelector<HTMLElement>(".server-settings-page")!).getByText(
+      "连接可用",
+    ),
+  ).toBeVisible();
   expect(serverApi.testConnection).toHaveBeenCalledOnce();
   expect(serverApi.getStatus).toHaveBeenCalledOnce();
 });
@@ -563,7 +664,11 @@ test("clears the server connection error after a successful retry", async () => 
   expect(await screen.findByRole("alert")).toHaveTextContent("SSH unavailable");
 
   await user.click(screen.getByRole("button", { name: "测试连接" }));
-  expect(await screen.findByText("连接可用")).toBeVisible();
+  expect(
+    within(document.querySelector<HTMLElement>(".server-settings-page")!).getByText(
+      "连接可用",
+    ),
+  ).toBeVisible();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
@@ -745,7 +850,11 @@ test("surfaces editor deletion failures without marking the server unavailable",
   await user.click(
     within(navigation).getByRole("button", { name: "服务器设置" }),
   );
-  expect(screen.getByText("连接可用")).toBeVisible();
+  expect(
+    within(document.querySelector<HTMLElement>(".server-settings-page")!).getByText(
+      "连接可用",
+    ),
+  ).toBeVisible();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
@@ -791,7 +900,7 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
   );
 
   await waitFor(() => expect(serverApi.testConnection).toHaveBeenCalled());
-  await waitFor(() => expect(serverApi.getStatus).toHaveBeenCalled());
+  await waitFor(() => expect(serverApi.getCapabilities).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(repositoryApi.dryRun).toHaveBeenCalledOnce());
   await waitFor(() => expect(repositoryApi.commit).toHaveBeenCalledOnce());
   await waitFor(() => expect(serverApi.publishContent).toHaveBeenCalledOnce());
@@ -830,9 +939,9 @@ test("checks SSH before creating one direct Bundle commit and publishing it", as
     `content/direct-${publishRequest?.transactionId}-fictional-draft`,
   );
   expect(vi.mocked(serverApi.testConnection).mock.invocationCallOrder[0]).toBeLessThan(
-    vi.mocked(serverApi.getStatus).mock.invocationCallOrder[0]!,
+    vi.mocked(serverApi.getCapabilities).mock.invocationCallOrder[1]!,
   );
-  expect(vi.mocked(serverApi.getStatus).mock.invocationCallOrder[0]).toBeLessThan(
+  expect(vi.mocked(serverApi.getCapabilities).mock.invocationCallOrder[1]).toBeLessThan(
     vi.mocked(repositoryApi.dryRun).mock.invocationCallOrder[0]!,
   );
   expect(vi.mocked(repositoryApi.dryRun).mock.invocationCallOrder[0]).toBeLessThan(
@@ -872,14 +981,15 @@ test("rejects an old controller before creating a local publish commit", async (
   onboardingApi.status = vi.fn(async () => onboardingStatus(true));
   const repositoryApi = createRepositoryApi();
   const serverApi = createServerApi();
-  serverApi.getStatus = vi.fn(async () => ({
-    ok: true,
-    action: "status",
-    message: "Legacy controller is healthy",
-    ready: true,
-    contentRepositoryReady: true,
-    serviceActive: true,
-    healthy: true,
+  serverApi.getCapabilities = vi.fn(async () => ({
+    ok: false,
+    action: "capabilities",
+    code: "CONTROLLER_UPGRADE_REQUIRED",
+    message: "Legacy controller is too old",
+    protocolMode: "incompatible" as const,
+    queueModeActive: false,
+    publishProtocolVersion: 0,
+    queueProtocolVersion: 0,
   }));
 
   render(
@@ -896,14 +1006,14 @@ test("rejects an old controller before creating a local publish commit", async (
   });
   await user.click(within(navigation).getByRole("button", { name: "草稿箱" }));
   await user.click(await screen.findByRole("button", { name: "打开 可发布虚构标题" }));
-  await user.click(screen.getByRole("button", { name: "发布到服务器" }));
-
-  const panel = await screen.findByRole("region", { name: "当前发布状态" });
-  expect(within(panel).getAllByText(/服务器控制器版本过旧/).length).toBeGreaterThan(0);
-  expect(within(panel).getByText(/不会自动重试/)).toBeVisible();
-  expect(screen.getByRole("button", { name: "结束本地事务" })).toBeEnabled();
-  expect(serverApi.testConnection).toHaveBeenCalledOnce();
-  expect(serverApi.getStatus).toHaveBeenCalledOnce();
+  const synchronization = await screen.findByRole("region", {
+    name: "服务器同步状态",
+  });
+  expect(within(synchronization).getAllByText(/服务器控制器版本过旧/).length)
+    .toBeGreaterThan(0);
+  expect(screen.getByRole("button", { name: "发布到服务器" })).toBeDisabled();
+  expect(serverApi.testConnection).not.toHaveBeenCalled();
+  expect(serverApi.getCapabilities).toHaveBeenCalled();
   expect(repositoryApi.dryRun).not.toHaveBeenCalled();
   expect(repositoryApi.commit).not.toHaveBeenCalled();
   expect(serverApi.publishContent).not.toHaveBeenCalled();
@@ -998,6 +1108,325 @@ test("queries and resumes the same transaction without another local commit", as
       "20260729T120020Z-resumed",
     ),
   );
+});
+
+test("queues content without marking it online or exposing the public link", async () => {
+  localStorage.clear();
+  const user = userEvent.setup();
+  const publishable = makePublishableDraft();
+  const draftApi = createApi();
+  draftApi.listDrafts = vi.fn(async () => [publishable]);
+  draftApi.openDraft = vi.fn(async () => publishable);
+  const onboardingApi = createOnboardingApi();
+  onboardingApi.status = vi.fn(async () => onboardingStatus(true));
+  const repositoryApi = createRepositoryApi();
+  const serverApi = queueServerApi();
+  const queued = (transactionId: string) => ({
+    ok: true,
+    action: "queue-upload",
+    message: "Content validated and queued for synchronization",
+    transactionId,
+    status: "QUEUED" as const,
+    contentCommit: "2".repeat(40),
+    sourceCommit: "4".repeat(40),
+    retryable: false,
+    bundleGenerationDurationMs: 120,
+    sha256DurationMs: 8,
+    bundleUploadDurationMs: 340,
+    serverValidationDurationMs: 210,
+    queueTotalDurationMs: 678,
+  });
+  serverApi.queueContent = vi.fn(async ({ transactionId }) => queued(transactionId));
+  serverApi.getPublishStatus = vi.fn(async ({ transactionId }) => ({
+    ...queued(transactionId),
+    action: "publish-status",
+  }));
+
+  render(
+    <App
+      draftApi={draftApi}
+      onboardingApi={onboardingApi}
+      repositoryApi={repositoryApi}
+      serverApi={serverApi}
+    />,
+  );
+
+  const navigation = await screen.findByRole("navigation", {
+    name: "工作台导航",
+  });
+  await user.click(within(navigation).getByRole("button", { name: "草稿箱" }));
+  await user.click(await screen.findByRole("button", { name: "打开 可发布虚构标题" }));
+  await user.click(
+    await screen.findByRole("button", { name: "上传并等待同步" }),
+  );
+
+  expect(await screen.findByText("等待服务器同步")).toBeVisible();
+  expect(screen.getAllByText("网站尚未更新").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("link", { name: "打开线上页面" })).not.toBeInTheDocument();
+  expect(serverApi.queueContent).toHaveBeenCalledOnce();
+  expect(serverApi.publishContent).not.toHaveBeenCalled();
+  expect(serverApi.getPublishStatus).toHaveBeenCalledOnce();
+  expect(document.querySelector(".publish-result")).toHaveTextContent(
+    "服务器快速校验",
+  );
+  expect(document.querySelector(".publish-result")).toHaveTextContent(
+    "Bundle 上传",
+  );
+
+  const savedRecord = vi.mocked(draftApi.saveDraft).mock.calls.at(-1)?.[0]
+    .recordDraft as { locales?: { zh?: { state?: string } } };
+  expect(savedRecord.locales?.zh?.state).not.toBe("published");
+  const stored = JSON.parse(
+    localStorage.getItem(
+      `algae-content-workbench:publish:${publishable.draftId}`,
+    ) ?? "{}",
+  ) as { status?: string };
+  expect(stored.status).toBe("QUEUED");
+});
+
+test("restores a published queue transaction with its site identity and public link", async () => {
+  localStorage.clear();
+  const transactionId = "f".repeat(32);
+  const publishable = makePublishableDraft();
+  localStorage.setItem(
+    `algae-content-workbench:publish:${publishable.draftId}`,
+    JSON.stringify({
+      transactionId,
+      status: "SYNCING",
+      message: "Synchronization is active",
+      contentCommit: "2".repeat(40),
+      sourceCommit: "4".repeat(40),
+      retryable: false,
+      includedInSyncTransactionId: "b".repeat(32),
+      localDraftUpdatedAt: publishable.updatedAt,
+    }),
+  );
+  const draftApi = createApi();
+  draftApi.listDrafts = vi.fn(async () => [publishable]);
+  draftApi.openDraft = vi.fn(async () => publishable);
+  const onboardingApi = createOnboardingApi();
+  onboardingApi.status = vi.fn(async () => onboardingStatus(true));
+  const repositoryApi = createRepositoryApi();
+  const serverApi = queueServerApi();
+  serverApi.getPendingStatus = vi.fn(async () =>
+    pendingStatus({
+      published_content_commit: "2".repeat(40),
+      pending_content_commit: "2".repeat(40),
+      has_pending_changes: false,
+      pending_upload_count: 0,
+      active_sync_transaction_id: null,
+      last_sync_transaction_id: "b".repeat(32),
+      last_sync_status: "PUBLISHED",
+      site_commit: "3".repeat(40),
+    }),
+  );
+  serverApi.getPublishStatus = vi.fn(async () => ({
+    ok: true,
+    action: "publish-status",
+    message: "Published",
+    transactionId,
+    status: "PUBLISHED" as const,
+    contentType: "team-news" as const,
+    stableId: "fictional-draft",
+    contentCommit: "2".repeat(40),
+    sourceCommit: "4".repeat(40),
+    includedInSyncTransactionId: "b".repeat(32),
+    publishedReleaseId: "release-queue-test",
+    publishedAt: "2026-07-30T11:18:02.000Z",
+    retryable: false,
+  }));
+  serverApi.getSyncStatus = vi.fn(async () => syncTransaction());
+  serverApi.listContent = vi.fn(async () => ({
+    ok: true,
+    action: "list",
+    message: "Listed",
+    items: [
+      {
+        contentType: "team-news" as const,
+        stableId: "fictional-draft",
+        titleZh: "可发布虚构标题",
+        zhUrl: "https://example.invalid/zh/fictional-draft",
+      },
+    ],
+  }));
+
+  render(
+    <App
+      draftApi={draftApi}
+      onboardingApi={onboardingApi}
+      repositoryApi={repositoryApi}
+      serverApi={serverApi}
+    />,
+  );
+
+  const navigation = await screen.findByRole("navigation", {
+    name: "工作台导航",
+  });
+  await userEvent.setup().click(
+    within(navigation).getByRole("button", { name: "草稿箱" }),
+  );
+  await userEvent.setup().click(
+    await screen.findByRole("button", { name: "打开 可发布虚构标题" }),
+  );
+
+  const queuePanel = await screen.findByRole("region", { name: "当前队列状态" });
+  expect(within(queuePanel).getByText("已上线")).toBeVisible();
+  expect(within(queuePanel).getByText("网站源码 SHA").closest("div")).toHaveTextContent(
+    "3".repeat(40),
+  );
+  expect(screen.getByRole("link", { name: "打开线上页面" })).toHaveAttribute(
+    "href",
+    "https://example.invalid/zh/fictional-draft",
+  );
+  expect(serverApi.queueContent).not.toHaveBeenCalled();
+  expect(repositoryApi.commit).not.toHaveBeenCalled();
+  await waitFor(() => expect(draftApi.saveDraft).toHaveBeenCalled());
+});
+
+test("does not start manual synchronization when pending is empty", async () => {
+  const user = userEvent.setup();
+  const serverApi = queueServerApi();
+  serverApi.getPendingStatus = vi.fn(async () =>
+    pendingStatus({
+      has_pending_changes: false,
+      pending_upload_count: 0,
+      pending_content_commit: "1".repeat(40),
+      latest_upload_transaction_id: null,
+    }),
+  );
+  render(<App draftApi={createApi()} serverApi={serverApi} />);
+
+  await user.click(await screen.findByRole("button", { name: "立即同步" }));
+
+  expect(await screen.findByText("当前没有等待同步的内容")).toBeVisible();
+  expect(serverApi.syncPendingNow).not.toHaveBeenCalled();
+});
+
+test("reuses an active synchronization instead of starting another one", async () => {
+  const user = userEvent.setup();
+  const serverApi = queueServerApi();
+  serverApi.getPendingStatus = vi.fn(async () =>
+    pendingStatus({ active_sync_transaction_id: "b".repeat(32) }),
+  );
+  serverApi.getSyncStatus = vi.fn(async () => syncTransaction());
+  render(<App draftApi={createApi()} serverApi={serverApi} />);
+
+  await user.click(
+    await screen.findByRole("button", { name: "查看同步进度" }),
+  );
+
+  expect(await screen.findByText("同步完成，待同步内容已上线。")).toBeVisible();
+  expect(serverApi.syncPendingNow).not.toHaveBeenCalled();
+  expect(serverApi.getSyncStatus).toHaveBeenCalledWith({
+    transactionId: "b".repeat(32),
+  });
+});
+
+test("recovers the original manual synchronization when its command response is lost", async () => {
+  const user = userEvent.setup();
+  const serverApi = queueServerApi();
+  let syncCommandStarted = false;
+  serverApi.getPendingStatus = vi.fn(async () =>
+    syncCommandStarted
+      ? pendingStatus({
+          has_pending_changes: false,
+          pending_upload_count: 0,
+          last_sync_transaction_id: "b".repeat(32),
+        })
+      : pendingStatus(),
+  );
+  serverApi.syncPendingNow = vi.fn(async () => {
+    syncCommandStarted = true;
+    return {
+      ok: false,
+      action: "sync-pending",
+      code: "SSH_CONNECTION_LOST",
+      message: "The SSH response was interrupted",
+    };
+  });
+  serverApi.getSyncStatus = vi.fn(async () => syncTransaction());
+  render(<App draftApi={createApi()} serverApi={serverApi} />);
+
+  await user.click(await screen.findByRole("button", { name: "立即同步" }));
+
+  expect(await screen.findByText("同步完成，待同步内容已上线。")).toBeVisible();
+  expect(serverApi.syncPendingNow).toHaveBeenCalledOnce();
+  expect(serverApi.getSyncStatus).toHaveBeenCalledWith({
+    transactionId: "b".repeat(32),
+  });
+});
+
+test("refreshes server synchronization state when the window regains focus", async () => {
+  const serverApi = queueServerApi();
+  render(<App draftApi={createApi()} serverApi={serverApi} />);
+  await waitFor(() => expect(serverApi.getCapabilities).toHaveBeenCalledOnce());
+
+  window.dispatchEvent(new Event("focus"));
+
+  await waitFor(() => expect(serverApi.getCapabilities).toHaveBeenCalledTimes(2));
+});
+
+test("queues server deletion without invoking the legacy delete command", async () => {
+  localStorage.clear();
+  const user = userEvent.setup();
+  const onboardingApi = createOnboardingApi();
+  onboardingApi.status = vi.fn(async () => onboardingStatus(true));
+  const serverApi = queueServerApi();
+  serverApi.listContent = vi.fn(async () => ({
+    ok: true,
+    action: "list",
+    message: "Listed",
+    items: [
+      {
+        contentType: "team-news" as const,
+        stableId: "fictional-draft",
+        titleZh: "Queued deletion fixture",
+        zhUrl: "https://example.invalid/zh/fictional-draft",
+      },
+    ],
+  }));
+  const deletionState = (transactionId: string) => ({
+    ok: true,
+    action: "queue-upload",
+    message: "Deletion queued",
+    transactionId,
+    status: "QUEUED" as const,
+    contentCommit: "5".repeat(40),
+    sourceCommit: "6".repeat(40),
+    retryable: false,
+  });
+  serverApi.queueDeleteContent = vi.fn(async ({ transactionId }) =>
+    deletionState(transactionId),
+  );
+  serverApi.getPublishStatus = vi.fn(async ({ transactionId }) => ({
+    ...deletionState(transactionId),
+    action: "publish-status",
+  }));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(
+    <App
+      draftApi={createApi()}
+      onboardingApi={onboardingApi}
+      serverApi={serverApi}
+    />,
+  );
+
+  const navigation = await screen.findByRole("navigation", {
+    name: "工作台导航",
+  });
+  await user.click(
+    within(navigation).getByRole("button", { name: "服务器内容" }),
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "删除 Queued deletion fixture" }),
+  );
+
+  expect(
+    await screen.findByText("删除内容已进入待同步队列，网站尚未更新。"),
+  ).toBeVisible();
+  expect(serverApi.queueDeleteContent).toHaveBeenCalledOnce();
+  expect(serverApi.deleteContent).not.toHaveBeenCalled();
+  expect(screen.getByText("Queued deletion fixture")).toBeVisible();
 });
 
 test("keeps a transaction retryable when its recovery status query is interrupted", async () => {

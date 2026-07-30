@@ -56,6 +56,12 @@ test("uses the backend command names and payload envelopes", async () => {
     stableId: "example",
     transactionId: "2".repeat(32),
   });
+  await tauriServerApi.queueDeleteContent({
+    repositoryPath: "D:\\worktree",
+    contentType: "team-news",
+    stableId: "example",
+    transactionId: "3".repeat(32),
+  });
   await tauriServerApi.getSyncStatus();
   await tauriServerApi.getSyncStatus({ transactionId: "2".repeat(32) });
   await tauriServerApi.syncPendingNow();
@@ -97,6 +103,17 @@ test("uses the backend command names and payload envelopes", async () => {
           contentType: "team-news",
           stableId: "example",
           transactionId: "2".repeat(32),
+        },
+      },
+    ],
+    [
+      "queue_delete_content_from_server",
+      {
+        request: {
+          repositoryPath: "D:\\worktree",
+          contentType: "team-news",
+          stableId: "example",
+          transactionId: "3".repeat(32),
         },
       },
     ],

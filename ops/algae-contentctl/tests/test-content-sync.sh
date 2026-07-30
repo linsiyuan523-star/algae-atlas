@@ -117,9 +117,9 @@ const value = JSON.parse(process.argv[1]);
 const expected = ["action", "active_sync_transaction_id", "attempt", "blocked", "completed_at", "content_commit",
   "elapsed_ms", "error_code", "health_verified", "last_sync_transaction_id", "max_attempts", "message", "ok",
   "recovered", "release_id", "release_path", "retryable", "schema_version", "site_commit", "source_content_commit",
-  "stage", "started_at", "status", "switch_completed", "sync_transaction_id", "trigger", "updated_at"].sort();
+  "stage", "stage_started_at", "started_at", "status", "switch_completed", "sync_transaction_id", "trigger", "updated_at"].sort();
 if (Object.keys(value).sort().join("\n") !== expected.join("\n")) process.exit(1);
-for (const key of ["started_at", "updated_at"]) {
+for (const key of ["stage_started_at", "started_at", "updated_at"]) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value[key])) process.exit(2);
 }
 ' "$1" || fail_test "sync-status schema changed: $1"
@@ -144,10 +144,24 @@ make_content_commit() {
   local base=$1
   local title=$2
   "$GIT_BIN" -C "$SOURCE_REPOSITORY" checkout -q --detach "$base"
+  mkdir -p -- "$SOURCE_REPOSITORY/content/records/science-article/example-id"
   write_content_record "$title"
   printf '%s\n' "$title body" > "$SOURCE_REPOSITORY/content/records/science-article/example-id/zh.md"
   "$GIT_BIN" -C "$SOURCE_REPOSITORY" add -- content/records/science-article/example-id
   "$GIT_BIN" -C "$SOURCE_REPOSITORY" commit -q -m "content: $title"
+  local commit
+  commit=$("$GIT_BIN" -C "$SOURCE_REPOSITORY" rev-parse HEAD)
+  "$GIT_BIN" -C "$CONTENT_REPOSITORY" fetch -q --no-tags "$SOURCE_REPOSITORY" "$commit"
+  printf '%s' "$commit"
+}
+
+make_deleted_content_commit() {
+  local base=$1
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" checkout -q --detach "$base"
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" rm -q -- \
+    content/records/science-article/example-id/record.json \
+    content/records/science-article/example-id/zh.md
+  "$GIT_BIN" -C "$SOURCE_REPOSITORY" commit -q -m "content: delete example-id"
   local commit
   commit=$("$GIT_BIN" -C "$SOURCE_REPOSITORY" rev-parse HEAD)
   "$GIT_BIN" -C "$CONTENT_REPOSITORY" fetch -q --no-tags "$SOURCE_REPOSITORY" "$commit"
@@ -758,9 +772,25 @@ recovery_health_retry=$(run_ctl sync-pending --trigger manual --retry-blocked --
 assert_json_field "$recovery_health_retry" status PUBLISHED
 assert_ref_equals refs/algae/published "$commit_recovery_health"
 
+# A queued record deletion changes pending first and becomes published only after synchronization.
+tx_delete=000000000000000000000000000000ab
+commit_delete=$(make_deleted_content_commit "$commit_recovery_health")
+set_pending_with_upload "$tx_delete" "$commit_delete"
+assert_ref_equals refs/algae/published "$commit_recovery_health"
+if ! delete_sync=$(run_ctl sync-pending --trigger manual --json); then
+  fail_test "queued deletion synchronization failed: $delete_sync"
+fi
+assert_json_field "$delete_sync" status PUBLISHED
+assert_ref_equals refs/algae/published "$commit_delete"
+assert_json_field "$(run_ctl publish-status --transaction "$tx_delete" --json)" status PUBLISHED
+if "$GIT_BIN" -C "$CONTENT_REPOSITORY" cat-file -e \
+  "$commit_delete:content/records/science-article/example-id/record.json" 2>/dev/null; then
+  fail_test "published deletion retained the target record"
+fi
+
 # Corrupting the active index fails closed and retains every recovery artifact.
 tx_corrupt=000000000000000000000000000000aa
-commit_corrupt=$(make_content_commit "$commit_recovery_health" "Corrupt active state")
+commit_corrupt=$(make_content_commit "$commit_delete" "Corrupt active state")
 set_pending_with_upload "$tx_corrupt" "$commit_corrupt"
 if run_sync_env scheduled ALGAE_SYNC_TEST_CRASH_AFTER_SNAPSHOT=1 >/dev/null; then
   fail_test "corrupt-state setup crash hook returned success"
@@ -781,7 +811,7 @@ assert_json_field "$corrupt_json" code SYNC_STATE_CORRUPT
 assert_ref_equals refs/algae/sync-active "$corrupt_blob"
 assert_ref_equals "$corrupt_transaction_ref" "$corrupt_transaction_blob"
 assert_ref_equals refs/algae/syncing "$commit_corrupt"
-assert_ref_equals refs/algae/published "$commit_recovery_health"
+assert_ref_equals refs/algae/published "$commit_delete"
 [[ $(<"$CURRENT_LINK") == "$current_before_corrupt" ]] || \
   fail_test "corrupt active state changed production current"
 
@@ -789,4 +819,4 @@ if grep -q '/commits/main' "$MOCK_LOG"; then
   fail_test "synchronization silently requested latest main"
 fi
 
-printf 'algae-contentctl synchronization tests: PASS (35 required scenarios)\n'
+printf 'algae-contentctl synchronization tests: PASS (36 required scenarios)\n'
