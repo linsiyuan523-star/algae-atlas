@@ -83,10 +83,16 @@ import {
   PUBLISH_STAGE_LABELS,
   PUBLISH_STAGE_ORDER,
   createPublishTransactionId,
+  isQueuePublishTransaction,
 } from "../server";
 import type {
+  PendingStatusData,
   PublishStage,
+  QueueUploadStatus,
+  ServerProtocolMode,
   ServerPublishProgress,
+  ServerQueuePublishState,
+  ServerPublishTransaction,
 } from "../server";
 import { ArticleEditor } from "./ArticleEditor";
 import { ContentPreview } from "./ContentPreview";
@@ -218,16 +224,32 @@ export type DirectPublishSnapshot = {
 
 export type DirectPublishResult = {
   message: string;
+  protocolMode?: "legacy" | "queue";
+  queueStatus?: QueueUploadStatus;
   url?: string;
   releaseSha?: string;
   publishedAt?: string;
   transactionId?: string;
   contentSha?: string;
+  sourceSha?: string;
   siteSha?: string;
   releaseId?: string;
   totalDurationMs?: number;
   stageDurationsMs?: Partial<Record<PublishStage, number>>;
   bundleUploadDurationMs?: number;
+  bundleGenerationDurationMs?: number;
+  sha256DurationMs?: number;
+  serverValidationDurationMs?: number;
+  pendingContentSha?: string;
+  nextScheduledSyncAt?: string;
+  pendingUploadCount?: number;
+  syncTransactionId?: string;
+  coalescedIntoCommit?: string;
+  retryable?: boolean;
+  errorCode?: string;
+  failedStage?: string;
+  technicalSummary?: string;
+  localDraftUpdatedAt?: string;
 };
 
 export type DirectServerContent = {
@@ -264,12 +286,18 @@ type DraftsPageProps = {
   serverConnectionError?: string | null;
   serverContentItems?: readonly DirectServerContent[];
   onViewServerContent?: (item: DirectServerContent) => void;
-  onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
+  onDeleteServerContent?: (
+    item: DirectServerContent,
+  ) => DirectPublishResult | void | Promise<DirectPublishResult | void>;
   onOpenPublishedUrl?: (url: string) => void | Promise<void>;
   onQueryPublishStatus?: (
     transactionId: string,
     onFailure?: (progress: ServerPublishProgress) => void,
-  ) => Promise<ServerPublishProgress | null>;
+  ) => Promise<ServerPublishTransaction | null>;
+  serverProtocolMode?: ServerProtocolMode;
+  serverQueueModeActive?: boolean;
+  pendingStatus?: PendingStatusData | null;
+  publishRefreshToken?: number;
 };
 
 export function DraftsPage({
@@ -286,6 +314,10 @@ export function DraftsPage({
   onDeleteServerContent,
   onOpenPublishedUrl,
   onQueryPublishStatus,
+  serverProtocolMode,
+  serverQueueModeActive = false,
+  pendingStatus = null,
+  publishRefreshToken = 0,
 }: DraftsPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>(initialDraft ? [initialDraft] : []);
   const [selectedDraft, setSelectedDraft] = useState<Draft | null>(initialDraft);
@@ -455,6 +487,10 @@ export function DraftsPage({
                 onDeleteServerContent={onDeleteServerContent}
                 onOpenPublishedUrl={onOpenPublishedUrl}
                 onQueryPublishStatus={onQueryPublishStatus}
+                serverProtocolMode={serverProtocolMode}
+                serverQueueModeActive={serverQueueModeActive}
+                pendingStatus={pendingStatus}
+                publishRefreshToken={publishRefreshToken}
               />
             ) : (
               <div className="editor-empty-state" role="status">
@@ -485,12 +521,18 @@ type DraftEditorProps = {
   serverConnectionError: string | null;
   serverContentItems: readonly DirectServerContent[];
   onViewServerContent?: (item: DirectServerContent) => void;
-  onDeleteServerContent?: (item: DirectServerContent) => void | Promise<void>;
+  onDeleteServerContent?: (
+    item: DirectServerContent,
+  ) => DirectPublishResult | void | Promise<DirectPublishResult | void>;
   onOpenPublishedUrl?: (url: string) => void | Promise<void>;
   onQueryPublishStatus?: (
     transactionId: string,
     onFailure?: (progress: ServerPublishProgress) => void,
-  ) => Promise<ServerPublishProgress | null>;
+  ) => Promise<ServerPublishTransaction | null>;
+  serverProtocolMode?: ServerProtocolMode;
+  serverQueueModeActive: boolean;
+  pendingStatus: PendingStatusData | null;
+  publishRefreshToken: number;
 };
 
 type EditorInput = {
@@ -521,6 +563,10 @@ function DraftEditor({
   onDeleteServerContent,
   onOpenPublishedUrl,
   onQueryPublishStatus,
+  serverProtocolMode,
+  serverQueueModeActive,
+  pendingStatus,
+  publishRefreshToken,
 }: DraftEditorProps) {
   const initialInspection = inspectDraft(draft);
   const initialFormInspection = getContentFormAdapter(initialInspection.fields.contentType)
@@ -550,11 +596,16 @@ function DraftEditor({
   >(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
-  const [publishProgress, setPublishProgress] = useState<ServerPublishProgress | null>(
+  const [publishProgress, setPublishProgress] = useState<ServerPublishTransaction | null>(
     () => loadPublishProgress(draft.draftId),
   );
   const [publishClock, setPublishClock] = useState(() => Date.now());
-  const [publishResult, setPublishResult] = useState<DirectPublishResult | null>(null);
+  const [publishResult, setPublishResult] = useState<DirectPublishResult | null>(() =>
+    publishProgress &&
+    (publishProgress.status === "succeeded" || publishProgress.status === "PUBLISHED")
+      ? publishResultFromProgress(publishProgress)
+      : null,
+  );
   const [stagedImages, setStagedImages] = useState<StagedImage[]>([]);
   const [mediaLoadPending, setMediaLoadPending] = useState(true);
   const [mediaLoadError, setMediaLoadError] = useState<string | null>(null);
@@ -565,8 +616,11 @@ function DraftEditor({
   const hydratedDraftRef = useRef(draft);
   const saveInFlightRef = useRef(false);
   const publishInFlightRef = useRef(false);
-  const publishProgressRef = useRef(publishProgress);
+  const publishProgressRef = useRef<ServerPublishTransaction | null>(publishProgress);
   const queryPublishStatusRef = useRef(onQueryPublishStatus);
+  const finalizePublishedDraftRef = useRef<
+    (progress: ServerPublishTransaction) => Promise<void>
+  >(async () => undefined);
   const mountedRef = useRef(true);
   const stagedImagesRef = useRef<StagedImage[]>([]);
   const dirtyImageIdsRef = useRef<Set<string>>(new Set());
@@ -590,7 +644,7 @@ function DraftEditor({
   }, [onQueryPublishStatus]);
 
   const updatePublishProgress = useCallback(
-    (progress: ServerPublishProgress) => {
+    (progress: ServerPublishTransaction) => {
       const normalized = mergePublishProgress(publishProgressRef.current, progress);
       publishProgressRef.current = normalized;
       savePublishProgress(draft.draftId, normalized);
@@ -601,18 +655,28 @@ function DraftEditor({
 
   useEffect(() => {
     const stored = publishProgressRef.current;
-    if (!stored || stored.status !== "running" || !queryPublishStatusRef.current) {
+    if (
+      !stored ||
+      !queryPublishStatusRef.current ||
+      (stored.status !== "running" &&
+        !["QUEUED", "COALESCED", "SYNCING", "PUBLISHED"].includes(
+          stored.status,
+        ))
+    ) {
       return;
     }
     let cancelled = false;
     void queryPublishStatusRef.current(
       stored.transactionId,
       updatePublishProgress,
-    ).then((progress) => {
+    ).then(async (progress) => {
       if (!cancelled && progress) {
         updatePublishProgress(progress);
-        if (progress.status === "succeeded") {
+        if (progress.status === "succeeded" || progress.status === "PUBLISHED") {
           setPublishResult(publishResultFromProgress(progress));
+        }
+        if (progress.status === "PUBLISHED") {
+          await finalizePublishedDraftRef.current(progress);
         }
       }
     }).catch((caught: unknown) => {
@@ -625,6 +689,15 @@ function DraftEditor({
       cancelled = true;
     };
   }, [draft.draftId, updatePublishProgress]);
+
+  useEffect(() => {
+    if (publishRefreshToken === 0 || !publishProgressRef.current) {
+      return;
+    }
+    void handleRefreshPublishStatus();
+    // The token is emitted only after a server synchronization completes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishRefreshToken]);
 
   useEffect(() => {
     if (publishProgress?.status !== "running") {
@@ -1037,6 +1110,26 @@ function DraftEditor({
     [api, draft, mediaCandidateError, onSaved],
   );
 
+  finalizePublishedDraftRef.current = async (progress) => {
+    if (
+      progress.status !== "PUBLISHED" ||
+      isDirty ||
+      editorInputRef.current.zhWorkflow.state === "published" ||
+      (progress.localDraftUpdatedAt &&
+        progress.localDraftUpdatedAt !== draft.updatedAt)
+    ) {
+      return;
+    }
+    const finalized = await persist(editorInputRef.current, true);
+    if (finalized) {
+      commitEditorInput(editorInputFromDraft(finalized));
+    } else {
+      setPublishError(
+        "内容已上线，但本地草稿未能记录发布状态，请重试本地保存。",
+      );
+    }
+  };
+
   useEffect(() => {
     if (saveStatus !== "pending" || pendingAction !== null) {
       return;
@@ -1408,11 +1501,19 @@ function DraftEditor({
       return;
     }
 
-    if (publishProgress?.status === "running") {
+    if (
+      publishProgress?.status === "running" ||
+      publishProgress?.status === "QUEUED" ||
+      publishProgress?.status === "SYNCING"
+    ) {
       await handleRefreshPublishStatus();
       return;
     }
-    if (publishProgress?.status === "failed" && !publishProgress.retryable) {
+    if (
+      (publishProgress?.status === "failed" ||
+        publishProgress?.status === "FAILED") &&
+      !publishProgress.retryable
+    ) {
       setPublishError("该事务不能安全自动重试，请先按诊断信息人工处理。");
       return;
     }
@@ -1421,7 +1522,10 @@ function DraftEditor({
     setPendingAction("publish");
     setPublishError(null);
     setPublishResult(null);
-    const resume = publishProgress?.status === "failed" && publishProgress.retryable;
+    const resume =
+      (publishProgress?.status === "failed" ||
+        publishProgress?.status === "FAILED") &&
+      publishProgress.retryable;
     const transactionId = resume
       ? publishProgress.transactionId
       : createPublishTransactionId();
@@ -1430,16 +1534,20 @@ function DraftEditor({
       resume ? "confirming_server_status" : "saving",
       resume ? "正在确认上次事务状态" : "正在保存当前内容",
     );
+    const legacyProgress =
+      publishProgress && !isQueuePublishTransaction(publishProgress)
+        ? publishProgress
+        : null;
     updatePublishProgress(
-      resume && publishProgress
+      resume && legacyProgress
         ? {
             ...initialProgress,
-            startedAt: publishProgress.startedAt,
+            startedAt: legacyProgress.startedAt,
             clientStartedAt:
-              publishProgress.clientStartedAt ?? publishProgress.startedAt,
-            elapsedMs: publishProgress.elapsedMs,
-            attempt: publishProgress.attempt,
-            serverStarted: publishProgress.serverStarted,
+              legacyProgress.clientStartedAt ?? legacyProgress.startedAt,
+            elapsedMs: legacyProgress.elapsedMs,
+            attempt: legacyProgress.attempt,
+            serverStarted: legacyProgress.serverStarted,
             safeToCancel: false,
           }
         : initialProgress,
@@ -1472,6 +1580,22 @@ function DraftEditor({
         },
       );
 
+      if (result?.protocolMode === "queue" && result.queueStatus) {
+        const queuedResult = {
+          ...result,
+          localDraftUpdatedAt: saved.updatedAt,
+        };
+        const queued = queueTransactionFromResult(
+          queuedResult,
+          transactionId,
+        );
+        updatePublishProgress(queued);
+        setPublishResult(queuedResult);
+        if (queued.status !== "PUBLISHED") {
+          return;
+        }
+      }
+
       const publishedInput = editorInputFromDraft(candidate);
       commitEditorInput(publishedInput);
       const finalized = await persist(publishedInput, true);
@@ -1482,7 +1606,10 @@ function DraftEditor({
         setPublishResult(result);
       }
       const currentProgress = publishProgressRef.current;
-      if (currentProgress?.status !== "succeeded") {
+      if (
+        currentProgress?.status !== "succeeded" &&
+        currentProgress?.status !== "PUBLISHED"
+      ) {
         const succeeded = createLocalPublishProgress(
           transactionId,
           "succeeded",
@@ -1494,7 +1621,15 @@ function DraftEditor({
     } catch (caught) {
       setPublishError(describeError(caught));
       const currentProgress = publishProgressRef.current;
-      if (currentProgress && currentProgress.status !== "failed") {
+      if (
+        currentProgress &&
+        currentProgress.status !== "failed" &&
+        currentProgress.status !== "FAILED"
+      ) {
+        if (isQueuePublishTransaction(currentProgress)) {
+          setPublishError(describeError(caught));
+          return;
+        }
         const failed: ServerPublishProgress = {
           ...currentProgress,
           status: "failed",
@@ -1529,9 +1664,20 @@ function DraftEditor({
       if (!refreshed) {
         throw new Error("暂时无法读取该发布事务状态。");
       }
+      const previous = publishProgressRef.current;
+      if (
+        isQueuePublishTransaction(refreshed) &&
+        isQueuePublishTransaction(previous) &&
+        previous.localDraftUpdatedAt
+      ) {
+        refreshed.localDraftUpdatedAt = previous.localDraftUpdatedAt;
+      }
       updatePublishProgress(refreshed);
-      if (refreshed.status === "succeeded") {
+      if (refreshed.status === "succeeded" || refreshed.status === "PUBLISHED") {
         setPublishResult(publishResultFromProgress(refreshed));
+      }
+      if (refreshed.status === "PUBLISHED") {
+        await finalizePublishedDraftRef.current(refreshed);
       }
     } catch (caught) {
       setPublishError(describeError(caught));
@@ -1595,8 +1741,21 @@ function DraftEditor({
     setPendingAction("server-delete");
     setPublishError(null);
     try {
-      await onDeleteServerContent(item);
-      setPublishResult(null);
+      const result = await onDeleteServerContent(item);
+      if (result) {
+        setPublishResult(result);
+        if (
+          result.protocolMode === "queue" &&
+          result.queueStatus &&
+          result.transactionId
+        ) {
+          updatePublishProgress(
+            queueTransactionFromResult(result, result.transactionId),
+          );
+        }
+      } else {
+        setPublishResult(null);
+      }
     } catch (caught) {
       setPublishError(describeError(caught));
     } finally {
@@ -1614,20 +1773,35 @@ function DraftEditor({
   const serverAvailable = serverConnectionState === "available";
   const serverChecking =
     serverConnectionState === "unchecked" || serverConnectionState === "checking";
+  const queueMode =
+    serverProtocolMode === "queue" && serverQueueModeActive;
+  const queueAwaitingSynchronization =
+    publishProgress?.status === "QUEUED" ||
+    publishProgress?.status === "COALESCED" ||
+    publishProgress?.status === "SYNCING";
   const publishButtonLabel =
     pendingAction === "publish"
-      ? "正在发布..."
-      : publishProgress?.status === "running"
+      ? queueMode
+        ? "正在上传..."
+        : "正在发布..."
+      : publishProgress?.status === "running" ||
+          publishProgress?.status === "QUEUED" ||
+          publishProgress?.status === "SYNCING"
         ? "查看当前发布状态"
-        : publishProgress?.status === "failed" && publishProgress.retryable
+        : (publishProgress?.status === "failed" ||
+              publishProgress?.status === "FAILED") &&
+            publishProgress.retryable
           ? "安全重试"
-          : publishProgress?.status === "failed"
+          : publishProgress?.status === "failed" ||
+              publishProgress?.status === "FAILED"
             ? "需要人工处理"
       : serverChecking
         ? "正在检查服务器"
         : !serverAvailable
           ? "服务器不可用"
-          : serverContent
+          : queueMode
+            ? "上传并等待同步"
+            : serverContent
             ? "保存并更新服务器"
             : "发布到服务器";
   const activeFormAdapter = getContentFormAdapter(fields.contentType);
@@ -1938,11 +2112,16 @@ function DraftEditor({
                   isBusy ||
                   !onPublishToServer ||
                   !serverAvailable ||
-                  (publishProgress?.status === "failed" && !publishProgress.retryable)
+                  serverProtocolMode === "incompatible" ||
+                  ((publishProgress?.status === "failed" ||
+                    publishProgress?.status === "FAILED") &&
+                    !publishProgress.retryable)
                 }
                 title={
                   serverAvailable
-                    ? serverContent
+                    ? queueMode
+                      ? "上传并等待服务器同步"
+                      : serverContent
                       ? "保存并更新服务器"
                       : "发布到服务器"
                     : serverConnectionError ?? "请先检查服务器连接。"
@@ -1974,7 +2153,8 @@ function DraftEditor({
                   结束本地事务
                 </button>
               ) : null}
-              {serverContent?.urlZh && onViewServerContent ? (
+              {serverContent?.urlZh && onViewServerContent &&
+              !queueAwaitingSynchronization ? (
                 <button
                   className="secondary-button"
                   type="button"
@@ -2008,8 +2188,12 @@ function DraftEditor({
                 >
                   <Trash2 aria-hidden="true" size={17} />
                   {pendingAction === "server-delete"
-                    ? "正在删除..."
-                    : "从服务器删除"}
+                    ? queueMode
+                      ? "正在上传删除..."
+                      : "正在删除..."
+                    : queueMode
+                      ? "上传删除并等待同步"
+                      : "从服务器删除"}
                 </button>
               ) : (
                 <button
@@ -2027,9 +2211,22 @@ function DraftEditor({
         </div>
         <SaveStatusIndicator status={saveStatus} error={saveError} />
         {publishProgress ? (
-          <PublishProgressPanel progress={publishProgress} now={publishClock} />
+          isQueuePublishTransaction(publishProgress) ? (
+            <QueuePublishPanel
+              transaction={publishProgress}
+              pending={pendingStatus}
+            />
+          ) : (
+            <PublishProgressPanel
+              progress={publishProgress}
+              now={publishClock}
+              queueMode={queueMode}
+            />
+          )
         ) : null}
-        {publishError && publishProgress?.status !== "failed" ? (
+        {publishError &&
+        publishProgress?.status !== "failed" &&
+        publishProgress?.status !== "FAILED" ? (
           <p className="operation-error" role="alert">
             {publishError}
           </p>
@@ -2045,7 +2242,9 @@ function DraftEditor({
             ) : null}
             {publishResult.releaseSha ? <code>{publishResult.releaseSha}</code> : null}
             <PublishResultDetails result={publishResult} />
-            {publishResult.url ? (
+            {publishResult.url &&
+            (publishResult.protocolMode !== "queue" ||
+              publishResult.queueStatus === "PUBLISHED") ? (
               <a
                 href={publishResult.url}
                 target="_blank"
@@ -2402,12 +2601,181 @@ function formatTimestamp(value: string) {
   }).format(parsed);
 }
 
+function QueuePublishPanel({
+  transaction,
+  pending,
+}: {
+  transaction: ServerQueuePublishState;
+  pending: PendingStatusData | null;
+}) {
+  const blocked = transaction.errorCode === "SYNC_BLOCKED";
+  const retryableFailure =
+    transaction.errorCode === "SYNC_FAILED_RETRYABLE" || transaction.retryable;
+  const diagnostic = [
+    transaction.errorCode,
+    transaction.failedStage,
+    transaction.transactionId,
+    transaction.includedInSyncTransactionId,
+    transaction.technicalSummary,
+    pending?.server_time,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  return (
+    <section className="publish-progress-panel queue-publish-panel" aria-label="当前队列状态">
+      <div className="publish-progress-heading" aria-live="polite">
+        {transaction.status === "SYNCING" ? (
+          <LoaderCircle className="save-status-spinner" aria-hidden="true" size={18} />
+        ) : transaction.status === "FAILED" ? (
+          <CircleAlert aria-hidden="true" size={18} />
+        ) : (
+          <CheckCircle2 aria-hidden="true" size={18} />
+        )}
+        <div>
+          <strong>{queueStatusLabel(transaction.status)}</strong>
+          <span>{queueStatusMessage(transaction)}</span>
+        </div>
+      </div>
+
+      {transaction.status !== "PUBLISHED" && transaction.status !== "FAILED" ? (
+        <p className="queue-not-published">网站尚未更新</p>
+      ) : null}
+
+      <dl className="publish-result-details queue-result-details">
+        <ResultIdentity label="上传事务 ID" value={transaction.transactionId} />
+        <ResultIdentity label="内容提交" value={transaction.contentCommit} />
+        <ResultIdentity label="本地内容提交" value={transaction.sourceCommit} />
+        {pending?.pending_content_commit ? (
+          <ResultIdentity
+            label="服务器 pending"
+            value={pending.pending_content_commit}
+          />
+        ) : null}
+        {transaction.includedInSyncTransactionId ? (
+          <ResultIdentity
+            label="同步事务 ID"
+            value={transaction.includedInSyncTransactionId}
+          />
+        ) : null}
+        {transaction.coalescedIntoCommit ? (
+          <ResultIdentity
+            label="合并到内容提交"
+            value={transaction.coalescedIntoCommit}
+          />
+        ) : null}
+        {transaction.publishedReleaseId ? (
+          <ResultIdentity label="release" value={transaction.publishedReleaseId} />
+        ) : null}
+        {transaction.status === "PUBLISHED" && transaction.publishedAt ? (
+          <div>
+            <dt>上线时间</dt>
+            <dd>
+              <time dateTime={transaction.publishedAt}>
+                {formatTimestamp(transaction.publishedAt)}
+              </time>
+            </dd>
+          </div>
+        ) : null}
+        {transaction.status === "PUBLISHED" &&
+        (transaction.siteCommit || pending?.site_commit) ? (
+          <ResultIdentity
+            label="网站源码 SHA"
+            value={transaction.siteCommit || pending?.site_commit || ""}
+          />
+        ) : null}
+        {pending ? (
+          <div>
+            <dt>待同步数量</dt>
+            <dd>{pending.pending_upload_count}</dd>
+          </div>
+        ) : null}
+        {pending?.next_scheduled_sync_at ? (
+          <div>
+            <dt>下次自动同步</dt>
+            <dd>
+              <time dateTime={pending.next_scheduled_sync_at}>
+                {formatTimestamp(pending.next_scheduled_sync_at)}
+              </time>
+            </dd>
+          </div>
+        ) : null}
+        <TimingResult label="Bundle 生成" value={transaction.bundleGenerationDurationMs} />
+        <TimingResult label="SHA-256" value={transaction.sha256DurationMs} />
+        <TimingResult label="Bundle 上传" value={transaction.bundleUploadDurationMs} />
+        <TimingResult
+          label="服务器快速校验"
+          value={transaction.serverValidationDurationMs}
+        />
+        <TimingResult label="入队总耗时" value={transaction.queueTotalDurationMs} />
+      </dl>
+
+      {transaction.status === "FAILED" ? (
+        <div className="publish-failure-summary" role="alert">
+          <strong>
+            {blocked
+              ? "服务器无法自动同步此内容"
+              : retryableFailure
+                ? "服务器遇到临时错误，将在下一同步窗口重试。"
+                : transaction.userMessage || transaction.message}
+          </strong>
+          {transaction.failedStage ? (
+            <span>失败阶段：{transaction.failedStage}</span>
+          ) : null}
+          {blocked ? <span>请上传修正后的新版本。</span> : null}
+          {diagnostic ? (
+            <button
+              className="secondary-button publish-copy-diagnostic"
+              type="button"
+              onClick={() => void navigator.clipboard?.writeText(diagnostic)}
+            >
+              <Copy aria-hidden="true" size={15} />
+              复制诊断摘要
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function TimingResult({ label, value }: { label: string; value?: number }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value === undefined ? "未记录" : formatDuration(value)}</dd>
+    </div>
+  );
+}
+
+function queueStatusLabel(status: QueueUploadStatus) {
+  return {
+    QUEUED: "等待服务器同步",
+    COALESCED: "已合并到后续版本",
+    SYNCING: "服务器正在同步",
+    PUBLISHED: "已上线",
+    FAILED: "队列事务失败",
+  }[status];
+}
+
+function queueStatusMessage(transaction: ServerQueuePublishState) {
+  return {
+    QUEUED: "内容已安全上传到服务器，状态：等待同步",
+    COALESCED: "此版本已包含在后续上传内容中，将随最新版本一同同步。",
+    SYNCING: "服务器正在处理固定的内容快照。",
+    PUBLISHED: "内容已通过服务器同步并上线。",
+    FAILED: transaction.userMessage || transaction.message,
+  }[transaction.status];
+}
+
 function PublishProgressPanel({
   progress,
   now,
+  queueMode,
 }: {
   progress: ServerPublishProgress;
   now: number;
+  queueMode: boolean;
 }) {
   const clientStarted = Date.parse(progress.clientStartedAt ?? progress.startedAt ?? "");
   const stageStarted = Date.parse(progress.stageStartedAt ?? "");
@@ -2418,8 +2786,14 @@ function PublishProgressPanel({
     progress.status === "running" && !Number.isNaN(stageStarted)
       ? Math.max(0, now - stageStarted)
       : (progress.stageDurationsMs?.[progress.stage] ?? 0);
-  const currentIndex = PUBLISH_STAGE_ORDER.indexOf(progress.stage);
-  const completedLabels = PUBLISH_STAGE_ORDER.filter((stage, index) => {
+  const visibleStages = queueMode
+    ? PUBLISH_STAGE_ORDER.slice(
+        0,
+        PUBLISH_STAGE_ORDER.indexOf("server_validating") + 1,
+      )
+    : PUBLISH_STAGE_ORDER;
+  const currentIndex = visibleStages.indexOf(progress.stage);
+  const completedLabels = visibleStages.filter((stage, index) => {
     if (stage === "succeeded") {
       return false;
     }
@@ -2474,8 +2848,14 @@ function PublishProgressPanel({
           <dd>{progress.isUploading ? "进行中" : "未在上传"}</dd>
         </div>
         <div>
-          <dt>服务器处理</dt>
-          <dd>{progress.serverStarted ? "已开始" : "尚未开始"}</dd>
+          <dt>{queueMode ? "服务器快速校验" : "服务器处理"}</dt>
+          <dd>
+            {progress.serverStarted
+              ? "已开始"
+              : queueMode
+                ? "等待 Bundle 上传"
+                : "尚未开始"}
+          </dd>
         </div>
         <div>
           <dt>操作安全性</dt>
@@ -2497,7 +2877,7 @@ function PublishProgressPanel({
       ) : null}
 
       <ol className="publish-stage-list">
-        {PUBLISH_STAGE_ORDER.map((stage, index) => {
+        {visibleStages.map((stage, index) => {
           const state = publishStageState(progress, stage, index, currentIndex);
           return (
             <li key={stage} data-state={state}>
@@ -2604,15 +2984,23 @@ function PublishResultDetails({ result }: { result: DirectPublishResult }) {
     "restarting_service",
     "verifying_production_url",
   ]);
-  const rows = [
-    ["Bundle 上传", result.bundleUploadDurationMs],
-    ["服务器处理", result.totalDurationMs],
-    ["源码准备", sourceDuration],
-    ["依赖准备", durations.preparing_dependencies],
-    ["网站构建", durations.building_site],
-    ["切换与验证", switchDuration],
-    ["总耗时", result.totalDurationMs],
-  ] as const;
+  const rows = result.protocolMode === "queue"
+    ? ([
+        ["Bundle 生成", result.bundleGenerationDurationMs],
+        ["SHA-256", result.sha256DurationMs],
+        ["Bundle 上传", result.bundleUploadDurationMs],
+        ["服务器快速校验", result.serverValidationDurationMs],
+        ["入队总耗时", result.totalDurationMs],
+      ] as const)
+    : ([
+        ["Bundle 上传", result.bundleUploadDurationMs],
+        ["服务器处理", result.totalDurationMs],
+        ["源码准备", sourceDuration],
+        ["依赖准备", durations.preparing_dependencies],
+        ["网站构建", durations.building_site],
+        ["切换与验证", switchDuration],
+        ["总耗时", result.totalDurationMs],
+      ] as const);
   return (
     <dl className="publish-result-details">
       {rows.map(([label, duration]) => (
@@ -2623,7 +3011,30 @@ function PublishResultDetails({ result }: { result: DirectPublishResult }) {
       ))}
       {result.releaseId ? <ResultIdentity label="release" value={result.releaseId} /> : null}
       {result.contentSha ? <ResultIdentity label="内容提交" value={result.contentSha} /> : null}
+      {result.sourceSha ? <ResultIdentity label="本地内容提交" value={result.sourceSha} /> : null}
+      {result.pendingContentSha ? (
+        <ResultIdentity label="服务器 pending" value={result.pendingContentSha} />
+      ) : null}
       {result.siteSha ? <ResultIdentity label="网站源码" value={result.siteSha} /> : null}
+      {result.syncTransactionId ? (
+        <ResultIdentity label="同步事务 ID" value={result.syncTransactionId} />
+      ) : null}
+      {result.nextScheduledSyncAt ? (
+        <div>
+          <dt>下次自动同步</dt>
+          <dd>
+            <time dateTime={result.nextScheduledSyncAt}>
+              {formatTimestamp(result.nextScheduledSyncAt)}
+            </time>
+          </dd>
+        </div>
+      ) : null}
+      {result.pendingUploadCount !== undefined ? (
+        <div>
+          <dt>待同步数量</dt>
+          <dd>{result.pendingUploadCount}</dd>
+        </div>
+      ) : null}
       {result.transactionId ? (
         <ResultIdentity label="事务 ID" value={result.transactionId} />
       ) : null}
@@ -2685,9 +3096,32 @@ function createLocalPublishProgress(
 }
 
 function mergePublishProgress(
-  current: ServerPublishProgress | null,
-  progress: ServerPublishProgress,
-) {
+  current: ServerPublishTransaction | null,
+  progress: ServerPublishTransaction,
+): ServerPublishTransaction {
+  if (isQueuePublishTransaction(progress)) {
+    return {
+      ...progress,
+      bundleUploadedAt:
+        progress.bundleUploadedAt ?? current?.bundleUploadedAt,
+      bundleUploadDurationMs:
+        progress.bundleUploadDurationMs ?? current?.bundleUploadDurationMs,
+      bundleGenerationDurationMs:
+        progress.bundleGenerationDurationMs ??
+        current?.bundleGenerationDurationMs,
+      sha256DurationMs: progress.sha256DurationMs ?? current?.sha256DurationMs,
+      serverValidationDurationMs:
+        progress.serverValidationDurationMs ??
+        current?.serverValidationDurationMs,
+      queueTotalDurationMs:
+        progress.queueTotalDurationMs ?? current?.queueTotalDurationMs,
+      localDraftUpdatedAt:
+        progress.localDraftUpdatedAt ?? current?.localDraftUpdatedAt,
+    };
+  }
+  if (isQueuePublishTransaction(current)) {
+    return progress;
+  }
   const sameTransaction = current?.transactionId === progress.transactionId;
   const serverStarted = sameTransaction
     ? current.serverStarted === true || progress.serverStarted === true
@@ -2719,7 +3153,7 @@ function publishProgressStorageKey(draftId: string) {
   return `algae-content-workbench:publish:${draftId}`;
 }
 
-function savePublishProgress(draftId: string, progress: ServerPublishProgress) {
+function savePublishProgress(draftId: string, progress: ServerPublishTransaction) {
   try {
     localStorage.setItem(publishProgressStorageKey(draftId), JSON.stringify(progress));
   } catch {
@@ -2737,8 +3171,8 @@ function clearPublishProgress(draftId: string) {
 
 function failRunningPublishStatusQuery(
   error: unknown,
-  updateProgress: (progress: ServerPublishProgress) => void,
-  progressRef: { current: ServerPublishProgress | null },
+  updateProgress: (progress: ServerPublishTransaction) => void,
+  progressRef: { current: ServerPublishTransaction | null },
 ) {
   const current = progressRef.current;
   if (!current || current.status !== "running") {
@@ -2763,7 +3197,10 @@ function failRunningPublishStatusQuery(
   });
 }
 
-function canEndLocalPublishTransaction(progress: ServerPublishProgress) {
+function canEndLocalPublishTransaction(progress: ServerPublishTransaction) {
+  if (isQueuePublishTransaction(progress)) {
+    return false;
+  }
   return (
     progress.status !== "succeeded" &&
     progress.serverStarted !== true &&
@@ -2774,13 +3211,26 @@ function canEndLocalPublishTransaction(progress: ServerPublishProgress) {
   );
 }
 
-function loadPublishProgress(draftId: string): ServerPublishProgress | null {
+function loadPublishProgress(draftId: string): ServerPublishTransaction | null {
   try {
     const raw = localStorage.getItem(publishProgressStorageKey(draftId));
     if (!raw) {
       return null;
     }
-    const progress = JSON.parse(raw) as Partial<ServerPublishProgress>;
+    const progress = JSON.parse(raw) as Partial<ServerPublishTransaction>;
+    if (
+      typeof progress.transactionId === "string" &&
+      /^[0-9a-f]{32}$/.test(progress.transactionId) &&
+      ["FAILED", "QUEUED", "COALESCED", "SYNCING", "PUBLISHED"].includes(
+        progress.status ?? "",
+      ) &&
+      typeof progress.message === "string" &&
+      typeof progress.contentCommit === "string" &&
+      typeof progress.sourceCommit === "string" &&
+      typeof progress.retryable === "boolean"
+    ) {
+      return progress as ServerQueuePublishState;
+    }
     if (
       typeof progress.transactionId !== "string" ||
       !/^[0-9a-f]{32}$/.test(progress.transactionId) ||
@@ -2796,7 +3246,35 @@ function loadPublishProgress(draftId: string): ServerPublishProgress | null {
   }
 }
 
-function publishResultFromProgress(progress: ServerPublishProgress): DirectPublishResult {
+function publishResultFromProgress(
+  progress: ServerPublishTransaction,
+): DirectPublishResult {
+  if (isQueuePublishTransaction(progress)) {
+    return {
+      message: queueStatusMessage(progress),
+      protocolMode: "queue",
+      queueStatus: progress.status,
+      url: progress.status === "PUBLISHED" ? progress.url : undefined,
+      publishedAt: progress.publishedAt || undefined,
+      transactionId: progress.transactionId,
+      contentSha: progress.contentCommit,
+      sourceSha: progress.sourceCommit,
+      siteSha: progress.siteCommit,
+      releaseId: progress.publishedReleaseId || undefined,
+      syncTransactionId: progress.includedInSyncTransactionId || undefined,
+      coalescedIntoCommit: progress.coalescedIntoCommit || undefined,
+      totalDurationMs: progress.queueTotalDurationMs,
+      bundleGenerationDurationMs: progress.bundleGenerationDurationMs,
+      sha256DurationMs: progress.sha256DurationMs,
+      bundleUploadDurationMs: progress.bundleUploadDurationMs,
+      serverValidationDurationMs: progress.serverValidationDurationMs,
+      retryable: progress.retryable,
+      errorCode: progress.errorCode,
+      failedStage: progress.failedStage,
+      technicalSummary: progress.technicalSummary,
+      localDraftUpdatedAt: progress.localDraftUpdatedAt,
+    };
+  }
   return {
     message: progress.message,
     url: progress.url,
@@ -2809,6 +3287,36 @@ function publishResultFromProgress(progress: ServerPublishProgress): DirectPubli
     totalDurationMs: progress.elapsedMs,
     stageDurationsMs: progress.stageDurationsMs,
     bundleUploadDurationMs: progress.bundleUploadDurationMs,
+  };
+}
+
+function queueTransactionFromResult(
+  result: DirectPublishResult,
+  transactionId: string,
+): ServerQueuePublishState {
+  const status = result.queueStatus ?? "FAILED";
+  return {
+    transactionId,
+    status,
+    message: result.message,
+    contentCommit: result.contentSha ?? "",
+    sourceCommit: result.sourceSha ?? "",
+    siteCommit: result.siteSha,
+    retryable: result.retryable ?? false,
+    url: status === "PUBLISHED" ? result.url : undefined,
+    publishedAt: result.publishedAt,
+    publishedReleaseId: result.releaseId,
+    includedInSyncTransactionId: result.syncTransactionId,
+    coalescedIntoCommit: result.coalescedIntoCommit,
+    queueTotalDurationMs: result.totalDurationMs,
+    bundleGenerationDurationMs: result.bundleGenerationDurationMs,
+    sha256DurationMs: result.sha256DurationMs,
+    bundleUploadDurationMs: result.bundleUploadDurationMs,
+    serverValidationDurationMs: result.serverValidationDurationMs,
+    errorCode: result.errorCode,
+    failedStage: result.failedStage,
+    technicalSummary: result.technicalSummary,
+    localDraftUpdatedAt: result.localDraftUpdatedAt,
   };
 }
 
