@@ -1,0 +1,12 @@
+[Unit]
+Description=Synchronize queued Algae Atlas content every half hour
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00 UTC
+Persistent=true
+AccuracySec=1s
+RandomizedDelaySec=0
+Unit=algae-content-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -10,6 +10,9 @@ readonly SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P
 readonly CONTROLLER_SOURCE="$SCRIPT_DIRECTORY/algae-contentctl"
 readonly BOOTSTRAP_SOURCE="$SCRIPT_DIRECTORY/bootstrap.sh"
 readonly SUDOERS_SOURCE="$SCRIPT_DIRECTORY/sudoers.example"
+readonly SYSTEMD_SOURCE_DIRECTORY="$SCRIPT_DIRECTORY/../systemd"
+readonly SYNC_SERVICE_SOURCE="$SYSTEMD_SOURCE_DIRECTORY/algae-content-sync.service"
+readonly SYNC_TIMER_SOURCE="$SYSTEMD_SOURCE_DIRECTORY/algae-content-sync.timer"
 readonly CONTROLLER_DESTINATION="/usr/local/sbin/algae-contentctl"
 readonly CONTENT_ROOT="/srv/algae-content"
 readonly CONTENT_REPOSITORY="$CONTENT_ROOT/repository"
@@ -18,6 +21,8 @@ readonly PUBLISH_STATE_ROOT="$CONTENT_ROOT/publish-state"
 readonly SITE_SOURCE_CACHE_ROOT="$CONTENT_ROOT/site-source-cache"
 readonly INCOMING_ROOT="/home/ubuntu/algae-content-workbench/incoming"
 readonly SUDOERS_DESTINATION="/etc/sudoers.d/algae-contentctl"
+readonly SYNC_SERVICE_DESTINATION="/etc/systemd/system/algae-content-sync.service"
+readonly SYNC_TIMER_DESTINATION="/etc/systemd/system/algae-content-sync.timer"
 readonly SITE_REPOSITORY_URL="https://github.com/linsiyuan523-star/algae-atlas.git"
 readonly SITE_BRANCH="main"
 
@@ -59,8 +64,9 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-[[ -f "$CONTROLLER_SOURCE" && -f "$BOOTSTRAP_SOURCE" && -f "$SUDOERS_SOURCE" ]] || {
-  printf 'install.sh must remain beside algae-contentctl, bootstrap.sh, and sudoers.example\n' >&2
+[[ -f "$CONTROLLER_SOURCE" && -f "$BOOTSTRAP_SOURCE" && -f "$SUDOERS_SOURCE" && \
+   -f "$SYNC_SERVICE_SOURCE" && -f "$SYNC_TIMER_SOURCE" ]] || {
+  printf 'install.sh requires the controller files and sibling ops/systemd sync units\n' >&2
   exit 1
 }
 
@@ -76,6 +82,7 @@ if ! $DRY_RUN; then
   command -v git >/dev/null 2>&1 || { printf 'git is required\n' >&2; exit 1; }
   command -v node >/dev/null 2>&1 || { printf 'node is required\n' >&2; exit 1; }
   command -v npm >/dev/null 2>&1 || { printf 'npm is required\n' >&2; exit 1; }
+  command -v systemctl >/dev/null 2>&1 || { printf 'systemctl is required\n' >&2; exit 1; }
   id ubuntu >/dev/null 2>&1 || { printf 'ubuntu user is required\n' >&2; exit 1; }
 fi
 
@@ -114,6 +121,9 @@ elif [[ ! -d "$CONTENT_REPOSITORY/.git" || -L "$CONTENT_REPOSITORY" ]]; then
 fi
 
 run install -o root -g root -m 0755 "$CONTROLLER_SOURCE" "$CONTROLLER_DESTINATION"
+run install -o root -g root -m 0644 "$SYNC_SERVICE_SOURCE" "$SYNC_SERVICE_DESTINATION"
+run install -o root -g root -m 0644 "$SYNC_TIMER_SOURCE" "$SYNC_TIMER_DESTINATION"
+run systemctl daemon-reload
 
 if $INSTALL_SUDOERS; then
   if ! $DRY_RUN; then
@@ -126,6 +136,7 @@ if $DRY_RUN; then
   printf 'Dry run complete; no files were installed.\n'
 else
   printf 'Installed %s\n' "$CONTROLLER_DESTINATION"
+  printf 'Installed inactive synchronization units; the timer was not enabled or started.\n'
 fi
 if ! $INSTALL_SUDOERS; then
   printf 'Restricted sudoers policy was not installed. Review and install it explicitly with --install-sudoers.\n'

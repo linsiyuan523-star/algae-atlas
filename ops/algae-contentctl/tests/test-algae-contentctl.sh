@@ -14,6 +14,7 @@ readonly CONTROLLER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)/a
 readonly BOOTSTRAP_HELPER="$(dirname -- "$CONTROLLER")/bootstrap.sh"
 readonly QUEUE_TEST="$(dirname -- "$CONTROLLER")/tests/test-content-queue.sh"
 readonly SYNC_TEST="$(dirname -- "$CONTROLLER")/tests/test-content-sync.sh"
+readonly SYSTEMD_TEST="$(dirname -- "$CONTROLLER")/tests/test-content-sync-systemd.sh"
 readonly GIT_BIN="$(command -v git)"
 readonly NODE_BIN="$(command -v node || true)"
 readonly REAL_TIMEOUT_BIN="$(command -v timeout || true)"
@@ -1263,4 +1264,5 @@ assert_json_field "$outside_json" code INVALID_BUNDLE_PATH
 
 bash "$QUEUE_TEST"
 bash "$SYNC_TEST"
+bash "$SYSTEMD_TEST"
 printf 'algae-contentctl mock tests: PASS\n'

@@ -171,5 +171,10 @@ jobs:
       - name: Test the portable validator and Ubuntu shell entry
         run: npm run desktop:test:bundle-validator
 
+      - name: Verify fixed content synchronization units
+        run: |
+          sudo install -o root -g root -m 0755 ops/algae-contentctl/algae-contentctl /usr/local/sbin/algae-contentctl
+          bash ops/algae-contentctl/tests/test-content-sync-systemd.sh
+
       - name: Test the server content controller
         run: npm run test:server-controller
