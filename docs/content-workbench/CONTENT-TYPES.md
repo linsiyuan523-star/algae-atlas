@@ -292,4 +292,4 @@ Changes to these areas require a normal code stage and review.
 - Broken required references fail validation; optional unavailable links are omitted.
 - Circular relationships are allowed only for non-owning related-content links.
 - Parent/child ownership, such as a project owning outputs, must have one canonical direction.
-- Deleting a published record is not a desktop operation. Use `archived`, retain its ID, and handle redirects or HTTP status in a code-reviewed migration.
+- Published records normally use `archived` and retain their IDs. The B3A desktop may submit an explicit server removal only after Queue mode is confirmed active; that operation creates one controlled deletion commit limited to the target `record.json`, `zh.md`, and optional `en.md`, remains pending until synchronization, and does not manage redirects or HTTP status.

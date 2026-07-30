@@ -234,8 +234,10 @@ calendar `*-*-* *:00,30:00 UTC`, `Persistent=true`, one-second accuracy, and no
 random delay. `pending-status` always computes the next UTC boundary but reports
 timer activity only when systemd says the unit is both enabled and active. The
 installer copies and reloads these units without enabling or starting them.
-B3 will add the desktop asynchronous upload status UI and explicit immediate
-sync command before any production activation.
+B3A adds the desktop asynchronous upload status UI, explicit immediate sync,
+transaction recovery, and controlled queued deletion before any production
+activation. The operator workflow and activation boundary are documented in
+`QUEUED-DESKTOP-WORKFLOW.md`.
 
 ## 3. Trust boundaries
 
