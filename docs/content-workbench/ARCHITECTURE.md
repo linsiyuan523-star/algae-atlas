@@ -140,6 +140,55 @@ explicit non-retryable compatibility error. A failed recovery query also moves
 the persisted client transaction out of `running`, and a transaction that has
 not uploaded or started server work can be ended locally.
 
+### 2.8 Pending synchronization queue
+
+Phase B1 adds a server-side queue without changing the current desktop publish
+workflow. The current desktop and restricted sudoers contract still call the
+synchronous controller commands. The new `queue-init`, `queue-upload`, and
+`pending-status` commands are administrator-only foundations until phase B3.
+No systemd service or timer is installed in B1, `next_scheduled_sync_at` is
+`null`, and an upload does not trigger a website build or production switch.
+
+The independent server content repository has three canonical snapshots:
+
+- `refs/algae/published` is the content commit used by the last verified
+  production release;
+- `refs/algae/pending` is the newest accepted canonical content commit waiting
+  for synchronization;
+- `refs/algae/syncing` is the immutable snapshot selected when a future sync
+  transaction starts and may legitimately lag behind pending.
+
+Uploaded workbench commits and canonical server commits are different Git
+histories. Corresponding `refs/algae/source/{published,pending,syncing}` refs
+retain and validate the uploaded lineage, while per-upload source/content refs
+keep accepted commits reachable. Queue metadata and upload transaction JSON use
+strict schema-versioned Git blobs referenced from the same controlled
+namespace. One `git update-ref --stdin` transaction advances queue metadata,
+source pending, canonical pending, and all accepted transaction refs together.
+
+The first upload must have a base whose managed `content/` and
+`public/images/uploads/` trees exactly match canonical published content. Later
+uploads must equal source pending or directly fast-forward it. Older or
+divergent history is rejected with `PENDING_BASE_MISMATCH`; the controller never
+merges, force-updates, or discards existing pending data. A newer accepted
+upload moves earlier included upload transactions to `COALESCED`, preserving
+their identity and final inclusion path rather than marking them failed. Equal
+pending content is idempotent and does not move refs backward.
+
+An upload transaction represents receipt, fast validation, and queue inclusion.
+A sync transaction, introduced in B2, will select `syncing`, build and verify a
+release, and only then advance `published`; these are deliberately separate
+transaction kinds. Upload state already reserves
+`includedInSyncTransactionId` and `publishedReleaseId` for that later linkage.
+
+All repository mutations share one controller lock. Explicit `queue-init`
+activates queue mode; after that, legacy synchronous `publish` and `delete`
+mutations fail with `QUEUE_MODE_ACTIVE` because their whole-repository swap
+cannot preserve pending refs. Before initialization, the existing synchronous
+desktop path remains unchanged. B2 will add the synchronization executor and
+fixed systemd schedule at every hour `:00` and `:30`. B3 will add the desktop
+asynchronous upload status UI and the explicit immediate-sync command.
+
 ## 3. Trust boundaries
 
 | Boundary | Trusted | Untrusted until validated |
