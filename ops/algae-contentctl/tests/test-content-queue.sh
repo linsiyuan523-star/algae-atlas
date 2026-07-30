@@ -56,12 +56,14 @@ json_field() {
 assert_pending_schema() {
   "$NODE_BIN" -e '
 const value = JSON.parse(process.argv[1]);
-const expected = ["action", "has_pending_changes", "latest_upload_transaction_id", "message",
+const expected = ["action", "active_sync_transaction_id", "blocked_content_commit", "has_pending_changes",
+  "last_sync_status", "last_sync_transaction_id", "latest_upload_transaction_id", "message",
   "next_scheduled_sync_at", "ok", "pending_content_commit", "pending_upload_count",
-  "published_content_commit", "queue_protocol_version", "schema_version", "server_time",
-  "syncing_content_commit"].sort();
+  "published_content_commit", "queue_protocol_version", "schema_version", "server_time", "site_commit",
+  "sync_protocol_version", "sync_timer_active", "syncing_content_commit"].sort();
 if (Object.keys(value).sort().join("\n") !== expected.join("\n")) process.exit(1);
 if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.server_time)) process.exit(2);
+if (!/^\d{4}-\d{2}-\d{2}T\d{2}:(00|30):00\.000Z$/.test(value.next_scheduled_sync_at)) process.exit(3);
 ' "$1" || fail_test "pending-status schema changed: $1"
 }
 
@@ -168,6 +170,18 @@ MOCK
 chmod 0755 -- "$TEST_ROOT/fail-external"
 : > "$EXTERNAL_LOG"
 
+cat > "$TEST_ROOT/mock-systemctl" <<'MOCK_SYSTEMCTL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "$1" == "is-enabled" && "$*" == *"algae-content-sync.timer"* ]] || \
+   [[ "$1" == "is-active" && "$*" == *"algae-content-sync.timer"* ]]; then
+  exit 1
+fi
+printf '%s\n' "$0 $*" >> "${QUEUE_EXTERNAL_LOG:?}"
+exit 97
+MOCK_SYSTEMCTL
+chmod 0755 -- "$TEST_ROOT/mock-systemctl"
+
 cat > "$TEST_ROOT/git-wrapper" <<'MOCK_GIT'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -181,6 +195,7 @@ chmod 0755 -- "$TEST_ROOT/git-wrapper"
 
 COMMON_ENV=(
   ALGAE_CONTENTCTL_TESTING=1
+  ALGAE_TEST_LINK_FILES=1
   ALGAE_CONTENT_ROOT="$CONTENT_ROOT"
   ALGAE_INCOMING_ROOT="$INCOMING_ROOT"
   ALGAE_SITE_ROOT="$SITE_ROOT"
@@ -188,7 +203,7 @@ COMMON_ENV=(
   ALGAE_NODE_BIN="$NODE_BIN"
   ALGAE_CHMOD_BIN="$CHMOD_BIN"
   ALGAE_NPM_BIN="$TEST_ROOT/fail-external"
-  ALGAE_SYSTEMCTL_BIN="$TEST_ROOT/fail-external"
+  ALGAE_SYSTEMCTL_BIN="$TEST_ROOT/mock-systemctl"
   ALGAE_CURL_BIN="$TEST_ROOT/fail-external"
   ALGAE_TAR_BIN="$TEST_ROOT/fail-external"
   ALGAE_TIMEOUT_BIN="$TEST_ROOT/fail-external"
@@ -237,7 +252,13 @@ published_commit=$("$GIT_BIN" -C "$SOURCE_REPOSITORY" rev-parse HEAD)
 mkdir -p -- "$CONTENT_ROOT" "$INCOMING_ROOT" "$SITE_ROOT"
 "$GIT_BIN" clone -q --no-hardlinks "$SOURCE_REPOSITORY" "$CONTENT_REPOSITORY"
 "$GIT_BIN" -C "$CONTENT_REPOSITORY" remote remove origin
-printf 'production-current-sentinel\n' > "$SITE_ROOT/current"
+release_id=queue-test-release
+site_commit=2222222222222222222222222222222222222222
+mkdir -p -- "$SITE_ROOT/releases/$release_id"
+printf '%s\n' "$site_commit" > "$SITE_ROOT/releases/$release_id/.release-sha"
+printf '%s\n' "$published_commit" > "$SITE_ROOT/releases/$release_id/.content-sha"
+printf '%s\n' "$release_id" > "$SITE_ROOT/releases/$release_id/.release-id"
+printf '%s\n' "$SITE_ROOT/releases/$release_id" > "$SITE_ROOT/current"
 current_digest=$(sha256sum -- "$SITE_ROOT/current" | awk '{print $1}')
 
 missing_commit=1111111111111111111111111111111111111111
@@ -259,7 +280,8 @@ assert_pending_schema "$initial_status"
 assert_json_field "$initial_status" has_pending_changes false
 assert_json_field "$initial_status" pending_upload_count 0
 assert_json_field "$initial_status" latest_upload_transaction_id null
-assert_json_field "$initial_status" next_scheduled_sync_at null
+assert_json_field "$initial_status" sync_timer_active false
+assert_json_field "$initial_status" site_commit "$site_commit"
 
 tx_a=0000000000000000000000000000000a
 commit_a=$(commit_record "$published_commit" "Queued A" "2026-07-29T00:01:00Z")
